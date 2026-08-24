@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 02 · Haz que la alarma suene de verdad</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 02 · Proyecto <code>00-foundations</code></p>
+  <h1>Haz que la alarma suene de verdad</h1>
+  <p class="deck">Que no te llegara un correo no significa que algo esté roto: significa que
+  no has cruzado ningún umbral. Pero al ir a comprobarlo apareció un problema real, y con él
+  la pregunta que importa: cómo se prueba una alarma en lugar de confiar en ella.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD</span>
+    <span><b>Terraform</b> data source · política de recurso · <code>dynamic</code></span>
+    <span><b>AWS</b> SNS · Budgets · IAM</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+
+<p>Sin volver a la lección 01 y sin abrir el terminal. Piénsalo y luego abre:</p>
+
+<details class="recall">
+  <summary>¿Cuáles eran las tres realidades que maneja Terraform, y cuál compara <code>plan</code> con cuál?
+    <span class="recall-hint">Dilo en voz alta antes de abrir. Si no te sale entero, no pasa nada: el esfuerzo es lo que construye la memoria.</span>
+  </summary>
+  <p><strong>Configuración</strong> (tus <code>.tf</code>, lo que quieres),
+  <strong>state</strong> (lo que Terraform cree que existe) y <strong>realidad</strong> (lo
+  que hay en AWS).</p>
+  <p><code>plan</code> hace dos cosas: ① refresca el state preguntando a AWS por cada recurso
+  que ya conoce, y ② calcula el diff entre tu configuración y ese state refrescado. Ese diff
+  es el plan. <code>apply</code> añade ③: ejecutarlo, y reescribir el state con el resultado.</p>
+</details>
+
+<h2>Primero: tu presupuesto no está roto</h2>
+
+<p>Antes de arreglar nada, hay que separar tres cosas que es fácil confundir en una sola
+sensación de «esto no funciona»:</p>
+
+<table>
+  <thead><tr><th>Observación</th><th>¿Es un fallo?</th><th>Por qué</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>No llegó correo de confirmación</td>
+      <td><b>No</b></td>
+      <td>Las alertas de presupuesto llegan desde <code>budgets@costalerts.amazonaws.com</code>
+      sin que tengas que confirmar nada. El procedimiento oficial de AWS separa
+      «Email recipients» y «Amazon SNS Alerts» en dos pasos, y pone la nota de confirmación
+      <strong>solo</strong> en el de SNS
+      (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/create-cost-budget.html">fuente</a>).</td>
+    </tr>
+    <tr>
+      <td>No llegó ninguna alerta</td>
+      <td><b>No</b></td>
+      <td>El umbral <code>ACTUAL</code> está al 50% de 30 USD. No te van a avisar hasta que
+      gastes 15 USD, y llevas gastados prácticamente cero. La alarma está esperando, que es
+      justo lo que debe hacer.</td>
+    </tr>
+    <tr>
+      <td>La alarma <code>FORECASTED</code> no puede dispararse</td>
+      <td><b>Sí</b></td>
+      <td>Requiere ~5 semanas de historial de uso. Está creada e inerte, y es la única de las
+      tres que sí es un problema.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>En la lección 01 escribí que AWS te enviaría un correo de confirmación. Eso fue un error
+mío y ya está corregido allí. Lo que sí es un problema real es lo tercero:</p>
+
+<div class="callout trap">
+  <span class="callout-title">Tu alarma principal no puede dispararse</span>
+  <p>«AWS requires approximately <strong>5 weeks of usage data</strong> to generate budget
+  forecasts. If you set a budget to alert based on a forecasted amount, this budget alert
+  <strong>isn't triggered</strong> until you have enough historical usage information.»
+  (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html">AWS Budgets — Best practices</a>)</p>
+  <p>La alarma <code>FORECASTED</code> al 100% es la buena: avisa <em>antes</em> de gastar. Y
+  en tu cuenta, hoy, <strong>está creada pero inerte</strong>. Aparece en la consola, el
+  <code>plan</code> sale limpio, todo parece correcto. Y no va a sonar.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La lección de fondo, que vale más que el arreglo</span>
+  <p>Esto es lo más importante de hoy: <strong>en infraestructura, «el <code>apply</code> ha
+  funcionado» no significa «funciona»</strong>. Terraform te confirma que AWS aceptó la
+  configuración. No te dice nada sobre si el sistema hace lo que necesitas.</p>
+  <p>Una alarma que nadie ha probado no es una alarma: es una suposición. Aplica igual a un
+  security group que crees restrictivo, a un <em>health check</em> de un ALB, o a una réplica
+  de base de datos que nunca has forzado a fallar. Todo lo que despliegues en este curso, lo
+  vas a <strong>probar</strong>.</p>
+</div>
+
+<h2>Antes de tocar nada: interroga tu cuenta</h2>
+
+<p>Saber preguntarle a AWS qué hay de verdad es una habilidad en sí misma. Vamos a averiguar
+qué pasó con tu presupuesto en lugar de suponerlo:</p>
+
+<pre><code>export AWS_PROFILE=personal
+ACC=$(aws sts get-caller-identity --query Account --output text)
+echo "cuenta: $ACC"
+
+# 1. ¿Qué notificaciones tiene el presupuesto?
+aws budgets describe-notifications-for-budget \
+  --account-id "$ACC" --budget-name curso-terraform-mensual
+
+# 2. ¿Quién está suscrito a cada una? (repite con FORECASTED / 100)
+aws budgets describe-subscribers-for-notification \
+  --account-id "$ACC" --budget-name curso-terraform-mensual \
+  --notification NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=50,ThresholdType=PERCENTAGE
+
+# 3. ¿Existe alguna suscripción SNS pendiente de confirmar?
+aws sns list-subscriptions --output table</code></pre>
+
+<p>La tercera es la reveladora. Si no aparece nada tuyo, Budgets nunca creó una suscripción
+SNS visible — y por tanto no había ningún enlace que pulsar. Pégame la salida si te sale algo
+que no esperas.</p>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía del servicio</span>
+    <h2>Amazon SNS</h2>
+  </header>
+  <div class="anatomy-body">
+
+    <h3>Qué es</h3>
+    <p>Un <strong>topic</strong> es un buzón de difusión. Publicas un mensaje una vez y llega a
+    todos los suscritos a la vez: un correo, una cola SQS, una Lambda, un endpoint HTTPS. Eso
+    se llama <strong>fan-out</strong>. Quien publica no sabe quién escucha.</p>
+
+    <h3>Lo que hay que saber para no equivocarse</h3>
+    <ul>
+      <li><strong>No guarda nada.</strong> Empuja, reintenta un rato, y descarta. Si nadie
+      escucha, el mensaje se pierde. Ahí está toda la diferencia con SQS.</li>
+      <li><strong>Standard o FIFO.</strong> Standard: sin orden garantizado, posibles
+      duplicados, ilimitado, y llega a cualquier destino. FIFO: orden estricto y exactly-once,
+      pero <strong>solo entrega a colas SQS</strong> — un topic FIFO no puede mandarte un
+      correo, y rechaza la suscripción con error.</li>
+      <li><strong>Las suscripciones por correo se confirman a mano.</strong> SNS manda un
+      enlace y hasta que alguien lo pulsa la suscripción está en
+      <code>PendingConfirmation</code> y no recibe nada. No se puede automatizar, por diseño:
+      es lo que impide suscribir a un tercero sin su permiso. <em>Esta es la propiedad que
+      hoy vamos a explotar como test.</em></li>
+      <li><strong>Los permisos van en el recurso.</strong> Para que otro servicio publique en
+      tu topic, la autorización se escribe en la política del <em>topic</em>, no en un rol.
+      Igual que un bucket policy de S3.</li>
+    </ul>
+
+    <h3>Cuánto cuesta</h3>
+    <table class="cost-table">
+      <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+      <tbody>
+        <tr><td>Un topic existiendo sin usarse</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>Primer millón de peticiones al mes</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>Primeros 1.000 correos al mes</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>Entregas a SQS y a Lambda</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>SMS</td><td><span class="tag-cost usage">por uso</span></td><td>varía por país, <strong>caro</strong></td></tr>
+      </tbody>
+    </table>
+    <p class="cost-stamp">Verificado el 2026-08-23 contra la Price List API de AWS, región
+    <code>us-east-1</code>.</p>
+
+    <p class="small">Referencia completa —tipos, límites, cuándo NO usarlo, y la comparación
+    con SQS, EventBridge y SES— en <a href="../reference/aws-sns.html">reference/aws-sns.html</a>.
+    Ahí están las preguntas de comprobación de este servicio.</p>
+  </div>
+</section>
+
+<div class="callout why">
+  <span class="callout-title">¿Es obligatorio montar el topic SNS? No.</span>
+  <p>Tu presupuesto avisa perfectamente por correo sin SNS. Añadirlo no arregla ningún fallo:
+  te da <strong>tres cosas que no tenías</strong>.</p>
+  <ul>
+    <li><strong>Poder probarlo.</strong> Con <code>subscriber_email_addresses</code> no hay
+    forma de verificar que el camino funciona salvo gastando 15 USD de verdad. Con un topic
+    tuyo, un <code>sns publish</code> te lo confirma en segundos.</li>
+    <li><strong>Poder ampliarlo.</strong> Mañana quieres que la alerta llegue también a Slack,
+    o que dispare una Lambda que apague recursos. Con correo suelto, no puedes; con un topic,
+    añades un suscriptor y ya está. Eso es el <strong>fan-out</strong>.</li>
+    <li><strong>Aprender SNS ahora,</strong> que es una pieza central del proyecto 02 y una
+    pregunta habitual de entrevista.</li>
+  </ul>
+  <p><strong>Si hoy solo quieres la red de seguridad</strong> y dejar SNS para el proyecto 02:
+  sáltate los pasos 1, 2 y 6, haz solo el 3 y el 7, y quita
+  <code>subscriber_sns_topic_arns</code> de las notificaciones. El presupuesto canario del
+  paso 7 es lo único verdaderamente importante de esta lección.</p>
+</div>
+
+<h2>Manos a la obra</h2>
+
+<ol class="steps">
+
+<li>
+<h3>Crea el topic y suscribe tu correo</h3>
+<p>Nuevo fichero en el mismo proyecto. Fíjate en el comentario sobre el cifrado: es una
+trampa documentada por AWS que rompe las alarmas sin dar un error claro.</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/alerts.tf</span><span class="tag">nuevo</span></div>
+<pre><code><b class="c"># Data source: no crea nada, solo pregunta «¿en qué cuenta estoy?».</b>
+<b class="c"># Así el código no lleva el número de cuenta escrito a mano.</b>
+<b class="k">data</b> <b class="s">"aws_caller_identity"</b> <b class="s">"current"</b> {}
+
+<b class="k">resource</b> <b class="s">"aws_sns_topic"</b> <b class="s">"alerts"</b> {
+  <b class="at">name</b> = <b class="s">"curso-terraform-alertas"</b>
+
+  <b class="c"># NO añadas kms_master_key_id aquí. AWS lo dice literalmente:</b>
+  <b class="c"># «The SNS topic is encrypted — the SNS topic won't work</b>
+  <b class="c">#  without additional permissions.» Budgets no podría publicar.</b>
+}
+
+<b class="k">resource</b> <b class="s">"aws_sns_topic_subscription"</b> <b class="s">"email"</b> {
+  <b class="at">topic_arn</b> = aws_sns_topic.alerts.arn
+  <b class="at">protocol</b>  = <b class="s">"email"</b>
+  <b class="at">endpoint</b>  = var.alert_email
+}</code></pre>
+</div>
+</li>
+
+<li>
+<h3>Autoriza a Budgets a publicar en tu topic</h3>
+<p>Referenciar el topic desde el presupuesto <strong>no basta</strong>. Hace falta una
+política de recurso. Sin ella, el error que verás es «Invalid SNS topic», que no menciona los
+permisos por ningún lado.</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/alerts.tf</span><span class="tag">añadir al final</span></div>
+<pre><code><b class="k">data</b> <b class="s">"aws_iam_policy_document"</b> <b class="s">"allow_budgets"</b> {
+  <b class="k">statement</b> {
+    <b class="at">sid</b>     = <b class="s">"AWSBudgetsSNSPublishingPermissions"</b>
+    <b class="at">effect</b>  = <b class="s">"Allow"</b>
+    <b class="at">actions</b> = [<b class="s">"SNS:Publish"</b>]
+
+    <b class="k">principals</b> {
+      <b class="at">type</b>        = <b class="s">"Service"</b>
+      <b class="at">identifiers</b> = [<b class="s">"budgets.amazonaws.com"</b>]
+    }
+
+    <b class="at">resources</b> = [aws_sns_topic.alerts.arn]
+
+    <b class="c"># Estas dos condiciones no son opcionales en la práctica.</b>
+    <b class="k">condition</b> {
+      <b class="at">test</b>     = <b class="s">"StringEquals"</b>
+      <b class="at">variable</b> = <b class="s">"aws:SourceAccount"</b>
+      <b class="at">values</b>   = [data.aws_caller_identity.current.account_id]
+    }
+
+    <b class="k">condition</b> {
+      <b class="at">test</b>     = <b class="s">"ArnLike"</b>
+      <b class="at">variable</b> = <b class="s">"aws:SourceArn"</b>
+      <b class="at">values</b>   = [<b class="s">"arn:aws:budgets::${data.aws_caller_identity.current.account_id}:*"</b>]
+    }
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_sns_topic_policy"</b> <b class="s">"alerts"</b> {
+  <b class="at">arn</b>    = aws_sns_topic.alerts.arn
+  <b class="at">policy</b> = data.aws_iam_policy_document.allow_budgets.json
+}
+
+<b class="k">output</b> <b class="s">"alerts_topic_arn"</b> {
+  <b class="at">description</b> = <b class="s">"ARN del topic. Lo usarás para publicar el mensaje de prueba."</b>
+  <b class="at">value</b>       = aws_sns_topic.alerts.arn
+}</code></pre>
+</div>
+<div class="callout why">
+  <span class="callout-title">Por qué esas dos condiciones: el «confused deputy»</span>
+  <p>El principal <code>budgets.amazonaws.com</code> es el servicio de Budgets <em>de todo
+  AWS</em>, no el tuyo. Sin condiciones, cualquiera podría crear un presupuesto en
+  <em>su</em> cuenta apuntando a <em>tu</em> ARN, y usar a Budgets como intermediario para
+  publicar en tu topic. El servicio no está atacándote: está siendo engañado. De ahí el
+  nombre del patrón.</p>
+  <p><code>aws:SourceAccount</code> y <code>aws:SourceArn</code> cierran eso: «solo si quien
+  te lo pidió es de mi cuenta». <strong>Vas a escribir estas dos condiciones decenas de veces
+  en este curso</strong> — cada vez que un servicio de AWS acceda a un recurso tuyo.
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html">docs de IAM</a>)</p>
+</div>
+</li>
+
+<li>
+<h3>Reescribe las notificaciones con <code>dynamic</code></h3>
+<p>Tres alarmas ahora, y las tres deben ir al correo <em>y</em> al topic. Escribir tres
+bloques casi idénticos sería repetir; se hace con un bloque <code>dynamic</code>.</p>
+<p>Sustituye en <code>budget.tf</code> los dos bloques <code>notification</code> por esto:</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/budget.tf</span><span class="tag">reemplaza los notification</span></div>
+<pre><code>  <b class="k">dynamic</b> <b class="s">"notification"</b> {
+    <b class="at">for_each</b> = [
+      <b class="c"># Funcionan desde hoy, aunque avisen tarde.</b>
+      { type = <b class="s">"ACTUAL"</b>,     threshold = <b class="n">50</b>  },
+      { type = <b class="s">"ACTUAL"</b>,     threshold = <b class="n">90</b>  },
+      <b class="c"># La buena. Inerte hasta tener ~5 semanas de historial.</b>
+      { type = <b class="s">"FORECASTED"</b>, threshold = <b class="n">100</b> },
+    ]
+
+    <b class="k">content</b> {
+      <b class="at">notification_type</b>          = notification.value.type
+      <b class="at">threshold</b>                  = notification.value.threshold
+      <b class="at">comparison_operator</b>        = <b class="s">"GREATER_THAN"</b>
+      <b class="at">threshold_type</b>             = <b class="s">"PERCENTAGE"</b>
+      <b class="at">subscriber_email_addresses</b> = [var.alert_email]
+      <b class="at">subscriber_sns_topic_arns</b>   = [aws_sns_topic.alerts.arn]
+    }
+  }</code></pre>
+</div>
+<div class="callout tf">
+  <span class="callout-title">Cómo leer un bloque <code>dynamic</code></span>
+  <p><code>dynamic "notification"</code> genera <em>bloques</em> <code>notification</code>, uno
+  por elemento de <code>for_each</code>. Dentro, la variable de iteración se llama como el
+  bloque: <code>notification.value</code>. Lo de dentro de <code>content</code> es exactamente
+  lo que escribirías a mano.</p>
+  <p><strong>La distinción que importa:</strong> <code>dynamic</code> repite <em>bloques
+  anidados dentro de un recurso</em>. <code>for_each</code> a nivel de <code>resource</code>
+  repite <em>recursos enteros</em>. No son intercambiables, y confundirlos es un error clásico.
+  (<a href="https://developer.hashicorp.com/terraform/language/expressions/dynamic-blocks">docs</a>)</p>
+</div>
+</li>
+
+<li>
+<h3>Aplica y lee lo que cambia</h3>
+<pre><code>terraform plan</code></pre>
+<p>Antes de aceptar, busca dos cosas concretas en la salida:</p>
+<ul>
+  <li>El presupuesto sale como <code>~</code> (modificar en sitio), <strong>no</strong> como
+  <code>-/+</code>. Si saliera <code>-/+</code>, habrías cambiado el <code>name</code> sin
+  querer.</li>
+  <li>Aparecen tres recursos nuevos con <code>+</code>: el topic, la suscripción y la política.
+  El <code>data</code> no cuenta como recurso: no crea nada.</li>
+</ul>
+<pre><code>terraform apply</code></pre>
+</li>
+
+<li>
+<h3>Confirma la suscripción</h3>
+<p>Ahora <strong>sí</strong> te llega un correo, y esta vez está garantizado: el remitente es
+<code>no-reply@sns.amazonaws.com</code> y el asunto «AWS Notification - Subscription
+Confirmation». Pulsa <strong>Confirm subscription</strong>.</p>
+<p>Si no lo ves, mira en Promociones y en Spam. Y compruébalo desde el terminal, que no
+miente:</p>
+<pre><code>aws sns list-subscriptions-by-topic \
+  --topic-arn "$(terraform output -raw alerts_topic_arn)" \
+  --query 'Subscriptions[].{Protocolo:Protocol,Destino:Endpoint,Estado:SubscriptionArn}' \
+  --output table</code></pre>
+<p>Si en <code>Estado</code> pone <code>PendingConfirmation</code>, no has pulsado el enlace.
+Si pone un ARN largo terminado en un identificador, está confirmada.</p>
+</li>
+
+<li>
+<h3>Prueba la alarma de verdad</h3>
+<p>Este es el paso que da sentido a toda la lección. Publica un mensaje a mano y comprueba que
+el camino completo funciona:</p>
+<pre><code>aws sns publish \
+  --topic-arn "$(terraform output -raw alerts_topic_arn)" \
+  --subject "Prueba de alarma del curso" \
+  --message "Si lees esto, el camino Budgets -> SNS -> tu correo funciona."</code></pre>
+<p>Debe llegarte en segundos. <strong>Eso es un test.</strong> Ya no supones que la alarma
+funciona: lo has verificado extremo a extremo.</p>
+<div class="callout win">
+  <span class="callout-title">Lo que acabas de demostrar, y lo que no</span>
+  <p><strong>Demostrado:</strong> el topic existe, la suscripción está confirmada, y un mensaje
+  publicado llega a tu bandeja. Todo el tramo SNS → correo funciona.</p>
+  <p><strong>No demostrado:</strong> que Budgets consiga publicar en el topic. Eso depende de
+  la política de recurso, y solo se verá cuando cruces un umbral de verdad.</p>
+  <p>Saber exactamente qué cubre tu test y qué no es la diferencia entre confianza y
+  autoengaño. Y es literalmente lo que te van a preguntar si mencionas «testing» en una
+  entrevista de infraestructura.</p>
+</div>
+</li>
+
+<li>
+<h3>Deja una red que sí funcione hoy</h3>
+<p>Sabemos que <code>FORECASTED</code> está inerte y que <code>ACTUAL</code> llega tarde. La
+combinación que de verdad te protege este mes es un <strong>segundo presupuesto con un umbral
+absurdamente bajo</strong>: si tu cuenta pasa de 1 USD, algo está pasando y quieres saberlo el
+mismo día.</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/budget.tf</span><span class="tag">añadir al final</span></div>
+<pre><code><b class="c"># Canario. No es un límite de gasto: es un detector de que algo</b>
+<b class="c"># quedó encendido. Los presupuestos sin acciones son gratis y</b>
+<b class="c"># no tienen límite de cantidad, así que esto no cuesta nada.</b>
+<b class="k">resource</b> <b class="s">"aws_budgets_budget"</b> <b class="s">"canary"</b> {
+  <b class="at">name</b>         = <b class="s">"curso-terraform-canario"</b>
+  <b class="at">budget_type</b>  = <b class="s">"COST"</b>
+  <b class="at">time_unit</b>    = <b class="s">"MONTHLY"</b>
+  <b class="at">limit_amount</b> = <b class="s">"1"</b>
+  <b class="at">limit_unit</b>   = <b class="s">"USD"</b>
+
+  <b class="k">notification</b> {
+    <b class="at">notification_type</b>          = <b class="s">"ACTUAL"</b>
+    <b class="at">comparison_operator</b>        = <b class="s">"GREATER_THAN"</b>
+    <b class="at">threshold</b>                  = <b class="n">1</b>
+    <b class="at">threshold_type</b>             = <b class="s">"PERCENTAGE"</b>
+    <b class="at">subscriber_email_addresses</b> = [var.alert_email]
+    <b class="at">subscriber_sns_topic_arns</b>   = [aws_sns_topic.alerts.arn]
+  }
+}</code></pre>
+</div>
+<pre><code>terraform apply</code></pre>
+<p>Umbral del 1% sobre 1 USD: salta con el primer céntimo del mes. Molesto a propósito. En
+cuanto tu cuenta tenga historial y <code>FORECASTED</code> despierte, lo quitamos.</p>
+</li>
+
+</ol>
+
+<h3>Checklist</h3>
+<ul class="checklist" data-key="l02-v1">
+  <li><input type="checkbox" id="d1"><label for="d1">Ejecuté los tres comandos de diagnóstico y vi qué había realmente en mi cuenta</label></li>
+  <li><input type="checkbox" id="d2"><label for="d2">El plan mostró el presupuesto como <code>~</code> y no como <code>-/+</code></label></li>
+  <li><input type="checkbox" id="d3"><label for="d3">Confirmé la suscripción y <code>list-subscriptions-by-topic</code> ya no dice <code>PendingConfirmation</code></label></li>
+  <li><input type="checkbox" id="d4"><label for="d4">Recibí el correo del <code>sns publish</code> de prueba</label></li>
+  <li><input type="checkbox" id="d5"><label for="d5">Tengo el presupuesto canario de 1 USD desplegado</label></li>
+  <li><input type="checkbox" id="d6"><label for="d6">Sé decir qué cubre mi test y qué no</label></li>
+</ul>
+
+<h2>Comprueba que se te ha quedado</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Añades <code>subscriber_sns_topic_arns</code> al presupuesto apuntando a tu topic, pero olvidas la política de recurso. ¿Qué ocurre?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Budgets no tiene permiso para publicar en el topic. El error de AWS es «Invalid SNS topic», que no menciona permisos por ningún lado.">Falla con un error engañoso</button></li>
+    <li><button data-correct="false" data-why="Referenciar un ARN no concede ningún permiso. En AWS los permisos son siempre explícitos, nunca implícitos.">Funciona porque referencias el ARN</button></li>
+    <li><button data-correct="false" data-why="Terraform no inventa políticas de recurso: aplica exactamente lo que escribes, ni más ni menos.">Terraform crea la política sola</button></li>
+    <li><button data-correct="false" data-why="El apply sí puede fallar. Y aunque pasara, el fallo silencioso en las notificaciones sería peor todavía.">Aplica bien y avisa después</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Quieres repetir el bloque anidado <code>ingress</code> dentro de un único security group, uno por cada puerto de una lista. ¿Qué usas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="dynamic genera bloques anidados repetidos dentro de un mismo recurso. Es exactamente su caso de uso.">Un bloque <code>dynamic</code> dentro</button></li>
+    <li><button data-correct="false" data-why="for_each a nivel de resource crearía varios security groups distintos, no varias reglas dentro de uno solo.">Un <code>for_each</code> en el recurso</button></li>
+    <li><button data-correct="false" data-why="count sufre el mismo problema que for_each aquí, y además reindexa al borrar elementos intermedios.">Un <code>count</code> en el recurso</button></li>
+    <li><button data-correct="false" data-why="depends_on solo ordena la creación de recursos. No genera ni repite nada en absoluto.">Un <code>depends_on</code> con lista</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">¿Por qué la política del topic lleva condiciones sobre <code>aws:SourceAccount</code> y <code>aws:SourceArn</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Sin ellas, alguien podría crear un presupuesto en su cuenta apuntando a tu ARN y usar a Budgets como intermediario. Es el patrón «confused deputy».">Evitan que otra cuenta lo use</button></li>
+    <li><button data-correct="false" data-why="Las condiciones no cifran nada. El cifrado de un topic es otra cosa, y de hecho rompe las alarmas de Budgets.">Cifran el contenido del mensaje</button></li>
+    <li><button data-correct="false" data-why="El coste de SNS no depende de las condiciones de la política, sino del volumen de peticiones y entregas.">Reducen el coste del topic</button></li>
+    <li><button data-correct="false" data-why="No existe ningún requisito sintáctico: la política sería válida sin ellas. Lo que no sería es segura.">Terraform obliga a incluirlas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<details class="recall">
+  <summary>Antes de abrir: ¿en qué se diferencian SNS y SQS, en una frase?
+    <span class="recall-hint">Piensa en qué le pasa a un mensaje cuando el destinatario está caído.</span>
+  </summary>
+  <p><strong>SNS empuja y olvida. SQS guarda y espera.</strong></p>
+  <p>SNS entrega a todos los suscritos en el momento; si uno está caído, reintenta un rato y
+  descarta. Es 1-a-N y no tiene memoria.</p>
+  <p>SQS almacena el mensaje hasta que un consumidor lo coge <em>y confirma</em> que lo
+  procesó. Es 1-a-1, sobrevive a caídas, y tiene reintentos y DLQ.</p>
+  <p>Por eso el patrón estándar de AWS es <strong>los dos juntos</strong>: un topic SNS con
+  varias colas SQS suscritas. SNS aporta el fan-out, SQS la durabilidad de cada consumidor.
+  Eso es lo que construirás en el proyecto 02.</p>
+</details>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://docs.aws.amazon.com/decision-guides/latest/decision-guides/sns-or-sqs-or-eventbridge.html">
+  <strong>Amazon SQS, Amazon SNS, or Amazon EventBridge?</strong></a> — guía de decisión
+  oficial de AWS. Unos 15 minutos. Es de lo mejor que publica AWS: compara los tres servicios
+  por garantías, latencia y patrón, en lugar de vender cada uno por separado. Los tres
+  aparecen en el proyecto 02, y esta distinción es una pregunta habitual de entrevista.</p>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 03 — Saca el state de tu portátil.</strong> Bucket S3 cifrado y
+  versionado, migración del state local al remoto sin perderlo, y bloqueo nativo con
+  <code>use_lockfile</code>. Y el problema del huevo y la gallina: ¿quién crea el bucket donde
+  vive el state? De paso, creas el usuario IAM que sustituye a root de una vez.</p>
+  <div class="nav-links">
+    <a href="./0001-el-primer-apply.html">← Lección 01</a>
+    <a href="../reference/aws-sns.html">Referencia: SNS</a>
+    <a href="../reference/aws-budgets.html">Referencia: Budgets</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Los comandos de diagnóstico del principio dicen qué pasó de
+    verdad con tu presupuesto. Si algo no cuadra —o si el <code>sns publish</code> no te
+    llega— mándame la salida entera y lo miramos.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
