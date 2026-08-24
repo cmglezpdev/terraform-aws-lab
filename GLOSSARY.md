@@ -49,6 +49,12 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Objeto** / **Clave** / **Bucket** (S3) — introducidos en [lección 03](./lessons/0003-saca-el-state-de-tu-portatil.html)
 - **Clase de almacenamiento** — introducida en [lección 03](./lessons/0003-saca-el-state-de-tu-portatil.html)
 - **Módulo** / **Módulo raíz** — pendientes, proyecto 01
+- **Principal** — introducido en [lección 04](./lessons/0004-deja-de-ser-root.html)
+- **Política de identidad** — introducida en [lección 04](./lessons/0004-deja-de-ser-root.html)
+- **Denegación implícita** / **explícita** — introducidas en [lección 04](./lessons/0004-deja-de-ser-root.html)
+- **Rol** / **Política de confianza** — introducidos en [lección 04](./lessons/0004-deja-de-ser-root.html)
+- **Permissions boundary** — introducido en [lección 04](./lessons/0004-deja-de-ser-root.html)
+- **Credenciales temporales** — introducidas en [lección 04](./lessons/0004-deja-de-ser-root.html)
 
 ## AWS
 
@@ -82,6 +88,32 @@ Atributo de cada objeto —no del bucket— que fija su precio por GB, su latenc
 duración mínima facturable. Se cambia sola con reglas de ciclo de vida.
 _Evitar_: tier, nivel, tipo de bucket
 
+**Principal** (IAM):
+Quién hace la petición: un usuario IAM, una sesión de rol, un servicio de AWS o el root. No
+es «el usuario»: una Lambda también es un principal.
+_Evitar_: actor, sujeto, identidad (a secas)
+
+**Política de identidad** (IAM):
+Permiso escrito en el usuario, grupo o rol que actúa. Es la contraria de la **política de
+recurso**. Dentro de una cuenta las dos se suman: basta con que una conceda.
+_Evitar_: permisos del usuario, IAM policy
+
+**Denegación implícita** (IAM):
+El estado por defecto de toda petición: nadie la ha permitido. Se contrapone a la
+**denegación explícita**, que es un `Deny` escrito y que gana sobre cualquier `Allow`.
+_Evitar_: denegado por defecto, sin permisos
+
+**Rol** (IAM):
+Identidad sin credenciales propias que otros asumen; STS presta credenciales temporales por
+un máximo de 12 horas. Lleva siempre una **política de confianza** que dice quién puede
+asumirlo. Un rol sin política de confianza no sirve para nada.
+_Evitar_: cuenta de servicio, perfil, usuario técnico
+
+**Permissions boundary** (IAM):
+Techo máximo de permisos de un usuario o rol. **No concede nada**: el permiso efectivo es la
+intersección con las políticas de identidad. Igual que los SCP, solo resta.
+_Evitar_: límite de permisos, política máxima
+
 Referencias completas por servicio en [`reference/`](./reference/README.md).
 
 ## Ambigüedades resueltas en este curso
@@ -96,3 +128,9 @@ Referencias completas por servicio en [`reference/`](./reference/README.md).
   `terraform workspace`. Cuando hablemos de workspaces lo diremos con esa palabra.
 - **«Módulo»** sin apellido significa un módulo hijo reutilizable. Al directorio donde
   ejecutas `terraform apply` lo llamamos siempre **módulo raíz**.
+- **«Root»** significa siempre el usuario raíz de la cuenta AWS, nunca el usuario `root` de
+  un sistema Unix ni el módulo raíz de Terraform. Cuando hablemos del segundo diremos
+  **módulo raíz**, con las dos palabras.
+- **«Perfil»** es un perfil de la AWS CLI en `~/.aws/config`. Desde la lección 04,
+  `personal` es la identidad de trabajo (usuario IAM `terraform`) y `personal-root` es la
+  vía de escape. No confundir con *instance profile*, que es otra cosa de IAM.

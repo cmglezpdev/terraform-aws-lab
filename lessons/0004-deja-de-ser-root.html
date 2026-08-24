@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 04 · Deja de ser root</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 04 · Proyecto <code>00-foundations</code></p>
+  <h1>Deja de ser root</h1>
+  <p class="deck">Llevas tres lecciones desplegando con la identidad que <em>no se puede
+  acotar</em>. Hoy creas una que sí, te cambias a ella, y descubres —porque va a fallar— que
+  el backend que montaste ayer necesita permisos sobre <strong>dos</strong> objetos de S3, no
+  uno. Cuando termines, el proyecto 00 estará cerrado.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 45 min</span>
+    <span><b>Coste</b> 0,00 USD — IAM no cobra nunca</span>
+    <span><b>Terraform</b> <code>aws_iam_policy_document</code> · política gestionada · el problema del arranque</span>
+    <span><b>AWS</b> IAM · <code>aws login</code></span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+
+<p>Sin abrir nada. Piénsalo, dilo en voz alta, y luego despliega la respuesta.</p>
+
+<details class="recall">
+  <summary>En la lección 02 escribiste un <code>aws_sns_topic_policy</code>. ¿Qué tipo de permiso es ese, y contra qué se opone?
+    <span class="recall-hint">El permiso no estaba escrito en quien actuaba.</span>
+  </summary>
+  <p>Es una <strong>política de recurso</strong>: el permiso vive escrito <em>en el topic</em>
+  y dice quién puede actuar sobre él. Se opone a la <strong>política de identidad</strong>,
+  que se escribe en el usuario o el rol que actúa y dice qué puede hacer esa identidad.</p>
+  <p>Hoy escribes la otra mitad. Y hay una regla que conviene tener clara desde ya: dentro de
+  una misma cuenta, <strong>las dos se suman</strong> — basta con que una de ellas conceda el
+  permiso. Lo que no se suma es un <code>Deny</code>: ese gana siempre.</p>
+</details>
+
+<details class="recall">
+  <summary>Cuando Terraform coge el bloqueo del state en S3, ¿qué objeto crea exactamente, y qué hace con él al terminar?
+    <span class="recall-hint">Lo viste ayer con tus ojos, en la consola de S3.</span>
+  </summary>
+  <p>Crea un objeto cuya clave es la del state más el sufijo <code>.tflock</code>:
+  <code>00-foundations/terraform.tfstate.tflock</code>. Lo escribe con una escritura
+  condicional —«crea esto solo si no existe»—, y al terminar la operación <strong>lo
+  borra</strong>.</p>
+  <p>Es decir: el backend hace <code>PutObject</code> y <code>DeleteObject</code> sobre un
+  objeto <strong>que no es tu state</strong>, con una clave distinta y por tanto un ARN
+  distinto. Guarda esa frase. En veinte minutos la vas a necesitar.</p>
+</details>
+
+<details class="recall">
+  <summary>Anteayer usaste <code>terraform init -migrate-state</code>. ¿Qué habría hecho <code>-reconfigure</code> en su lugar?
+    <span class="recall-hint">Te equivocaste con esto. Por eso está aquí.</span>
+  </summary>
+  <p><strong><code>-migrate-state</code> copia.</strong> Lee el state de donde estaba y lo
+  escribe donde dice la configuración nueva. El origen se queda intacto.</p>
+  <p><strong><code>-reconfigure</code> no copia nada.</strong> Descarta el backend anterior y
+  usa el nuevo tal cual, asumiendo que lo que hay allí ya es correcto.</p>
+  <p>De ahí sale la regla que te faltaba: mover un state de un sitio a otro tiene dos caminos
+  correctos, y en los dos <strong>el borrado del origen va al final</strong>. O migras y luego
+  borras, o mueves el objeto con <code>aws s3 mv</code> y después haces
+  <code>-reconfigure</code>. Borrar primero y migrar después deja a Terraform sin nada que
+  copiar — que es exactamente lo que te pasó.</p>
+</details>
+
+<h2>Por qué root es un problema de verdad</h2>
+
+<p>No es una regla de estilo ni una manía de auditores. Root es distinto de todo lo demás en
+un sentido técnico muy concreto:</p>
+
+<div class="callout trap">
+  <span class="callout-title">Root no se puede acotar</span>
+  <p>La regla número uno del motor de evaluación de IAM es que <em>toda</em> petición empieza
+  denegada. Y tiene exactamente una excepción, escrita así en la documentación: <em>«By
+  default, all requests are implicitly denied <strong>with the exception of the AWS account
+  root user, which has full access</strong>»</em>
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html">policy
+  evaluation logic</a>).</p>
+  <p>Traducido: <strong>no existe ninguna política que puedas escribir para limitar a root.</strong>
+  Ni de identidad, ni un permissions boundary, ni siquiera un SCP de Organizations. Mientras
+  tu <code>terraform apply</code> corra como root, la frase «he acotado lo que puede hacer
+  Terraform» es literalmente imposible de cumplir.</p>
+</div>
+
+<p>Y hay una segunda razón, más práctica: <strong>root no deja rastro útil</strong>. En
+CloudTrail todo lo hecho por root aparece como el mismo principal, sin distinguir si fuiste
+tú, un script o unas credenciales filtradas. Con identidades separadas, la pregunta «¿quién
+hizo esto?» tiene respuesta.</p>
+
+<p>Root sigue haciendo falta para una lista corta de tareas: cambiar el correo de la cuenta,
+cerrarla, activar el acceso de IAM a la facturación, desbloquear un bucket cuya política se ha
+cerrado a sí misma… y una que hoy te importa especialmente: <strong>restaurar los permisos de
+un administrador IAM que se ha bloqueado a sí mismo</strong>. La lista completa está en la
+<a href="../reference/aws-iam.html#tareas-root">ficha de IAM</a>.</p>
+
+<div class="callout aws">
+  <span class="callout-title">Honestidad sobre lo que vas a hacer hoy</span>
+  <p>La primera práctica recomendada de AWS no es «crea un usuario IAM». Es <em>«Require human
+  users to use federation with an identity provider to access AWS using temporary
+  credentials»</em>, y para eso propone <strong>IAM Identity Center</strong>
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html">Security best
+  practices in IAM</a>).</p>
+  <p>Aquí vas a crear un <strong>usuario IAM</strong>, por dos motivos: en una cuenta suelta
+  sin Organizations, Identity Center añade una capa que no vas a usar; y —esto es lo
+  importante— vas a entrar con ese usuario <strong>sin crearle ninguna clave de acceso</strong>,
+  usando <code>aws login</code>, así que las credenciales que acaben en tu disco seguirán
+  siendo temporales. Te quedas con la parte que importa de la recomendación.</p>
+  <p>El día que quieras montarlo «como en una empresa» —varias cuentas, Identity Center, roles
+  asumibles— dímelo y lo hacemos. No entra en los ocho proyectos del roadmap a propósito.</p>
+</div>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía del servicio</span>
+    <h2>AWS IAM</h2>
+  </header>
+  <div class="anatomy-body">
+
+    <h3>Qué es</h3>
+    <p>El evaluador que decide, <strong>en cada petición a la API de AWS</strong>, si se
+    permite o se deniega. No guarda memoria entre peticiones y no pondera: reúne todas las
+    políticas aplicables, busca un <code>Deny</code>, busca un <code>Allow</code>, y responde.
+    Los usuarios, grupos y roles son solo las perchas donde cuelgas esas políticas. Es
+    <strong>global</strong> —no tiene región— y <strong>gratis</strong>, siempre.</p>
+
+    <h3>Los tipos que hoy te importan</h3>
+    <table>
+      <thead><tr><th>Identidad</th><th>Qué la distingue</th><th>Cuándo</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Root</strong></td><td>Acceso total e <em>inacotable</em>. Ninguna política le aplica.</td><td>Solo la docena de tareas que nadie más puede hacer.</td></tr>
+        <tr><td><strong>Usuario IAM</strong></td><td>Identidad permanente. Puede tener contraseña, claves, o ambas.</td><td>Cuenta suelta, o herramientas sin federación.</td></tr>
+        <tr><td><strong>Rol IAM</strong></td><td>Identidad <em>sin credenciales propias</em>. Otros la asumen y STS presta credenciales por 12 h como máximo.</td><td><strong>Por defecto</strong>: Lambda, EC2, CI/CD, otra cuenta.</td></tr>
+        <tr><td><strong>Grupo IAM</strong></td><td><strong>No es una identidad.</strong> Nadie se autentica como grupo: es una percha para colgar políticas una vez.</td><td>Cuando hay más de dos humanos iguales.</td></tr>
+      </tbody>
+    </table>
+    <p><strong>El criterio:</strong> rol siempre que puedas, usuario solo cuando no haya forma
+    de entregar credenciales temporales. Hoy usas un usuario, pero sin claves de largo plazo.</p>
+
+    <h3>Cuánto cuesta</h3>
+    <table class="cost-table">
+      <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+      <tbody>
+        <tr><td>Usuarios, grupos, roles y políticas</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>AWS STS — credenciales temporales</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>AWS IAM Identity Center</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+      </tbody>
+    </table>
+    <p class="cost-stamp">Verificado el 2026-08-24 en
+    <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">What is IAM →
+    Service cost information</a>. Es el único servicio del curso que <strong>no puede</strong>
+    aparecer en tu factura. Lo que sí aparece es lo que tus permisos dejaron crear.</p>
+
+    <p><a href="../reference/aws-iam.html"><b>Ficha completa de IAM</b></a> — los ocho tipos de
+    política y cuáles conceden y cuáles solo restan, los seis pasos del orden de evaluación,
+    los límites que se chocan de verdad, la lista completa de tareas de root, y las cuatro
+    trampas del provider.</p>
+  </div>
+</section>
+
+<h2>El problema del arranque, otra vez</h2>
+
+<p>Ayer te encontraste con «¿quién crea el bucket donde va a vivir el state?». Hoy es la misma
+forma con otro contenido: <strong>¿quién crea la identidad con la que vas a trabajar?</strong>
+Root, evidentemente — es lo único que existe. Pero eso tiene una consecuencia que la mayoría
+de los tutoriales se saltan:</p>
+
+<div class="callout why">
+  <span class="callout-title">La identidad que arregla los permisos no puede ser la identidad rota</span>
+  <p>Si te cambias al usuario nuevo y su política resulta estar incompleta, no puedes
+  arreglarla con el usuario nuevo: el propio <code>apply</code> que la arreglaría necesita los
+  permisos que faltan. Necesitas una vía de escape.</p>
+  <p>Esa vía es root, y por eso <strong>lo primero que vas a hacer hoy no es crear nada: es
+  asegurarte de que puedes volver a entrar como root cuando lo necesites.</strong> Un plan de
+  recuperación que no has probado no es un plan.</p>
+</div>
+
+<ol class="steps">
+
+<li>
+<h3>La vía de escape, antes que nada</h3>
+
+<p>Ahora mismo tu perfil <code>personal</code> apunta a root. Vas a hacer una copia con otro
+nombre, y a partir de hoy <code>personal</code> pasa a significar «la identidad con la que
+trabajo» y <code>personal-root</code> significa «romper el cristal en caso de emergencia».</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">vía de escape</span></div>
+<pre><code><b class="c"># Asegúrate de tener sesión de root ahora mismo</b>
+aws login --profile personal
+aws sts get-caller-identity --profile personal
+<b class="c"># Arn debe terminar en ":root"</b>
+
+<b class="c"># Duplica el perfil con el nombre de emergencia</b>
+ACCOUNT=$(aws sts get-caller-identity --profile personal --query Account --output text)
+aws configure set login_session <b class="s">"arn:aws:iam::${ACCOUNT}:root"</b> --profile personal-root
+aws configure set region us-east-1 --profile personal-root
+
+<b class="c"># Y PRUÉBALO. Un plan B sin probar no es un plan B.</b>
+aws login --profile personal-root
+aws sts get-caller-identity --profile personal-root</code></pre>
+</div>
+
+<p>Si ese último comando devuelve un ARN terminado en <code>:root</code>, ya tienes red. Sigue.</p>
+</li>
+
+<li>
+<h3>Escribe la identidad</h3>
+
+<p>Crea <code>projects/00-foundations/iam.tf</code>. Lee los comentarios: cada bloque responde
+a una pregunta distinta.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/iam.tf</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># ---------------------------------------------------------------</b>
+<b class="c"># 1. Un alias para la cuenta.</b>
+<b class="c">#    Sin alias, la URL de acceso a la consola para usuarios IAM es</b>
+<b class="c">#    https://999999999999.signin.aws.amazon.com/console. Con alias es</b>
+<b class="c">#    https://TU-ALIAS.signin.aws.amazon.com/console.</b>
+<b class="c">#    OJO: el alias es único en TODO AWS. Si está cogido, el apply falla.</b>
+<b class="c"># ---------------------------------------------------------------</b>
+variable <b class="s">"account_alias"</b> {
+  description = <b class="s">"Alias de la cuenta. Unico en todo AWS."</b>
+  type        = string
+}
+
+resource <b class="s">"aws_iam_account_alias"</b> <b class="s">"this"</b> {
+  account_alias = var.account_alias
+}
+
+<b class="c"># ---------------------------------------------------------------</b>
+<b class="c"># 2. El usuario. Sin claves de acceso: no vas a crear ninguna.</b>
+<b class="c">#    force_destroy permite destruirlo aunque tenga credenciales</b>
+<b class="c">#    creadas fuera de Terraform.</b>
+<b class="c"># ---------------------------------------------------------------</b>
+resource <b class="s">"aws_iam_user"</b> <b class="s">"terraform"</b> {
+  name          = <b class="s">"terraform"</b>
+  force_destroy = true
+}
+
+<b class="c"># ---------------------------------------------------------------</b>
+<b class="c"># 3. Contraseña de consola. La necesitas porque `aws login` usa</b>
+<b class="c">#    justamente tus credenciales de consola para emitir credenciales</b>
+<b class="c">#    temporales. password_reset_required la convierte en una</b>
+<b class="c">#    contraseña de un solo uso: la cambias al entrar.</b>
+<b class="c"># ---------------------------------------------------------------</b>
+resource <b class="s">"aws_iam_user_login_profile"</b> <b class="s">"terraform"</b> {
+  user                    = aws_iam_user.terraform.name
+  password_length         = 32
+  password_reset_required = true
+}
+
+output <b class="s">"terraform_user_password"</b> {
+  description = <b class="s">"Contrasena inicial. Se cambia en el primer acceso."</b>
+  value       = aws_iam_user_login_profile.terraform.password
+  sensitive   = true
+}
+
+output <b class="s">"console_signin_url"</b> {
+  description = <b class="s">"URL de acceso a la consola para usuarios IAM"</b>
+  value       = <b class="s">"https://${var.account_alias}.signin.aws.amazon.com/console"</b>
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Esa contraseña va a acabar en el state</span>
+  <p>El atributo <code>password</code> de <code>aws_iam_user_login_profile</code> es texto
+  plano cuando no le pasas una clave PGP. <code>sensitive = true</code> solo lo tapa en la
+  <em>pantalla</em>; en el state se escribe entero, igual que tu correo. Es exactamente lo que
+  viste en la <a href="./0003-saca-el-state-de-tu-portatil.html">lección 03</a>, ahora con
+  algo peor dentro.</p>
+  <p>Dos cosas lo hacen tolerable, y ninguna de las dos es casualidad: el state ya está
+  cifrado en S3 y fuera de git desde ayer, y <code>password_reset_required = true</code> hace
+  que la contraseña del state <strong>deje de ser válida</strong> en cuanto entres por primera
+  vez. La que uses de verdad no la sabrá nunca Terraform.</p>
+</div>
+
+<p>Añade el alias a tus variables locales — recuerda que <code>terraform.tfvars</code> está en
+<code>.gitignore</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/terraform.tfvars</span><span class="tag">hcl</span></div>
+<pre><code>account_alias = <b class="s">"cmglezpdev-labs"</b>   <b class="c"># elige el tuyo; tiene que ser único en todo AWS</b></code></pre>
+</div>
+</li>
+
+<li>
+<h3>Escribe los permisos</h3>
+
+<p>Aquí está el trabajo de verdad. Sigue en el mismo <code>iam.tf</code>.</p>
+
+<p>Nunca escribas una política como un heredoc de JSON: usa
+<code>aws_iam_policy_document</code>. Se valida en el <code>plan</code>, interpola ARN sin
+comillas rotas, y se lee como HCL. Ya lo usaste en la lección 02 para el topic.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/iam.tf (continúa)</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># ---------------------------------------------------------------</b>
+<b class="c"># 4. Qué puede hacer esta identidad.</b>
+<b class="c"># ---------------------------------------------------------------</b>
+data <b class="s">"aws_iam_policy_document"</b> <b class="s">"terraform_course"</b> {
+
+  <b class="c"># Los servicios que gestiona este proyecto, y solo esos.</b>
+  <b class="c"># Nada de ec2, rds, eks: si mañana los necesitas, se añaden aquí</b>
+  <b class="c"># y el plan te dirá que falta algo antes que AWS.</b>
+  statement {
+    sid = <b class="s">"CourseServices"</b>
+    actions = [
+      <b class="s">"budgets:*"</b>,
+      <b class="s">"sns:*"</b>,
+      <b class="s">"iam:*"</b>,
+      <b class="s">"sts:GetCallerIdentity"</b>,
+    ]
+    resources = [<b class="s">"*"</b>]
+  }
+
+  <b class="c"># El bucket de state: acciones a nivel de BUCKET.</b>
+  <b class="c"># Fíjate en el ARN: NO lleva barra al final.</b>
+  statement {
+    sid       = <b class="s">"StateBucket"</b>
+    actions   = [<b class="s">"s3:*"</b>]
+    resources = [aws_s3_bucket.state.arn]
+  }
+
+  <b class="c"># El state: acciones a nivel de OBJETO. Otro espacio de nombres.</b>
+  <b class="c"># Este bloque está copiado del ejemplo oficial del backend S3.</b>
+  statement {
+    sid       = <b class="s">"StateObject"</b>
+    actions   = [<b class="s">"s3:GetObject"</b>, <b class="s">"s3:PutObject"</b>]
+    resources = [<b class="s">"${aws_s3_bucket.state.arn}/00-foundations/terraform.tfstate"</b>]
+  }
+}
+
+resource <b class="s">"aws_iam_policy"</b> <b class="s">"terraform_course"</b> {
+  name        = <b class="s">"terraform-course"</b>
+  description = <b class="s">"Lo que Terraform necesita para el proyecto 00-foundations"</b>
+  policy      = data.aws_iam_policy_document.terraform_course.json
+}
+
+resource <b class="s">"aws_iam_user_policy_attachment"</b> <b class="s">"terraform_course"</b> {
+  user       = aws_iam_user.terraform.name
+  policy_arn = aws_iam_policy.terraform_course.arn
+}
+
+<b class="c"># ---------------------------------------------------------------</b>
+<b class="c"># 5. Y el permiso para que `aws login` pueda emitir credenciales</b>
+<b class="c">#    a este usuario. Sin esto el login falla, y el error no dice</b>
+<b class="c">#    de forma evidente que le falta esta política.</b>
+<b class="c">#    Root no la necesita: root no necesita ninguna política.</b>
+<b class="c"># ---------------------------------------------------------------</b>
+resource <b class="s">"aws_iam_user_policy_attachment"</b> <b class="s">"signin"</b> {
+  user       = aws_iam_user.terraform.name
+  policy_arn = <b class="s">"arn:aws:iam::aws:policy/SignInLocalDevelopmentAccess"</b>
+}</code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">El ARN del bucket no es el ARN del objeto</span>
+  <p>Es la causa número uno de <code>AccessDenied</code> en S3 y merece que la mires dos
+  veces. Son dos espacios de nombres que <strong>no se solapan</strong>:</p>
+  <p><code>arn:aws:s3:::mi-bucket</code> → acciones del bucket: <code>ListBucket</code>,
+  <code>GetBucketVersioning</code>, <code>PutBucketPolicy</code>…<br>
+  <code>arn:aws:s3:::mi-bucket/*</code> → acciones de objeto: <code>GetObject</code>,
+  <code>PutObject</code>, <code>DeleteObject</code>…</p>
+  <p>Por eso <code>s3:*</code> sobre el ARN sin barra te deja hacer <em>todo</em> con el bucket
+  y <strong>nada</strong> con lo que hay dentro. Que es justo lo que quieres aquí: la política
+  del state la escribes objeto a objeto, a propósito.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Sí, <code>iam:*</code> es demasiado. Es deliberado y tiene fecha de caducidad</span>
+  <p>Con <code>iam:*</code> sobre <code>*</code>, este usuario puede adjuntarse
+  <code>AdministratorAccess</code> a sí mismo. Eso no es least privilege y no voy a fingir que
+  lo sea.</p>
+  <p>Está ahí porque este mismo módulo raíz gestiona los recursos IAM que acabas de escribir:
+  cada <code>plan</code> tiene que poder leerlos y cada <code>apply</code>, modificarlos. La
+  alternativa correcta —una identidad humana que administra y un <strong>rol</strong> acotado
+  que ejecuta Terraform, sin permisos de IAM— es exactamente lo que monta el
+  <a href="../ROADMAP.md">proyecto 07</a> con OIDC. Hoy la nombramos; allí la construyes.</p>
+</div>
+</li>
+
+<li>
+<h3>Aplica — todavía como root</h3>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde projects/00-foundations</span></div>
+<pre><code>export AWS_PROFILE=personal-root
+aws sts get-caller-identity   <b class="c"># confirma que sigues siendo root</b>
+
+terraform plan
+<b class="c"># Deben salir 6 recursos nuevos: alias, user, login_profile,</b>
+<b class="c"># policy y los dos attachments. Ningún cambio en lo anterior.</b>
+
+terraform apply</code></pre>
+</div>
+
+<p>Guarda la contraseña y la URL en algún sitio de paso:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">salidas</span></div>
+<pre><code>terraform output console_signin_url
+terraform output -raw terraform_user_password; echo</code></pre>
+</div>
+</li>
+
+<li>
+<h3>Cámbiate de identidad</h3>
+
+<p>Dos pasos, y el primero es en el navegador porque la contraseña es de un solo uso:</p>
+
+<ul class="checklist" data-key="l04-switch">
+  <li><input type="checkbox" id="l04a"><label for="l04a">Abre la <code>console_signin_url</code> en una ventana privada, entra con usuario <code>terraform</code> y la contraseña del output, y <strong>cámbiala</strong> cuando te lo pida. Guárdala en tu gestor.</label></li>
+  <li><input type="checkbox" id="l04b"><label for="l04b">Vuelve al terminal y ejecuta <code>aws login --profile personal</code>. En el navegador elige la sesión del usuario <code>terraform</code>.</label></li>
+  <li><input type="checkbox" id="l04c"><label for="l04c">La CLI te va a preguntar si quieres sobrescribir la sesión de <code>personal</code>, que ahora apunta a root. Responde <b>y</b>: es justo lo que quieres.</label></li>
+</ul>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">la prueba</span></div>
+<pre><code>aws login --profile personal
+aws sts get-caller-identity --profile personal</code></pre>
+</div>
+
+<p>El ARN ya no debe terminar en <code>:root</code>, sino en
+<code>:user/terraform</code>. Si es así, has dejado de ser root.</p>
+
+<div class="callout why">
+  <span class="callout-title">Sigues sin tener una clave de acceso, y eso es lo bueno</span>
+  <p>No has creado ningún <code>AKIA…</code> ni has escrito un secreto en ningún fichero.
+  <code>aws login</code> intercambia tus credenciales de consola por credenciales temporales
+  que se refrescan solas y caducan como mucho a las 12 horas
+  (<a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html">doc de
+  la CLI</a>). Se cachean en <code>~/.aws/login/cache</code> y se tiran con
+  <code>aws logout</code>.</p>
+  <p>Esa es la parte de la recomendación de AWS que sí estás cumpliendo: <em>credenciales
+  temporales para humanos</em>. Lo que no cumples es la federación con un proveedor de
+  identidad, y ya sabes por qué.</p>
+</div>
+</li>
+
+<li>
+<h3>Ahora rómpelo</h3>
+
+<p>Con la identidad nueva puesta, lanza el comando más inofensivo que existe:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">esto va a fallar</span></div>
+<pre><code>export AWS_PROFILE=personal
+terraform plan</code></pre>
+</div>
+
+<p><strong>Antes de leer el error, predice.</strong> Tienes <code>s3:GetObject</code> y
+<code>s3:PutObject</code> sobre <code>00-foundations/terraform.tfstate</code>. ¿Qué es lo
+primero que hace Terraform contra S3 al arrancar un <code>plan</code>, y sobre qué objeto?</p>
+
+<details class="recall">
+  <summary>Ya lo has dicho hoy. Despliega solo cuando tengas tu respuesta.</summary>
+  <p><code>Error acquiring the state lock</code>, con un <code>AccessDenied</code> dentro.</p>
+  <p>Lo primero que hace Terraform es <strong>coger el bloqueo</strong>, y coger el bloqueo es
+  un <code>PutObject</code> sobre
+  <code>00-foundations/terraform.tfstate<b>.tflock</b></code>. Esa clave es distinta de la del
+  state, así que es <strong>otro ARN</strong>, y tu política no lo menciona. Denegación
+  implícita: no hay ninguna sentencia que la permita.</p>
+  <p>Y hay una tercera acción que también falta: <code>s3:DeleteObject</code>, la que
+  <em>libera</em> el bloqueo al terminar. Si la olvidaras, el fallo sería peor que este —
+  cogerías el lock y no podrías soltarlo, dejando el state bloqueado para siempre.</p>
+</details>
+
+<div class="callout why">
+  <span class="callout-title">Por qué esto le pasa a todo el mundo</span>
+  <p>Ese par de sentencias —<code>GetObject</code> y <code>PutObject</code> sobre la clave del
+  state— es el ejemplo que circula por todos los tutoriales, y era correcto hasta que llegó el
+  bloqueo nativo de S3. La documentación oficial del backend ya trae la tercera sentencia
+  (<a href="https://developer.hashicorp.com/terraform/language/backend/s3">S3 backend</a>),
+  pero casi ningún material de internet la ha copiado todavía. Es exactamente el mismo desfase
+  que con DynamoDB: lo que encuentres por ahí va un par de años por detrás.</p>
+</div>
+</li>
+
+<li>
+<h3>Arréglalo — y fíjate con qué identidad</h3>
+
+<p>Añade la tercera sentencia al <code>aws_iam_policy_document</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/iam.tf</span><span class="tag">hcl</span></div>
+<pre><code>  <b class="c"># El bloqueo: otro objeto, otro ARN, y una acción más.</b>
+  <b class="c"># DeleteObject es la que LIBERA el lock al terminar.</b>
+  statement {
+    sid     = <b class="s">"StateLock"</b>
+    actions = [<b class="s">"s3:GetObject"</b>, <b class="s">"s3:PutObject"</b>, <b class="s">"s3:DeleteObject"</b>]
+    resources = [
+      <b class="s">"${aws_s3_bucket.state.arn}/00-foundations/terraform.tfstate.tflock"</b>
+    ]
+  }</code></pre>
+</div>
+
+<p>Ahora la pregunta que es toda la lección: <strong>¿con qué perfil aplicas este
+arreglo?</strong> Con <code>personal</code> no puedes — ese <code>apply</code> necesitaría
+coger el bloqueo, y coger el bloqueo es justo lo que está denegado. Rompe el cristal:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">la vía de escape, usada</span></div>
+<pre><code>AWS_PROFILE=personal-root terraform apply
+
+<b class="c"># y ahora, otra vez con la identidad de trabajo</b>
+export AWS_PROFILE=personal
+terraform plan</code></pre>
+</div>
+
+<p><code>No changes.</code> Con una identidad que no es root, que no tiene claves de acceso
+permanentes y cuyos permisos caben en una pantalla.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Si el <code>plan</code> sigue fallando, espera diez segundos y repite</span>
+  <p>IAM es <strong>eventualmente consistente</strong>: la documentación lo dice sin rodeos
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">What is
+  IAM</a>). Un cambio de política puede tardar unos segundos en propagarse a todos los
+  evaluadores. Un <code>AccessDenied</code> que desaparece al repetir el mismo comando sin
+  tocar nada no es un fantasma: es esto. Anótalo, porque en el proyecto 01 te va a pasar con
+  el rol de una Lambda.</p>
+  <p>La otra tentación —<code>terraform apply -lock=false</code>— también habría funcionado, y
+  es peor: te acostumbras a desactivar la única protección que impide que dos escrituras se
+  pisen. Se usa para diagnosticar, nunca para trabajar.</p>
+</div>
+</li>
+
+</ol>
+
+<h2>Verificación: qué demuestra esto y qué no</h2>
+
+<h3>1. La identidad funciona de verdad</h3>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">con AWS_PROFILE=personal</span></div>
+<pre><code>aws sts get-caller-identity          <b class="c"># :user/terraform, no :root</b>
+terraform plan                       <b class="c"># No changes</b>
+aws iam list-access-keys --user-name terraform
+<b class="c"># AccessKeyMetadata debe estar VACÍO: cero claves de largo plazo</b></code></pre>
+</div>
+
+<h3>2. Root está como debe estar</h3>
+
+<p>Esto no se comprueba mirando la consola: se comprueba con el <strong>informe de
+credenciales</strong>, que es la fuente de verdad de la cuenta entera.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">auditoría</span></div>
+<pre><code>AWS_PROFILE=personal aws iam generate-credential-report
+AWS_PROFILE=personal aws iam get-credential-report \
+  --query Content --output text | base64 -d &gt; /tmp/creds.csv
+
+<b class="c"># Los nombres de las columnas, numerados</b>
+head -1 /tmp/creds.csv | tr <b class="s">','</b> <b class="s">'\n'</b> | nl
+
+<b class="c"># Y la fila de root, con la misma numeración</b>
+grep <b class="s">'&lt;root_account&gt;'</b> /tmp/creds.csv | tr <b class="s">','</b> <b class="s">'\n'</b> | nl</code></pre>
+</div>
+
+<p>Compara las dos listas línea a línea. Lo que buscas: <code>mfa_active</code> en
+<code>true</code>, y <code>access_key_1_active</code> y <code>access_key_2_active</code> en
+<code>false</code>. Si algo no cuadra, arréglalo ahora en la consola —MFA solo se activa a
+mano, y AWS recomienda una passkey o una llave de seguridad antes que una app— y vuelve a
+generar el informe.</p>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <p>Que el backend S3 con <code>use_lockfile</code> funciona bajo una identidad que
+  <strong>no</strong> es root, y que sabes exactamente qué permisos necesita: dos objetos, tres
+  acciones sobre el segundo. Lo prueba un <code>plan</code> que devuelve <code>No changes</code>
+  ejecutado con esa identidad, no el <code>apply</code> que la creó.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>El usuario <code>terraform</code> no tiene MFA.</strong> Terraform no puede
+    crear un dispositivo MFA virtual: hace falta escanear un QR. Si quieres ponérselo, es a
+    mano y en la consola.</li>
+    <li><strong>La política no es least privilege.</strong> Con <code>iam:*</code> este usuario
+    puede darse permisos de administrador. Está dicho arriba y sigue siendo verdad.</li>
+    <li><strong>Sigue siendo un usuario IAM, no federación.</strong> Cumples la parte de
+    «credenciales temporales»; no la de «proveedor de identidad».</li>
+    <li><strong>No has separado humano de automatización.</strong> La misma identidad que usas
+    tú es la que ejecutaría un pipeline. Eso se arregla en el proyecto 07.</li>
+    <li><strong>Este usuario no puede ver tu factura.</strong> Para eso hay que activar el
+    acceso de IAM a la consola de facturación, y eso solo puede hacerlo root — es una de las
+    tareas de la lista. Si lo quieres, hazlo desde la consola con
+    <code>personal-root</code>.</li>
+  </ul>
+</div>
+
+<h3>Nada que destruir</h3>
+
+<p>Hoy no hay <code>destroy</code>. IAM no cobra y el proyecto 00 es la base permanente de la
+cuenta: se queda puesto. Lo único que conviene cerrar es la sesión cuando termines:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">al acabar</span></div>
+<pre><code>aws logout --profile personal-root   <b class="c"># la de emergencia no se deja abierta</b></code></pre>
+</div>
+
+<h2>¿Y cuándo vuelvo a necesitar root?</h2>
+
+<p>Casi nunca. Y conviene tenerlo preciso, porque la respuesta intuitiva —«cada vez que me
+falte un permiso»— es <strong>falsa</strong>:</p>
+
+<div class="callout win">
+  <span class="callout-title">Añadir un servicio nuevo NO requiere root</span>
+  <p>Cuando el proyecto 01 necesite Lambda, DynamoDB y API Gateway, añades esas acciones al
+  <code>aws_iam_policy_document</code> y aplicas con <code>personal</code>. Funciona porque
+  tienes <code>iam:*</code>: modificar tu propia política <em>es</em> una acción de IAM, y la
+  tienes concedida.</p>
+  <p>Hoy hizo falta root por una razón distinta y mucho más estrecha: <strong>lo que estaba
+  roto era el backend</strong>. Sin poder coger el bloqueo no hay <code>apply</code> de ningún
+  tipo, ni siquiera el que arregla el problema. Esa es la única forma del asunto que obliga a
+  romper el cristal.</p>
+</div>
+
+<p>La lista completa de cuándo vuelves a <code>personal-root</code>:</p>
+
+<ul>
+  <li><strong>Lo roto impide el propio <code>apply</code></strong> — el backend, el bucket de
+  state, tu propia identidad.</li>
+  <li><strong>Una tarea que solo puede hacer root</strong> — activar el acceso de IAM a la
+  facturación, cambiar el correo de la cuenta, cerrarla. Terraform no puede hacer ninguna de
+  ellas: no hay API. Están en la <a href="../reference/aws-iam.html#tareas-root">ficha de
+  IAM</a>.</li>
+</ul>
+
+<div class="callout trap">
+  <span class="callout-title">La comodidad y el agujero son la misma cosa</span>
+  <p>El mismo <code>iam:*</code> que te ahorra volver a root cada vez que amplías permisos es
+  el que te deja adjudicarte <code>AdministratorAccess</code>. No son dos propiedades: es una.
+  Por eso en el modelo serio —el de la tabla de abajo— la identidad que ejecuta Terraform a
+  diario <strong>no</strong> tiene permisos de IAM, y ampliar lo que puede hacer cuesta
+  deliberadamente más que editar un fichero y aplicar.</p>
+</div>
+
+<h2>El problema del arranque, en el mundo real</h2>
+
+<p>Alguien tiene que empezar con root: cuando una cuenta nace es la única identidad que
+existe. Cualquiera que clone este repositorio pasará por lo mismo — crear cuenta, entrar como
+root, primer <code>apply</code>, cambiarse. Eso no se puede evitar en ningún sitio, ni en tu
+portátil ni en una empresa de mil personas.</p>
+
+<p>Lo que cambia con el tamaño no es <em>si</em> hay un arranque privilegiado, sino
+<strong>cuánto dura y quién lo toca</strong>:</p>
+
+<div class="scroll-x">
+<table>
+  <thead>
+    <tr><th>Nivel</th><th>Cómo se arranca</th><th>Quién ejecuta Terraform a diario</th><th>Cómo se amplía un permiso</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>0 — lo que has hecho hoy</strong></td>
+      <td>Root aplica el módulo raíz que crea a su propio sucesor.</td>
+      <td>El usuario <code>terraform</code>, con <code>iam:*</code>.</td>
+      <td>Editas la política y aplicas tú mismo.</td>
+    </tr>
+    <tr>
+      <td><strong>1 — bootstrap aparte</strong></td>
+      <td>Un directorio <code>bootstrap/</code> con state propio, que se aplica con root dos o tres veces al año.</td>
+      <td>Una identidad que <strong>no</strong> puede tocar IAM de la cuenta.</td>
+      <td>Editas el bootstrap; lo aplica quien tenga esa llave.</td>
+    </tr>
+    <tr>
+      <td><strong>2 — rol asumible</strong></td>
+      <td>Igual, pero Terraform no usa las credenciales de nadie: el provider hace <code>assume_role</code> sobre un rol de ejecución.</td>
+      <td>Un <strong>rol</strong>, con sesión de una hora y sin credenciales permanentes.</td>
+      <td>Se cambia el rol, no tu usuario. Queda en CloudTrail a nombre de la sesión.</td>
+    </tr>
+    <tr>
+      <td><strong>3 — organización</strong></td>
+      <td>Cuenta de gestión, una cuenta por entorno, Identity Center para humanos, SCP como techo. Root se sella con MFA y no se usa.</td>
+      <td>El pipeline de CI, con OIDC y un rol distinto por cuenta.</td>
+      <td><strong>Un pull request</strong> al repositorio de identidades, con otros revisores.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">El salto conceptual del nivel 3</span>
+  <p>La intuición natural es: «si me falta un permiso, se lo pido a la persona que tiene
+  root». <strong>En una empresa mediana eso no pasa</strong>, porque no escala y porque no
+  deja rastro.</p>
+  <p>Los permisos también son código. Viven en un repositorio con revisores distintos, y
+  ampliarlos es un <em>pull request</em> que aplica un pipeline con más privilegios que el
+  tuyo. La escalada de privilegios sigue existiendo —tiene que existir—, pero es un commit
+  revisado y no un mensaje por Slack.</p>
+  <p>El nivel 2 es una línea de HCL que verás en el proyecto 07:
+  <code>provider "aws" { assume_role { role_arn = … } }</code>. El nivel 1 lo montarás cuando
+  tengas <code>dev</code> y <code>prod</code> y el bootstrap deje de caber en el mismo módulo
+  raíz. Hoy estás en el 0 <em>a sabiendas</em>, que es distinto de estar en el 0 sin saberlo.</p>
+</div>
+
+<p class="small">Detalle práctico del nivel 1, por si lo montas antes de tiempo: el bootstrap
+es el único proyecto que <strong>no puede</strong> guardar su state en el bucket que él mismo
+crea. O lo deja en local y versionado, o lo mete en un bucket creado a mano. Es la misma
+serpiente mordiéndose la cola de la lección 03, y la solución es la misma: alguien tiene que
+ser el primero.</p>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Le pones a tu usuario un permissions boundary con
+  <code>Action: "*"</code> sobre <code>Resource: "*"</code> y le quitas todas las demás
+  políticas. ¿Qué puede hacer?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Un boundary no concede: solo pone un techo. El permiso efectivo es la intersección con las políticas de identidad, y la intersección con el conjunto vacío es vacía.">Nada: un boundary no concede</button></li>
+    <li><button data-correct="false" data-why="Eso sería cierto si el boundary fuera una política de identidad, pero no lo es. Los boundaries, los SCP y las session policies solo restan permisos.">Todo: el comodín lo permite</button></li>
+    <li><button data-correct="false" data-why="No hay nada de solo lectura en un boundary. Concede cero, exactamente igual que si le hubieras puesto un boundary muy restrictivo.">Solo lectura sobre la cuenta</button></li>
+    <li><button data-correct="false" data-why="Root es la única identidad que ignora las políticas, y ninguna configuración convierte a un usuario en root. El boundary no cambia eso.">Todo, igual que el root</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Un compañero te pasa su política del backend: <code>GetObject</code> y
+  <code>PutObject</code> sobre la clave del state, más <code>DeleteObject</code> sobre esa
+  <em>misma</em> clave. Dice que le funciona el <code>apply</code>. ¿Qué le falta?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El lock es un objeto aparte cuya clave lleva el sufijo .tflock, así que es otro ARN. Sin una sentencia que lo nombre, no puede ni cogerlo ni soltarlo.">Una sentencia sobre el objeto <code>.tflock</code></button></li>
+    <li><button data-correct="false" data-why="ListBucket es una acción del bucket y hace falta, pero no es lo que impide bloquear el state. Y además él dice que su apply funciona.">Una sentencia con la acción ListBucket</button></li>
+    <li><button data-correct="false" data-why="El bloqueo nativo de S3 no usa DynamoDB. Esa forma está deprecada desde Terraform 1.11 y no aparece en ninguna política moderna del backend.">Una sentencia sobre la tabla DynamoDB</button></li>
+    <li><button data-correct="false" data-why="El cifrado por defecto de S3 con AES-256 es transparente y gratuito, y no requiere ningún permiso de KMS ni sentencia adicional.">Una sentencia para el cifrado KMS</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Aplicas una política que, sin querer, deniega a tu propio usuario todo
+  <code>iam:*</code>. Ya no puedes editarla con él. ¿Qué haces?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Restaurar los permisos de un administrador IAM que se ha bloqueado a sí mismo está en la lista oficial de tareas que solo root puede hacer. Es literalmente para lo que sirve root.">Entras como root y la corriges</button></li>
+    <li><button data-correct="false" data-why="Soporte no reparte permisos de tu cuenta ni edita tus políticas por ti: te dirá que uses root. Y tardarías horas en algo que se arregla en dos minutos.">Abres un ticket con soporte técnico</button></li>
+    <li><button data-correct="false" data-why="Crear otro usuario también exige permisos de IAM, que es exactamente lo que acabas de perder. La serpiente se muerde la cola.">Creas otro usuario con permisos totales</button></li>
+    <li><button data-correct="false" data-why="Las credenciales caducadas y renovadas siguen perteneciendo al mismo principal, con las mismas políticas. Nada cambia al volver a entrar.">Cierras sesión y vuelves a entrar</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html">
+  <strong>Security best practices in IAM</strong></a> — AWS, unos 12 minutos. Son catorce
+  prácticas, y las cuatro primeras explican por qué hoy has hecho lo que has hecho. Léela con
+  una pregunta en la cabeza: <em>¿cuáles de estas catorce cumple mi cuenta ahora mismo?</em>
+  Cinco o seis, y saber cuáles fallan vale más que cumplirlas todas sin entenderlas.</p>
+  <p>Después, cuando tengas veinte minutos sueltos,
+  <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html">Policy
+  evaluation logic</a>. Es denso, y es el documento que separa a quien copia políticas de quien
+  las depura. En entrevistas se pregunta en forma de «tengo un Allow aquí y un Deny allá, ¿qué
+  pasa?».</p>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Proyecto 00 cerrado.</strong> Tienes presupuesto con alarma probada, un topic SNS
+  con su política de recurso, el state en S3 con versionado y bloqueo nativo, y una identidad
+  acotada que no es root. Esa es exactamente la base que un equipo monta el primer día, y ya
+  la puedes explicar entera.</p>
+  <p><strong>Lección 05 — el acortador de URLs.</strong> Empieza el proyecto 01: API Gateway,
+  Lambda en TypeScript y DynamoDB. Terraform deja de ser «declarar recursos sueltos» y aparece
+  lo que de verdad cuesta: <code>for_each</code>, <code>locals</code>, empaquetar código con
+  <code>archive_file</code>, y un rol de ejecución con permisos mínimos de verdad — esta vez
+  sin <code>iam:*</code>.</p>
+  <p class="small">Sigue pendiente el post-mortem del state que te prometí en la lección 03.
+  Ya tienes la mitad hecha sin querer: la noche de la migración te quedaste con un state vacío
+  y un <code>plan</code> que quería crear los nueve recursos desde cero. Cuando lo hagamos,
+  partiremos de ahí en vez de inventarnos un desastre.</p>
+  <div class="nav-links">
+    <a href="./0003-saca-el-state-de-tu-portatil.html">← Lección 03</a>
+    <a href="../reference/aws-iam.html">Referencia: IAM</a>
+    <a href="../reference/aws-s3.html">Referencia: S3</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Me interesan tres cosas: el mensaje completo del
+    <code>Error acquiring the state lock</code> con el <code>AccessDenied</code> dentro, el
+    <code>get-caller-identity</code> con la identidad nueva, y las dos listas del informe de
+    credenciales — quiero ver el estado real de root, no que me digas que está bien. Si el
+    alias de cuenta te ha dado <code>EntityAlreadyExists</code>, dímelo y elegimos otro.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

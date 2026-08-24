@@ -20,9 +20,10 @@ usarlo, y cómo se escribe en Terraform. Todos terminan con preguntas de comprob
 | [AWS Budgets](./aws-budgets.html) | Gratis sin acciones | 00 |
 | [Amazon SNS](./aws-sns.html) | Por uso, cero en reposo | 00, 02 |
 | [Amazon S3](./aws-s3.html) | Por uso, cero en reposo | 00, 02, 05, 07 |
+| [AWS IAM](./aws-iam.html) | Gratis, siempre | 00 y todos los demás |
 
 _Pendientes: Lambda, API Gateway, DynamoDB, SQS, EventBridge, VPC, ALB, RDS, CloudFront,
-Bedrock, EKS, IAM._
+Bedrock, EKS._
 
 ## Cómo se generan
 

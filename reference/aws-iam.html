@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · AWS IAM</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>AWS Identity and Access Management</h1>
+  <p class="deck">El motor que decide, en cada una de las peticiones que tu código hace a la
+  API de AWS, si se permite o se deniega. No es «gestión de usuarios»: es un evaluador de
+  políticas JSON que se ejecuta antes de cada llamada, y cuya respuesta por defecto es
+  <strong>no</strong>.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Identidad y control de acceso</dd></div>
+    <div><dt>Ámbito</dt><dd><strong>Global</strong> — un solo endpoint, <code>iam.amazonaws.com</code></dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost free">gratis</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí. IAM no cobra nunca, ni por usuarios, ni por roles, ni por políticas</dd></div>
+    <div><dt>Recursos Terraform</dt><dd><code>aws_iam_role</code> · <code>aws_iam_policy</code> · <code>aws_iam_user</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/00-foundations">proyecto 00</a> y en todos los demás</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+
+<p>Cada vez que Terraform, la CLI o la consola hacen algo en AWS, están mandando una petición
+HTTP firmada a la API de un servicio. Antes de ejecutarla, ese servicio le pregunta a IAM:
+<em>¿este principal puede hacer esta acción sobre este recurso, en estas condiciones?</em>
+IAM reúne todas las políticas aplicables, las evalúa, y devuelve <code>Allow</code> o
+<code>Deny</code>. Eso es todo lo que hace IAM. Los usuarios, los roles y los grupos son solo
+las perchas donde cuelgas esas políticas.</p>
+
+<p>Las cuatro palabras que aparecen en toda política y que conviene no confundir nunca:</p>
+
+<ul>
+  <li><strong>Principal</strong> — <em>quién</em> hace la petición. Un usuario IAM, una sesión
+  de rol, un servicio de AWS, el root.</li>
+  <li><strong>Action</strong> — <em>qué</em> intenta hacer. Siempre
+  <code>servicio:Operación</code>: <code>s3:PutObject</code>, <code>sns:Publish</code>.
+  Corresponden una a una con las operaciones de la API, no con lo que ves en la consola.</li>
+  <li><strong>Resource</strong> — <em>sobre qué</em>. Un ARN.</li>
+  <li><strong>Condition</strong> — <em>bajo qué circunstancias</em>. Lo que usaste en la
+  <a href="./aws-sns.html">política del topic SNS</a> para que solo tu cuenta pudiera
+  publicar.</li>
+</ul>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>IAM no es un portero con una lista de invitados en la puerta. Es un <strong>juez que
+  vuelve a juzgar cada petición desde cero</strong>: no recuerda que te dejó pasar hace un
+  segundo, no tiene contexto, y empieza siempre desde «denegado» salvo que encuentre por
+  escrito un permiso que aplique.</p>
+  <p><strong>Dónde se rompe la analogía:</strong> un juez pondera. IAM no. No hay grados, no
+  hay intención, no hay «casi». Si el ARN del recurso no encaja carácter a carácter con el
+  patrón de tu política, la política no aplica y la respuesta es no. La mayoría de los
+  <code>AccessDenied</code> que vas a ver en tu vida son un ARN mal escrito, no un permiso
+  que falte.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+
+<div class="ref-grid">
+  <div class="ref-card">
+    <h3>Que una Lambda solo toque su tabla</h3>
+    <p>Tu función del acortador de URLs necesita escribir en <code>links</code> y en ninguna
+    otra tabla. Su <strong>rol de ejecución</strong> lleva una política con
+    <code>dynamodb:PutItem</code> sobre el ARN exacto de esa tabla. Si mañana alguien mete un
+    bug que borra otra tabla, la petición se deniega antes de llegar a DynamoDB.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Desplegar desde GitHub Actions sin claves</h3>
+    <p>El caso que más impresiona en una entrevista. Un proveedor OIDC y un rol con una
+    política de confianza que dice «acepto tokens de GitHub, pero solo del repositorio
+    <code>x/y</code> y solo de la rama <code>main</code>». Cero secretos guardados en
+    GitHub. Es el <a href="../ROADMAP.md">proyecto 07</a>.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Que un servicio de AWS actúe sobre otro</h3>
+    <p>Ya lo hiciste: para que Budgets pudiera publicar en tu topic SNS hubo que darle permiso
+    <em>al servicio</em>, no a una persona. Ese permiso vive en el recurso —una política de
+    recurso— y no en ninguna identidad.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Acotar lo que puede hacer Terraform</h3>
+    <p>Un <code>terraform apply</code> con credenciales de administrador puede borrar la
+    producción entera. Con una identidad acotada, el radio de explosión de un error tuyo o de
+    un módulo de la registry que no has leído queda limitado por escrito.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Dejar de usar root</h3>
+    <p>El root de una cuenta no se puede acotar: ignora las políticas de identidad y los SCP
+    por diseño. La única forma de tener límites es dejar de usarlo y trabajar con otra
+    identidad. Es la razón de existir de la <a href="../lessons/0004-deja-de-ser-root.html">lección 04</a>.</p>
+  </div>
+</div>
+
+<h2>Los tipos que existen</h2>
+
+<h3>Identidades: quién puede hacer una petición</h3>
+
+<table>
+  <thead><tr><th>Identidad</th><th>Qué la distingue</th><th>Credenciales</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Root</strong></td>
+      <td>Nace con la cuenta. Acceso total e <strong>inacotable</strong>: las políticas de identidad no le aplican.</td>
+      <td>Correo + contraseña. Puede tener claves de acceso — no las crees.</td>
+      <td>Solo para la <a href="#tareas-root">docena de tareas</a> que nadie más puede hacer.</td>
+    </tr>
+    <tr>
+      <td><strong>Usuario IAM</strong></td>
+      <td>Identidad permanente dentro de una cuenta. Puede tener contraseña de consola, claves de acceso, o ambas.</td>
+      <td>Largo plazo: la contraseña y las claves no caducan solas.</td>
+      <td>Cuenta suelta sin Organizations, o herramientas que no soportan federación.</td>
+    </tr>
+    <tr>
+      <td><strong>Grupo IAM</strong></td>
+      <td><strong>No es una identidad.</strong> Es un contenedor de usuarios para colgar políticas una vez. Nadie «es» un grupo ni puede autenticarse como tal.</td>
+      <td>Ninguna.</td>
+      <td>Cuando tienes más de dos usuarios con el mismo perfil de permisos.</td>
+    </tr>
+    <tr>
+      <td><strong>Rol IAM</strong></td>
+      <td>Identidad <em>sin credenciales propias</em> que otros asumen. Lleva una <strong>política de confianza</strong> que dice quién puede asumirlo.</td>
+      <td>Temporales, emitidas por STS. Máximo 12 h.</td>
+      <td><strong>Por defecto.</strong> Lambda, EC2, ECS, GitHub Actions, otra cuenta, un humano federado.</td>
+    </tr>
+    <tr>
+      <td><strong>Usuario de Identity Center</strong></td>
+      <td>Identidad de la <em>organización</em>, no de una cuenta. Se le asignan «permission sets» que se materializan como roles en cada cuenta.</td>
+      <td>Temporales, vía SSO.</td>
+      <td>La recomendación oficial de AWS para humanos en cuanto tienes más de una cuenta.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Rol siempre que puedas; usuario solo cuando no haya forma de entregar
+  credenciales temporales.</strong> La primera de las prácticas recomendadas de AWS es
+  literalmente <em>«Require human users to use federation with an identity provider to access
+  AWS using temporary credentials»</em>, y la segunda, <em>«Require workloads to use temporary
+  credentials with IAM roles»</em>
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html">Security best
+  practices in IAM</a>).</p>
+  <p>AWS admite explícitamente cuatro excepciones donde un usuario IAM con credenciales de
+  largo plazo sigue siendo la respuesta correcta: cargas que no pueden usar roles (plugins de
+  WordPress es su ejemplo), clientes de terceros que no soportan Identity Center, acceso a
+  CodeCommit y acceso a Amazon Keyspaces.</p>
+</div>
+
+<h3>Políticas: dónde se escriben los permisos</h3>
+
+<table>
+  <thead><tr><th>Tipo</th><th>Se pega a</th><th>Efecto</th><th>Dónde lo has visto</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>De identidad</strong>, gestionada por AWS</td>
+      <td>Usuario, grupo o rol</td>
+      <td>Concede. La escribe y la actualiza AWS; tú no puedes editarla.</td>
+      <td><code>SignInLocalDevelopmentAccess</code>, <code>AdministratorAccess</code></td>
+    </tr>
+    <tr>
+      <td><strong>De identidad</strong>, gestionada por ti</td>
+      <td>Usuario, grupo o rol</td>
+      <td>Concede. Objeto con ARN propio, reutilizable, versionado (5 versiones).</td>
+      <td><code>aws_iam_policy</code> — la que escribes en la lección 04</td>
+    </tr>
+    <tr>
+      <td><strong>De identidad</strong>, inline</td>
+      <td>Una sola identidad</td>
+      <td>Concede. Nace y muere con esa identidad. No se puede reutilizar.</td>
+      <td><code>aws_iam_user_policy</code>, <code>aws_iam_role_policy</code></td>
+    </tr>
+    <tr>
+      <td><strong>De recurso</strong></td>
+      <td>El recurso: un topic, un bucket, una cola</td>
+      <td>Concede, y es la única que puede nombrar un principal de otra cuenta.</td>
+      <td><code>aws_sns_topic_policy</code> — <a href="../lessons/0002-haz-que-la-alarma-suene.html">lección 02</a></td>
+    </tr>
+    <tr>
+      <td><strong>Política de confianza</strong></td>
+      <td>Un rol</td>
+      <td>Es la política de recurso de un rol: dice quién puede asumirlo. Sin ella el rol es inútil.</td>
+      <td><code>assume_role_policy</code></td>
+    </tr>
+    <tr>
+      <td><strong>Permissions boundary</strong></td>
+      <td>Usuario o rol</td>
+      <td><strong>No concede nada.</strong> Es un techo: el permiso efectivo es la intersección con las políticas de identidad.</td>
+      <td>Cuando delegas la creación de roles a alguien</td>
+    </tr>
+    <tr>
+      <td><strong>SCP</strong> / <strong>RCP</strong></td>
+      <td>Una OU o una cuenta, en Organizations</td>
+      <td>Tampoco conceden nada: son techos para toda la cuenta. El SCP limita principals; el RCP limita recursos.</td>
+      <td>No aplica en tu cuenta suelta</td>
+    </tr>
+    <tr>
+      <td><strong>Session policy</strong></td>
+      <td>Una sesión concreta, al asumir el rol</td>
+      <td>Techo temporal para esa sesión.</td>
+      <td>Poco frecuente a mano</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout trap">
+  <span class="callout-title">Conceder y limitar no son lo mismo</span>
+  <p>De los ocho tipos de arriba, solo cuatro <strong>conceden</strong> permisos: las tres de
+  identidad y la de recurso. Los boundaries, los SCP, los RCP y las session policies
+  <strong>solo restan</strong>. Un permissions boundary con <code>Action: "*"</code> no le da
+  poder a nadie: le quita el techo, nada más. Es el error conceptual que más veces se ve en
+  entrevistas.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<h3>El orden de evaluación</h3>
+
+<p>Para cada petición, y en este orden
+(<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html">policy
+evaluation logic</a>):</p>
+
+<ol class="steps">
+  <li><strong>Denegación por defecto.</strong> Toda petición empieza denegada. La única
+  excepción del sistema entero es el root, que tiene acceso total.</li>
+  <li><strong>¿Hay algún <code>Deny</code> explícito?</strong> Se miran <em>todas</em> las
+  políticas a la vez —SCP, RCP, de recurso, de identidad, boundaries, de sesión—. Si aparece
+  uno solo que aplique, la respuesta es <strong>Deny</strong> y se acabó. No hay nada que lo
+  contrarreste.</li>
+  <li><strong>RCP y SCP de Organizations.</strong> Si existen y no permiten la acción,
+  <strong>Deny</strong>.</li>
+  <li><strong>Política de recurso.</strong> Si concede permiso directamente al ARN de un
+  usuario IAM, ya vale: gana incluso frente a una denegación <em>implícita</em> en la política
+  de identidad. Los roles no funcionan así.</li>
+  <li><strong>Políticas de identidad.</strong> Si ninguna permite la acción,
+  <strong>Deny</strong> implícito.</li>
+  <li><strong>Permissions boundary</strong> y <strong>session policy</strong>, si las hay.</li>
+</ol>
+
+<p>De ahí salen las tres reglas que hay que saber decir de memoria:</p>
+
+<ul>
+  <li><strong>Un <code>Deny</code> explícito gana siempre.</strong> Sobre cualquier
+  <code>Allow</code>, de cualquier tipo, de cualquier sitio.</li>
+  <li><strong>Identidad + recurso se suman.</strong> Dentro de la misma cuenta basta con que
+  <em>una</em> de las dos conceda el permiso.</li>
+  <li><strong>Identidad + boundary se intersecan.</strong> Hacen falta las dos.</li>
+</ul>
+
+<h3>El ARN del bucket no es el ARN del objeto</h3>
+
+<p>La confusión que más <code>AccessDenied</code> produce en la práctica, y la que te va a
+morder hoy mismo:</p>
+
+<div class="code">
+  <div class="code-label"><span>dos ARN distintos</span><span class="tag">S3</span></div>
+<pre><code><b class="c"># Acciones a nivel de BUCKET: ListBucket, GetBucketVersioning,</b>
+<b class="c"># PutBucketPolicy, GetEncryptionConfiguration…</b>
+arn:aws:s3:::mi-bucket
+
+<b class="c"># Acciones a nivel de OBJETO: GetObject, PutObject, DeleteObject…</b>
+arn:aws:s3:::mi-bucket/*</code></pre>
+</div>
+
+<p>Son dos espacios de nombres que no se solapan. <code>s3:*</code> sobre
+<code>arn:aws:s3:::mi-bucket</code> te deja hacer absolutamente todo con el bucket y
+<strong>nada</strong> con lo que hay dentro. Y al revés: <code>s3:ListBucket</code> sobre
+<code>arn:aws:s3:::mi-bucket/*</code> no funciona nunca, porque <code>ListBucket</code> es una
+operación del bucket. Cuando una política de S3 «no hace nada», mira la barra.</p>
+
+<h3>IAM es eventualmente consistente</h3>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa que te va a costar un apply</span>
+  <p>La propia documentación lo dice sin rodeos: <em>«IAM, like many other AWS services, is
+  eventually consistent… We recommend that you do not include such IAM changes in the
+  critical, high-availability code paths of your application»</em>
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">What is
+  IAM</a>).</p>
+  <p>En Terraform esto se manifiesta así: creas un rol y, en el mismo <code>apply</code>, un
+  recurso que lo usa. La API que lo consume todavía no ve el rol y responde
+  <code>InvalidParameterValueException: The role defined for the function cannot be
+  assumed</code> o un <code>AccessDenied</code> sin sentido. <strong>Vuelves a lanzar el mismo
+  <code>apply</code> sin tocar nada y funciona.</strong> Si alguna vez te pasa eso, no estás
+  loco: es esto. El provider de AWS ya reintenta en muchos casos, pero no en todos.</p>
+</div>
+
+<h3>Global, pero con dirección postal</h3>
+
+<p>IAM no es regional: un usuario existe en toda la cuenta. Pero el endpoint es único,
+<code>iam.amazonaws.com</code>, y vive físicamente en <code>us-east-1</code>. Consecuencias
+prácticas: los recursos IAM no llevan región en su ARN
+(<code>arn:aws:iam::999999999999:user/terraform</code>, fíjate en el hueco vacío), y una caída
+de <code>us-east-1</code> te impide <em>modificar</em> IAM aunque tu infraestructura esté en
+Irlanda.</p>
+
+<h2>Cuánto cuesta</h2>
+
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Usuarios, grupos, roles, políticas</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>AWS STS — emitir credenciales temporales</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>AWS IAM Identity Center</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>IAM Access Analyzer — análisis de acceso externo</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>IAM Access Analyzer — análisis de accesos no usados y validación de políticas</td><td><span class="tag-cost usage">por uso</span></td><td>De pago — <a href="https://aws.amazon.com/iam/access-analyzer/pricing/">tarifa aparte</a></td></tr>
+  </tbody>
+</table>
+
+<p class="cost-stamp">Verificado el 2026-08-24 en
+<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">What is IAM →
+Service cost information</a>, que dice literalmente: <em>«AWS Identity and Access Management
+(IAM), AWS IAM Identity Center and AWS Security Token Service (AWS STS) are features of your
+AWS account offered at no additional charge.»</em></p>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p>De IAM, nada: es el único servicio de este curso que no puede aparecer en tu factura
+  jamás. Lo que sí aparece es <strong>lo que tus permisos dejaron crear</strong>. Un
+  <code>iam:*</code> de más no es solo un agujero de seguridad: es la vía por la que un script
+  con un bug, o unas credenciales filtradas, levantan cien instancias GPU en una región que no
+  miras nunca.</p>
+  <p>Por eso la lección 01 puso el presupuesto <em>antes</em> que nada. IAM limita el radio de
+  explosión; Budgets te avisa de que ha explotado.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Usuarios por cuenta</td><td><code>5.000</code></td><td>No</td></tr>
+    <tr><td><strong>Claves de acceso por usuario</strong></td><td><code>2</code></td><td><strong>No</strong> — el 2 existe para poder rotar sin cortar el servicio</td></tr>
+    <tr><td>Dispositivos MFA por usuario</td><td><code>8</code></td><td>No</td></tr>
+    <tr><td>Grupos a los que puede pertenecer un usuario</td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Roles por cuenta</td><td><code>1.000</code></td><td>Sí, hasta 10.000</td></tr>
+    <tr><td>Políticas gestionadas por ti, por cuenta</td><td><code>1.500</code></td><td>Sí, hasta 10.000</td></tr>
+    <tr><td><strong>Políticas gestionadas por rol</strong></td><td><code>20</code></td><td>Sí, hasta 25</td></tr>
+    <tr><td><strong>Políticas gestionadas por usuario</strong></td><td><code>10</code></td><td>Sí, hasta 20</td></tr>
+    <tr><td><strong>Tamaño de una política gestionada</strong></td><td><code>6.144 caracteres</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Tamaño de las políticas inline de un rol / usuario / grupo</td><td><code>10.240</code> / <code>2.048</code> / <code>5.120</code> caracteres</td><td>No</td></tr>
+    <tr><td>Versiones guardadas por política gestionada</td><td><code>5</code></td><td>No</td></tr>
+    <tr><td>Duración máxima de una sesión de rol</td><td><code>12 horas</code></td><td>No (configurable entre 1 y 12)</td></tr>
+    <tr><td>Longitud del nombre de un usuario / rol</td><td><code>64 caracteres</code></td><td>No</td></tr>
+    <tr><td>Alias de cuenta</td><td><code>3–63 caracteres</code>, minúsculas, único en todo AWS</td><td>No</td></tr>
+  </tbody>
+</table>
+
+<p class="small">Los tres en negrita son los que se chocan de verdad. El de 6.144 caracteres
+llega antes de lo que parece cuando escribes least privilege a mano: IAM no cuenta los
+espacios en blanco, pero sí los ARN, y los ARN son largos. La salida es partir en varias
+políticas y llegar al techo de 10 por usuario. Fuentes:
+<a href="https://docs.aws.amazon.com/general/latest/gr/iam-service.html">cuotas del servicio</a>
+y <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html">IAM and
+AWS STS quotas</a>, leídas el 2026-08-24.</p>
+
+<h2 id="tareas-root">Las tareas que solo puede hacer root</h2>
+
+<p>La lista corta que justifica que la cuenta root siga existiendo. Todo lo demás se hace con
+otra identidad
+(<a href="https://docs.aws.amazon.com/accounts/latest/reference/root-user-tasks.html">Tasks
+that require root user credentials</a>):</p>
+
+<ul>
+  <li>Cambiar el correo, la contraseña o las claves de acceso del propio root.</li>
+  <li><strong>Cerrar la cuenta.</strong></li>
+  <li><strong>Restaurar los permisos de un administrador IAM que se ha bloqueado a sí
+  mismo.</strong> Esta es la que importa hoy.</li>
+  <li>Activar el acceso de IAM a la consola de Facturación.</li>
+  <li>Editar o borrar una política de bucket S3 o de cola SQS que deniega a todos los
+  principals — el clásico «me he cerrado la puerta desde dentro».</li>
+  <li>Configurar el borrado con MFA en un bucket de S3.</li>
+  <li>Registrarse en GovCloud, vender instancias reservadas, vincular una cuenta de Mechanical
+  Turk, y ver ciertas facturas con IVA.</li>
+</ul>
+
+<div class="callout win">
+  <span class="callout-title">Qué hacer con root en cuanto tengas otra identidad</span>
+  <p>MFA activado (AWS recomienda passkey o llave de seguridad, no una app), <strong>cero
+  claves de acceso</strong> —si existen, bórralas—, y la contraseña en un gestor. No lo
+  borres: el día que te bloquees a ti mismo con una política, root es tu única salida.</p>
+</div>
+
+<h2>Cuándo NO usarlo</h2>
+
+<p>IAM no se elige: está siempre. La decisión real es <strong>qué tipo de identidad</strong>
+usar.</p>
+
+<div class="verdict">
+  <div class="yes">
+    <h3>Un usuario IAM tiene sentido si</h3>
+    <ul>
+      <li>Es una cuenta suelta, sin AWS Organizations, y eres la única persona.</li>
+      <li>La herramienta no soporta Identity Center — AWS lo reconoce como caso válido.</li>
+      <li>Necesitas credenciales específicas de CodeCommit o de Amazon Keyspaces.</li>
+      <li>Puedes darle acceso <em>sin</em> claves de largo plazo, con <code>aws login</code>.</li>
+    </ul>
+  </div>
+  <div class="no">
+    <h3>No lo uses si</h3>
+    <ul>
+      <li>La carga se ejecuta dentro de AWS — Lambda, EC2, ECS: eso es un <strong>rol</strong>.</li>
+      <li>Es CI/CD — GitHub Actions con OIDC y un rol, nunca una clave en un secreto.</li>
+      <li>Hay más de una cuenta o más de una persona — <strong>Identity Center</strong>.</li>
+      <li>Vas a acabar guardando un <code>AKIA…</code> en un fichero. Ahí ya te has equivocado.</li>
+    </ul>
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Usuario</strong> vs <strong>rol</strong></td>
+      <td>El usuario <em>tiene</em> credenciales permanentes. El rol <em>no tiene ninguna</em>: te las presta STS durante 12 h como mucho, y hace falta una política de confianza para pedirlas.</td>
+      <td>Rol, salvo que no haya forma de entregar credenciales temporales.</td>
+    </tr>
+    <tr>
+      <td><strong>IAM</strong> vs <strong>IAM Identity Center</strong></td>
+      <td>IAM gobierna <em>una</em> cuenta. Identity Center gestiona personas a través de <em>muchas</em> cuentas y siempre entrega credenciales temporales.</td>
+      <td>Identity Center en cuanto haya más de una cuenta o más de una persona.</td>
+    </tr>
+    <tr>
+      <td><strong>Grupo</strong> vs <strong>rol</strong></td>
+      <td>Un grupo es una etiqueta para agrupar usuarios; nadie se autentica como grupo. Un rol es una identidad que se asume.</td>
+      <td>Grupo para organizar permisos de humanos; rol para todo lo demás.</td>
+    </tr>
+    <tr>
+      <td>Política <strong>de identidad</strong> vs <strong>de recurso</strong></td>
+      <td>La de identidad dice «este principal puede…». La de recurso dice «sobre mí pueden actuar…» y es la única que admite un principal de otra cuenta.</td>
+      <td>De recurso cuando quien actúa es un servicio de AWS u otra cuenta.</td>
+    </tr>
+    <tr>
+      <td><strong>Política</strong> vs <strong>SCP</strong></td>
+      <td>La política concede. El SCP solo pone un techo a toda la cuenta: no concede nada por sí mismo.</td>
+      <td>SCP para poner barreras que ni un administrador de la cuenta pueda saltarse.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>En Terraform</h2>
+
+<p>La forma correcta de escribir una política es <strong>siempre</strong>
+<code>aws_iam_policy_document</code>, nunca un heredoc de JSON: valida la sintaxis en
+<code>plan</code>, interpola ARN sin errores de comillas, y se lee como HCL.</p>
+
+<div class="code">
+  <div class="code-label"><span>política gestionada + rol</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># 1. El documento: se evalúa en plan, no en apply.</b>
+data <b class="s">"aws_iam_policy_document"</b> <b class="s">"lambda_links"</b> {
+  statement {
+    sid       = <b class="s">"WriteOwnTable"</b>
+    actions   = [<b class="s">"dynamodb:PutItem"</b>, <b class="s">"dynamodb:GetItem"</b>]
+    resources = [aws_dynamodb_table.links.arn]
+  }
+}
+
+<b class="c"># 2. La política como objeto con ARN propio: reutilizable.</b>
+resource <b class="s">"aws_iam_policy"</b> <b class="s">"lambda_links"</b> {
+  name   = <b class="s">"lambda-links-write"</b>
+  policy = data.aws_iam_policy_document.lambda_links.json
+}
+
+<b class="c"># 3. El rol. La política de confianza es OBLIGATORIA:</b>
+<b class="c">#    sin ella nadie puede asumirlo y el rol no sirve para nada.</b>
+data <b class="s">"aws_iam_policy_document"</b> <b class="s">"assume_lambda"</b> {
+  statement {
+    actions = [<b class="s">"sts:AssumeRole"</b>]
+    principals {
+      type        = <b class="s">"Service"</b>
+      identifiers = [<b class="s">"lambda.amazonaws.com"</b>]
+    }
+  }
+}
+
+resource <b class="s">"aws_iam_role"</b> <b class="s">"lambda"</b> {
+  name               = <b class="s">"links-fn"</b>
+  assume_role_policy = data.aws_iam_policy_document.assume_lambda.json
+}
+
+<b class="c"># 4. Y el pegamento.</b>
+resource <b class="s">"aws_iam_role_policy_attachment"</b> <b class="s">"lambda_links"</b> {
+  role       = aws_iam_role.lambda.name
+  policy_arn = aws_iam_policy.lambda_links.arn
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Cuatro trampas conocidas</span>
+  <p><strong>1. <code>aws_iam_policy_attachment</code> es una bomba.</strong> Pese al nombre
+  genérico, es <em>exclusiva</em>: se apropia de la política y desasocia a cualquier identidad
+  que no esté listada en ese bloque. Usa siempre las variantes con sujeto —
+  <code>aws_iam_role_policy_attachment</code>, <code>aws_iam_user_policy_attachment</code>,
+  <code>aws_iam_group_policy_attachment</code>. La documentación del provider lo avisa; casi
+  nadie lo lee.</p>
+  <p><strong>2. Eventual consistency.</strong> Un <code>apply</code> que falla con
+  <code>AccessDenied</code> justo después de crear un rol y que funciona al repetirlo no es un
+  fantasma. Ver arriba.</p>
+  <p><strong>3. <code>force_destroy</code> en <code>aws_iam_user</code>.</strong> Sin él, el
+  <code>destroy</code> falla si el usuario tiene claves de acceso, contraseña de consola o
+  dispositivos MFA que <em>no</em> creó Terraform. Y ojo: ponerlo requiere un
+  <code>apply</code> con éxito antes de que el <code>destroy</code> lo tenga en cuenta.</p>
+  <p><strong>4. Las contraseñas y las claves acaban en el state.</strong>
+  <code>aws_iam_user_login_profile</code> expone el atributo <code>password</code> en claro
+  cuando no le pasas una clave PGP, y <code>aws_iam_access_key</code> expone
+  <code>secret</code>. Los dos se escriben tal cual en el fichero de state — el mismo problema
+  que viste en la <a href="../lessons/0003-saca-el-state-de-tu-portatil.html">lección 03</a>,
+  ahora con algo peor que un correo dentro.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Tu política de identidad permite <code>s3:GetObject</code> sobre un
+  bucket. La política del bucket tiene un <code>Deny</code> explícito para tu usuario. ¿Qué
+  pasa cuando lees el objeto?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Un Deny explícito, venga de donde venga, se evalúa antes que cualquier otra cosa y termina la evaluación. No hay Allow que lo contrarreste.">Se deniega: el Deny gana</button></li>
+    <li><button data-correct="false" data-why="Las políticas de identidad y de recurso se suman, sí, pero solo entre Allow. Un Deny explícito no participa en esa suma: la corta.">Se permite: los Allow suman</button></li>
+    <li><button data-correct="false" data-why="La política de identidad no tiene precedencia sobre la de recurso. Dentro de una cuenta se evalúan las dos, y el Deny de cualquiera de ellas es definitivo.">Se permite: manda la identidad</button></li>
+    <li><button data-correct="false" data-why="No hay nada indeterminado en IAM: toda petición acaba en Allow o en Deny, y ante la duda, en Deny.">Depende de la más específica</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Escribes una política con <code>s3:*</code> sobre
+  <code>arn:aws:s3:::mi-bucket</code>. Tu código hace <code>PutObject</code> y recibe
+  <code>AccessDenied</code>. ¿Por qué?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="PutObject actúa sobre un objeto, y los objetos se nombran con el ARN del bucket seguido de una barra y un patrón. Hace falta una segunda sentencia sobre arn:aws:s3:::mi-bucket/*.">El ARN cubre el bucket, no objetos</button></li>
+    <li><button data-correct="false" data-why="El comodín de acción está bien escrito y cubre PutObject. El problema no está en el lado de la acción, sino en el del recurso.">El comodín de acción no incluye PutObject</button></li>
+    <li><button data-correct="false" data-why="El bloqueo de acceso público solo afecta a políticas y ACL que conceden acceso anónimo o entre cuentas. No tiene nada que ver con tu propio usuario.">El bloqueo de acceso público lo impide</button></li>
+    <li><button data-correct="false" data-why="El cifrado por defecto de S3 es transparente y no requiere permisos adicionales salvo que uses una clave KMS gestionada por ti.">El cifrado exige un permiso de KMS</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Vas a dejar tres roles, cuarenta políticas y diez usuarios creados en tu
+  cuenta durante todo el mes. ¿Cuánto te cuesta?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="IAM, STS e Identity Center son features de la cuenta sin coste adicional. Solo pagas lo que esas identidades consuman de otros servicios.">Nada: IAM no cobra jamás</button></li>
+    <li><button data-correct="false" data-why="No hay cuota gratuita en IAM porque no hay tarifa en absoluto: no existe un tramo de pago al que llegar.">Nada, dentro del nivel gratuito</button></li>
+    <li><button data-correct="false" data-why="Ni los roles ni sus sesiones se facturan. STS emite credenciales temporales sin coste adicional alguno.">Poco: solo cobran los roles</button></li>
+    <li><button data-correct="false" data-why="Ninguna llamada a la API de IAM se factura. Lo único de pago en la familia IAM son partes concretas de Access Analyzer.">Poco: cobran las llamadas API</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">Una Lambda tuya, dentro de AWS, necesita escribir en una tabla de
+  DynamoDB. ¿Qué identidad le das?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es la segunda práctica recomendada de AWS: las cargas dentro de AWS reciben credenciales temporales a través de un rol, sin que nadie distribuya secretos.">Un rol de ejecución para ella</button></li>
+    <li><button data-correct="false" data-why="Eso obliga a guardar un AKIA en algún sitio: variable de entorno, secreto, fichero. Es exactamente lo que el rol de ejecución existe para evitar.">Un usuario con claves de acceso</button></li>
+    <li><button data-correct="false" data-why="Los grupos solo agrupan usuarios IAM y no pueden asociarse a un servicio. Una Lambda no puede pertenecer a un grupo.">Un grupo con la política puesta</button></li>
+    <li><button data-correct="false" data-why="Una política de recurso en la tabla necesita nombrar a un principal, así que sigues necesitando el rol. Y DynamoDB ni siquiera admite políticas de recurso clásicas.">Solo una política en la tabla</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/0004-deja-de-ser-root.html">Lección 04: Deja de ser root</a>
+    <a href="./aws-s3.html">Referencia: S3</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html">Doc oficial: best practices</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> Cuando te salga un <code>AccessDenied</code> que no entiendas, pégame
+    el mensaje entero y la política. Recorremos juntos los seis pasos de la evaluación y
+    verás que siempre falla en uno concreto — normalmente el ARN. Y si quieres el tratamiento
+    largo de los roles y de <code>sts:AssumeRole</code> antes de que llegue el proyecto 07,
+    pídemelo: es lo que más se pregunta en entrevistas.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

@@ -48,4 +48,5 @@ pago por uso y con tu volumen es prácticamente cero.
 | 01 | [El primer `apply` que no es de juguete](./lessons/0001-el-primer-apply.html) | 00 | [Budgets](./reference/aws-budgets.html) |
 | 02 | [Haz que la alarma suene de verdad](./lessons/0002-haz-que-la-alarma-suene.html) | 00 | [SNS](./reference/aws-sns.html) |
 | 03 | [Saca el state de tu portátil](./lessons/0003-saca-el-state-de-tu-portatil.html) | 00 | [S3](./reference/aws-s3.html) |
-| 04 | _Deja de ser root_ (pendiente) | 00 | IAM |
+| 04 | [Deja de ser root](./lessons/0004-deja-de-ser-root.html) | 00 | [IAM](./reference/aws-iam.html) |
+| 05 | _El acortador de URLs_ (pendiente) | 01 | Lambda, API Gateway, DynamoDB |
