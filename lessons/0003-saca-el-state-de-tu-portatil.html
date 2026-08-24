@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 03 · Saca el state de tu portátil</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 03 · Proyecto <code>00-foundations</code></p>
+  <h1>Saca el state de tu portátil</h1>
+  <p class="deck">Ahora mismo toda tu infraestructura depende de un fichero JSON sin cifrar
+  que está en tu carpeta de Descargas espiritual. Contiene tu correo en claro, no tiene copia
+  de seguridad, y nada impide que dos comandos lo escriban a la vez. Hoy lo mueves a S3 y
+  <strong>demuestras</strong> que el bloqueo funciona rompiéndolo a propósito.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD</span>
+    <span><b>Terraform</b> backend S3 · <code>use_lockfile</code> · <code>lifecycle</code> · migración de state</span>
+    <span><b>AWS</b> S3</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+
+<p>Sin abrir las lecciones anteriores y sin mirar el terminal. Piénsalo, dilo en voz alta, y
+luego abre:</p>
+
+<details class="recall">
+  <summary>La lección 02 dejó un principio. ¿Cuál era, y qué te obliga a hacer con todo lo que despliegues?
+    <span class="recall-hint">Tenía que ver con lo que un <code>apply</code> limpio significa realmente.</span>
+  </summary>
+  <p><strong>«El <code>apply</code> ha funcionado» no significa «funciona».</strong> Terraform
+  solo te confirma que AWS aceptó la configuración; no dice nada sobre si el sistema hace lo
+  que necesitas.</p>
+  <p>Te obliga a añadir un <strong>paso de verificación explícito</strong> a todo lo que
+  despliegues, y a decir siempre <em>qué cubre esa prueba y qué no</em>. Hoy toca aplicarlo al
+  bloqueo del state: no basta con escribir <code>use_lockfile = true</code> y creérselo.</p>
+</details>
+
+<details class="recall">
+  <summary>Nombra las tres realidades que maneja Terraform. ¿Cuál de ellas vive hoy en tu portátil?
+    <span class="recall-hint">Una la escribes tú, otra la mantiene Terraform, la tercera es AWS.</span>
+  </summary>
+  <p><strong>Configuración</strong> (tus <code>.tf</code>: lo que quieres),
+  <strong>state</strong> (lo que Terraform cree que existe) y <strong>realidad</strong> (lo
+  que hay de verdad en AWS).</p>
+  <p>La configuración vive en git y está a salvo. La realidad vive en AWS y está a salvo. El
+  <strong>state</strong> vive en <code>projects/00-foundations/terraform.tfstate</code>, en un
+  solo disco, sin cifrar y sin copia. Es la única de las tres que puedes perder para siempre,
+  y es justo la del medio: la que une las otras dos.</p>
+</details>
+
+<h2>Antes de teorizar: ábrelo y míralo</h2>
+
+<p>Nunca has abierto tu state. Vamos a hacerle la autopsia antes de moverlo, porque casi todo
+lo que hay que entender está dentro:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">autopsia</span></div>
+<pre><code><b class="c"># desde projects/00-foundations</b>
+jq <b class="s">'{version, terraform_version, serial, lineage}'</b> terraform.tfstate
+
+<b class="c"># ¿qué recursos cree Terraform que existen?</b>
+jq -r <b class="s">'.resources[] | "\(.mode)\t\(.type).\(.name)"'</b> terraform.tfstate
+
+<b class="c"># y ahora lo importante</b>
+grep -o <b class="s">'[a-zA-Z0-9._%-]*@[a-zA-Z0-9.-]*'</b> terraform.tfstate | sort -u</code></pre>
+</div>
+
+<p>Ese último comando saca tu dirección de correo del fichero, en texto plano. Y con ella el
+ID de tu cuenta, los ARN de todo lo que has creado y el número de tu presupuesto.</p>
+
+<div class="callout trap">
+  <span class="callout-title">El state es un fichero de secretos</span>
+  <p>Terraform guarda en el state <strong>todos los atributos de todos los recursos, tal y
+  como los devolvió el proveedor</strong>. Cuando un recurso tiene un valor sensible —la
+  contraseña inicial de una RDS, una clave de acceso IAM, el resultado de un
+  <code>random_password</code>— ese valor acaba ahí <strong>en claro</strong>. Marcar una
+  variable como <code>sensitive = true</code> solo la oculta en la <em>salida por
+  pantalla</em>; en el state se escribe igual
+  (<a href="https://developer.hashicorp.com/terraform/language/state/sensitive-data">HashiCorp lo dice explícitamente</a>).</p>
+  <p>Por eso <code>*.tfstate</code> está en tu <code>.gitignore</code> desde el primer día, y
+  por eso el sitio donde lo pongas tiene que estar cifrado y ser privado. Hoy solo hay un
+  correo dentro. En el proyecto 04 habrá la contraseña de una base de datos.</p>
+</div>
+
+<h3>Los tres campos que sí importan</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Campo</th><th>Qué es</th><th>Por qué te va a importar</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>lineage</code></td>
+      <td>Un UUID que identifica <em>esta línea de state</em>, generado la primera vez.</td>
+      <td>Terraform se niega a mezclar dos states con <code>lineage</code> distinto. Es lo que
+      impide que apliques por error el state de <code>prod</code> sobre <code>dev</code>.</td>
+    </tr>
+    <tr>
+      <td><code>serial</code></td>
+      <td>Un contador que sube en cada escritura.</td>
+      <td>Es cómo Terraform detecta que el state remoto cambió mientras tú trabajabas. Si el
+      tuyo es más viejo, se planta.</td>
+    </tr>
+    <tr>
+      <td><code>resources[]</code></td>
+      <td>La lista de recursos con su <code>id</code> real en AWS y todos sus atributos.</td>
+      <td>Es <strong>el mapa</strong> entre <code>aws_sns_topic.alerts</code> y el ARN
+      concreto que existe en tu cuenta.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La pregunta que casi nadie sabe responder</span>
+  <p>«¿Por qué Terraform no le pregunta a AWS y punto? ¿Para qué necesita un fichero?»</p>
+  <p>Porque AWS puede decirte <em>qué existe</em>, pero no <em>qué es tuyo ni cómo se
+  llama</em>. Si tienes cuarenta buckets, nada en la API de S3 dice cuál corresponde al bloque
+  <code>aws_s3_bucket.state</code> de tu código. Esa correspondencia entre un nombre de tu
+  configuración y un identificador real <strong>solo existe en el state</strong>: no está en
+  AWS y no está en tu código.</p>
+  <p>Y hay una segunda razón, más sutil: el state guarda cómo era el mundo <em>la última vez
+  que Terraform lo tocó</em>. Sin eso no se puede detectar que alguien borró algo a mano
+  —eso es el <strong>drift</strong>— ni saber que un recurso que ya no está en tu
+  configuración hay que destruirlo.</p>
+</div>
+
+<h2>Los cuatro fallos del state local</h2>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Fallo</th><th>Cómo se manifiesta</th><th>Qué lo arregla</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Sin bloqueo</b></td>
+      <td>Dos <code>apply</code> a la vez —tú y un compañero, o tú y un pipeline— escriben el
+      mismo fichero. El segundo pisa al primero y quedan recursos huérfanos que Terraform ya
+      no conoce y que siguen facturando.</td>
+      <td>Bloqueo en el backend</td>
+    </tr>
+    <tr>
+      <td><b>Sin copia</b></td>
+      <td>Un <code>rm</code> desafortunado, un disco muerto, un <code>git clean -fdx</code>.
+      El state desaparece y Terraform cree que no existe nada. El siguiente
+      <code>apply</code> intenta crearlo todo otra vez y choca con lo que ya está.</td>
+      <td>Versionado de S3</td>
+    </tr>
+    <tr>
+      <td><b>Sin cifrar</b></td>
+      <td>Un fichero con secretos en claro en un portátil que viaja. Y en un repositorio
+      público, a un <code>git add -f</code> de distancia del desastre.</td>
+      <td>Cifrado en reposo</td>
+    </tr>
+    <tr>
+      <td><b>Sin compartir</b></td>
+      <td>Solo tú puedes desplegar. Ni GitHub Actions ni nadie más puede tocar esa
+      infraestructura: para ellos, no existe.</td>
+      <td>Backend remoto</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>Los cuatro se arreglan con la misma pieza: un <strong>backend</strong> remoto. Un backend
+es simplemente la respuesta a «¿dónde vive el state y quién decide quién lo escribe?». Por
+defecto es <code>local</code>: un fichero al lado de tu código. Hoy lo cambias por
+<code>s3</code>.</p>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía del servicio</span>
+    <h2>Amazon S3</h2>
+  </header>
+  <div class="anatomy-body">
+
+    <h3>Qué es</h3>
+    <p>Almacenamiento de <strong>objetos</strong>: unos bytes identificados por una
+    <strong>clave</strong> de texto dentro de un <strong>bucket</strong>. Se escribe entero y
+    se lee entero — no existe «modificar el byte 4.096». Las barras de
+    <code>00-foundations/terraform.tfstate</code> parecen carpetas en la consola, pero
+    <strong>no hay carpetas</strong>: es una única cadena de texto plana.</p>
+
+    <h3>Lo que hay que saber hoy para no equivocarse</h3>
+    <ul>
+      <li><strong>El bucket es regional; el nombre es global.</strong> Tu nombre de bucket
+      tiene que ser único frente a todas las cuentas de AWS del mundo. Por eso todo el mundo
+      le pega el ID de cuenta o un sufijo aleatorio.</li>
+      <li><strong>Ya nace cifrado y ya nace privado.</strong> Desde el 5 de enero de 2023 todo
+      objeto nuevo se cifra con AES-256 sin coste y sin poder desactivarlo, y los buckets
+      nuevos bloquean el acceso público por defecto. La mitad de los tutoriales que
+      encuentres escriben recursos para activar cosas que llevan años activadas.</li>
+      <li><strong>S3 tiene escrituras condicionales.</strong> Puedes pedir «crea este objeto
+      <em>solo si no existe</em>» y S3 rechaza al segundo que llegue. Eso, y nada más
+      esotérico, es el motor del bloqueo del state que vas a usar hoy.</li>
+      <li><strong>El versionado apila, no reemplaza.</strong> Con versionado activo, cada
+      escritura conserva la anterior y un borrado solo pone una marca encima. Es lo que
+      convierte «he corrompido el state» en «recupero la versión de hace diez minutos».</li>
+    </ul>
+
+    <h3>Cuánto cuesta tu bucket de state</h3>
+    <table class="cost-table">
+      <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+      <tbody>
+        <tr><td>Que el bucket exista</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>Almacenar unos 10 KB de state</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,023 USD/GB-mes</code> → <b>0,0000002 USD/mes</b></td></tr>
+        <tr><td>Escrituras (<code>PUT</code> del state y del lock)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,005 USD / 1.000</code></td></tr>
+        <tr><td>Lecturas (<code>GET</code> en cada <code>plan</code>)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0004 USD / 1.000</code></td></tr>
+        <tr><td>Liberar el lock (<code>DELETE</code>)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+      </tbody>
+    </table>
+    <p class="cost-stamp">Región <code>us-east-1</code>, leídos el 2026-08-23 del
+    <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json">fichero oficial de tarifas</a>.
+    En la práctica: <strong>mil <code>apply</code> te costarían alrededor de un céntimo.</strong>
+    Este bucket no se destruye nunca y no aparecerá en tu factura.</p>
+
+    <p><a href="../reference/aws-s3.html"><b>Ficha completa de S3</b></a> — las ocho clases de
+    almacenamiento con sus mínimos, los cuatro costes que sorprenden en la factura, los
+    límites, y cuándo usar EBS, EFS o DynamoDB en su lugar.</p>
+  </div>
+</section>
+
+<h2>El huevo y la gallina</h2>
+
+<p>Antes de escribir nada, la pregunta incómoda: <strong>¿quién crea el bucket donde va a
+vivir el state?</strong> Si lo crea Terraform, necesita un sitio donde guardar el state de la
+creación de ese bucket… que es el bucket que todavía no existe.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Opción</th><th>Cómo</th><th>El problema</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>A mano</td>
+      <td><code>aws s3 mb</code> o la consola, y el bucket queda fuera de Terraform.</td>
+      <td>Tienes infraestructura sin código. Nadie sabe por qué existe ni cómo recrearla.</td>
+    </tr>
+    <tr>
+      <td>Stack aparte</td>
+      <td>Un proyecto <code>bootstrap/</code> con state local que solo crea el bucket.</td>
+      <td>Un state local sobrevive para siempre en un rincón. Correcto en una empresa grande,
+      exagerado para una cuenta.</td>
+    </tr>
+    <tr>
+      <td><b>Crear y migrar</b></td>
+      <td>Creas el bucket con state local, luego declaras el backend y mueves el state
+      <em>dentro del bucket que acabas de crear</em>.</td>
+      <td>Ninguno de fondo. Es un paso extra, una sola vez.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>Vas a hacer la tercera. Al terminar, el state del bucket estará <em>dentro del bucket</em>,
+y eso está bien: es un ciclo estable, no un problema. Esta pregunta cae en entrevistas.</p>
+
+<ol class="steps">
+
+<li>
+<h3>Declara el bucket</h3>
+<p>Fichero nuevo. Fíjate en que reutiliza el <code>data.aws_caller_identity.current</code> que
+ya declaraste en <code>alerts.tf</code>: dentro de un mismo módulo raíz, todos los ficheros
+<code>.tf</code> son <strong>un solo documento</strong>. El orden y el reparto en ficheros son
+para los humanos; a Terraform le da igual.</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/state.tf</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_s3_bucket"</b> <b class="s">"state"</b> {
+  <b class="c"># El nombre es global en todo AWS. El ID de cuenta lo hace único</b>
+  <b class="c"># sin tener que inventar sufijos aleatorios.</b>
+  <b class="at">bucket</b> = <b class="s">"tf-state-</b>${data.aws_caller_identity.current.account_id}<b class="s">"</b>
+
+  <b class="k">lifecycle</b> {
+    <b class="c"># Un destroy de este stack borraría el bucket que guarda su propio</b>
+    <b class="c"># state. Esto lo hace imposible, y a propósito es incómodo.</b>
+    <b class="at">prevent_destroy</b> = <b class="n">true</b>
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_s3_bucket_versioning"</b> <b class="s">"state"</b> {
+  <b class="at">bucket</b> = aws_s3_bucket.state.id
+
+  <b class="c"># Esta es la copia de seguridad del state. HashiCorp lo llama</b>
+  <b class="c"># "highly recommended"; en la práctica es obligatorio.</b>
+  <b class="k">versioning_configuration</b> {
+    <b class="at">status</b> = <b class="s">"Enabled"</b>
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_s3_bucket_public_access_block"</b> <b class="s">"state"</b> {
+  <b class="at">bucket</b> = aws_s3_bucket.state.id
+
+  <b class="c"># Redundante: los buckets nuevos ya nacen así desde 2023.</b>
+  <b class="c"># Se escribe igual, por dos razones: deja la intención por escrito,</b>
+  <b class="c"># y hace que el plan detecte si alguien lo desactiva a mano.</b>
+  <b class="at">block_public_acls</b>       = <b class="n">true</b>
+  <b class="at">block_public_policy</b>     = <b class="n">true</b>
+  <b class="at">ignore_public_acls</b>      = <b class="n">true</b>
+  <b class="at">restrict_public_buckets</b> = <b class="n">true</b>
+}
+
+<b class="k">output</b> <b class="s">"state_bucket"</b> {
+  <b class="at">description</b> = <b class="s">"Bucket donde vive el state de todos los proyectos"</b>
+  <b class="at">value</b>       = aws_s3_bucket.state.id
+}</code></pre>
+</div>
+<div class="callout tf">
+  <span class="callout-title">Lo que <em>no</em> hay aquí, y es deliberado</span>
+  <p>No hay <code>aws_s3_bucket_server_side_encryption_configuration</code>. Casi todos los
+  tutoriales lo ponen. Es innecesario desde el 5 de enero de 2023: AWS cifra con AES-256 todos
+  los objetos nuevos, gratis, y ya no se puede desactivar. Escribir código que declara lo que
+  ya ocurre no te protege de nada y te da algo más que mantener.</p>
+  <p>El <em>public access block</em> sí lo escribimos aunque también sea redundante, y la
+  diferencia está en el <code>plan</code>: sobre lo que Terraform no gestiona, no detecta
+  <em>drift</em>. Si un día alguien abre ese bucket al mundo, quiero que el
+  <code>plan</code> me lo grite. Del cifrado no hace falta enterarse porque nadie puede
+  quitarlo.</p>
+</div>
+</li>
+
+<li>
+<h3>Aplica — todavía con state local</h3>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">apply</span></div>
+<pre><code><b class="k">export</b> AWS_PROFILE=personal
+aws sts get-caller-identity          <b class="c"># comprueba SIEMPRE la cuenta</b>
+
+terraform fmt
+terraform plan                       <b class="c"># deben salir 3 recursos a crear</b>
+terraform apply</code></pre>
+</div>
+<p>El bucket ya existe, y tu <code>terraform.tfstate</code> local ya lo sabe. Fíjate en el
+detalle: <strong>el state local contiene ahora el bucket que va a guardar ese mismo
+state.</strong></p>
+</li>
+
+<li>
+<h3>Declara el backend</h3>
+<p>Otro fichero nuevo. Y aquí llega la peculiaridad más famosa del lenguaje:</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/backend.tf</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">terraform</b> {
+  <b class="k">backend</b> <b class="s">"s3"</b> {
+    <b class="c"># Escrito a mano, sin variables. No es un descuido: ver abajo.</b>
+    <b class="at">bucket</b> = <b class="s">"tf-state-999999999999"</b>
+    <b class="at">key</b>    = <b class="s">"00-foundations/terraform.tfstate"</b>
+    <b class="at">region</b> = <b class="s">"us-east-1"</b>
+
+    <b class="at">encrypt</b>      = <b class="n">true</b>
+    <b class="at">use_lockfile</b> = <b class="n">true</b>
+  }
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">El único sitio de Terraform donde no puedes usar variables</span>
+  <p>En el bloque <code>backend</code> no funcionan <code>var.</code>, ni
+  <code>local.</code>, ni <code>data.</code>, ni ninguna interpolación. Motivo: Terraform
+  tiene que saber dónde está el state <em>antes</em> de poder evaluar nada, y las variables
+  pueden depender del state. Es un problema de arranque, no un capricho.</p>
+  <p>Por eso escribes el nombre del bucket a mano justo después de haberlo generado con una
+  interpolación tres líneas más arriba. Esa incoherencia aparente es real y es de las cosas
+  que más desconciertan al principio.</p>
+  <p>La salida profesional se llama <em>partial configuration</em>: dejas el bloque casi
+  vacío y pasas el resto con <code>terraform init -backend-config=backend.hcl</code>. Es lo
+  que usarás en el proyecto 07 para tener <code>dev</code> y <code>prod</code> con el mismo
+  código.</p>
+  <p>Hay una salida más simple si lo que te preocupa es que el ID de tu cuenta acabe en un
+  repositorio público: <strong>elige un nombre de bucket que no lo lleve</strong>. Sigue
+  teniendo que ser único en todo AWS, así que tendrá que ser específico de tu proyecto — pero
+  entonces no hay nada que ocultar en <code>backend.tf</code>. Es lo que hay en este
+  repositorio.</p>
+</div>
+<div class="callout aws">
+  <span class="callout-title">Sobre <code>use_lockfile</code>, y por qué internet te va a mentir</span>
+  <p>El bloqueo nativo de S3 es <strong>generalmente disponible desde Terraform 1.11.0</strong>
+  (27 de febrero de 2025), y en ese mismo cambio HashiCorp
+  <strong>deprecó los argumentos de DynamoDB</strong>
+  (<a href="https://github.com/hashicorp/terraform/blob/v1.11/CHANGELOG.md">changelog</a>).
+  Tú tienes la 1.15.8.</p>
+  <p>Prácticamente todo el material que encuentres —cursos, blogs, respuestas de Stack
+  Overflow, la mayoría de los repos de ejemplo— te hará crear una tabla de DynamoDB con una
+  clave <code>LockID</code>. <strong>Eso está deprecado y no lo vas a hacer.</strong> Si te lo
+  preguntan en una entrevista, esta es exactamente la clase de detalle que distingue a quien
+  ha leído el changelog de quien copió un tutorial de 2021.</p>
+</div>
+</li>
+
+<li>
+<h3>Migra el state</h3>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">migración</span></div>
+<pre><code>terraform init -migrate-state</code></pre>
+</div>
+<p>Terraform detecta que el backend ha cambiado y te pregunta si quieres copiar el state
+existente al nuevo destino. Responde <code>yes</code>. Lee lo que imprime: te dice de dónde a
+dónde lo mueve.</p>
+<p>Cuando termine, <strong>mira qué ha quedado en el directorio</strong>
+(<code>ls -la</code>). Terraform deja un rastro en disco a propósito. Encuéntralo, ábrelo, y
+piensa qué es y por qué te lo deja. Te lo pregunto al final.</p>
+</li>
+
+</ol>
+
+<h2>Verificación: tres cosas, y la tercera es la que cuenta</h2>
+
+<p>El <code>init</code> ha dicho que fue bien. Eso no es una prueba. Vamos a por las pruebas.</p>
+
+<h3>1. El state está en S3 y tiene versiones</h3>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">comprobación</span></div>
+<pre><code>ACC=$(aws sts get-caller-identity --query Account --output text)
+BUCKET=tf-state-$ACC
+KEY=00-foundations/terraform.tfstate
+
+<b class="c"># ¿existe el objeto?</b>
+aws s3 ls <b class="s">"s3://$BUCKET/00-foundations/"</b>
+
+<b class="c"># ¿el versionado está realmente activo?</b>
+aws s3api get-bucket-versioning --bucket <b class="s">"$BUCKET"</b>
+
+<b class="c"># ¿Terraform sigue viendo sus recursos, ahora desde S3?</b>
+terraform state list</code></pre>
+</div>
+
+<p><code>terraform state list</code> debe devolver los mismos recursos que antes,
+<strong>más los tres nuevos</strong>. Si sale vacío, para y avísame: significa que la
+migración no copió nada.</p>
+
+<h3>2. El bloqueo existe</h3>
+
+<p>Un lock de Terraform en S3 no es una entidad misteriosa: es <strong>un objeto más, con la
+misma clave que el state y el sufijo <code>.tflock</code></strong>, que solo puede crear el
+primero que llegue gracias a las escrituras condicionales de S3. Vive unos milisegundos
+durante cada <code>apply</code>, así que no vas a pillarlo mirando. Lo vas a crear tú.</p>
+
+<h3>3. La prueba de verdad: rompe el bloqueo a propósito</h3>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">el test</span></div>
+<pre><code><b class="c"># 1. Fabrica un lock a mano, con el formato que Terraform espera</b>
+cat &gt; /tmp/fake.tflock &lt;&lt;JSON
+{
+  "ID": "prueba-manual-0001",
+  "Operation": "OperationTypePlan",
+  "Info": "lock creado a mano para probar el bloqueo",
+  "Who": "$(whoami)@$(hostname -s)",
+  "Version": "1.15.8",
+  "Created": "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)",
+  "Path": "$BUCKET/$KEY"
+}
+JSON
+
+aws s3api put-object --bucket <b class="s">"$BUCKET"</b> --key <b class="s">"$KEY.tflock"</b> --body /tmp/fake.tflock
+
+<b class="c"># 2. Ahora intenta trabajar. DEBE fallar.</b>
+terraform plan
+
+<b class="c"># 3. Libera el lock con el comando que existe justo para esto</b>
+terraform force-unlock prueba-manual-0001
+
+<b class="c"># 4. Y comprueba que has recuperado el control</b>
+terraform plan</code></pre>
+</div>
+
+<p>En el paso 2 tienes que ver <code>Error acquiring the state lock</code>, con el
+<code>ID</code>, el <code>Who</code> y el <code>Created</code> que acabas de inventarte. Ese
+mensaje es la prueba: el bloqueo está activo y Terraform lo respeta.</p>
+
+<div class="callout win">
+  <span class="callout-title">Lo que acabas de aprender sin darte cuenta</span>
+  <p>Ese error es <strong>el incidente más común del mundo Terraform</strong>: alguien lanza
+  un <code>apply</code>, se le corta el wifi o cancela con <kbd>Ctrl-C</kbd>, y el lock se
+  queda huérfano. El equipo entero se bloquea. La respuesta es exactamente lo que acabas de
+  hacer: leer el <code>ID</code> del mensaje de error y ejecutar
+  <code>terraform force-unlock &lt;ID&gt;</code>.</p>
+  <p>Y ya sabes la salida de emergencia si <code>force-unlock</code> se resistiera, porque
+  ahora sabes qué <em>es</em> un lock:
+  <code>aws s3api delete-object --bucket "$BUCKET" --key "$KEY.tflock"</code>.</p>
+  <p><b>Antes de usar cualquiera de las dos, la regla:</b> asegúrate de que de verdad no hay
+  nadie aplicando. Forzar un unlock sobre un <code>apply</code> vivo es cómo se corrompe un
+  state de verdad.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Qué demuestra esta prueba y qué no</span>
+  <p><strong>Demuestra:</strong> que el state se lee y se escribe en S3; que
+  <code>use_lockfile</code> está activo y Terraform se niega a trabajar con el lock puesto;
+  que sabes diagnosticar y liberar un lock atascado; y que el bucket conserva versiones.</p>
+  <p><strong>No demuestra:</strong> que sepas <em>recuperar</em> una versión anterior del
+  state cuando el actual se corrompa —eso es otra lección, y la vamos a hacer provocando el
+  desastre a propósito—. Tampoco demuestra nada sobre permisos: <strong>sigues entrando como
+  root de la cuenta</strong>, así que todo te funciona por definición. Un backend solo se ha
+  probado de verdad cuando lo usa una identidad con permisos limitados. Eso es la lección
+  04.</p>
+</div>
+
+<h3>Limpieza</h3>
+
+<ul class="checklist" data-key="l03-cierre">
+  <li><input type="checkbox" id="c1"><label for="c1">Borra <code>/tmp/fake.tflock</code></label></li>
+  <li><input type="checkbox" id="c2"><label for="c2">Comprueba que <code>git status</code> no propone añadir ningún <code>.tfstate</code></label></li>
+  <li><input type="checkbox" id="c3"><label for="c3">Haz commit de <code>state.tf</code>, <code>backend.tf</code> y del <code>.terraform.lock.hcl</code> si cambió</label></li>
+  <li><input type="checkbox" id="c4"><label for="c4"><b>No</b> ejecutes <code>destroy</code> en este stack. Ahora ni podrías: <code>prevent_destroy</code> lo impide</label></li>
+</ul>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Quieres que el nombre del bucket del backend dependa del entorno, así que
+  escribes <code>bucket = "tf-state-${var.entorno}"</code> dentro del bloque
+  <code>backend "s3"</code>. ¿Qué pasa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El backend se resuelve antes de que exista ninguna variable, porque Terraform necesita el state para poder evaluar cualquier cosa. La salida es -backend-config.">Falla: no admite ninguna variable</button></li>
+    <li><button data-correct="false" data-why="No hay tal orden especial. La restricción no es de orden dentro del fichero: es que el backend se evalúa antes que todo el lenguaje.">Funciona si declaras antes var</button></li>
+    <li><button data-correct="false" data-why="No existe ese comportamiento. Terraform no rellena silenciosamente valores del backend con nada; da un error de configuración.">Funciona usando el valor por defecto</button></li>
+    <li><button data-correct="false" data-why="El apply nunca llega a ejecutarse: init falla antes, porque init es justo el comando que configura el backend.">Falla solo durante el primer apply</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Un compañero cerró el portátil a mitad de un <code>apply</code>. Ahora
+  todo el equipo ve <code>Error acquiring the state lock</code> y él está de vacaciones. ¿Qué
+  haces?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El ID que necesitas viene impreso en el propio mensaje de error. Confirmar antes que nadie está aplicando es la mitad del procedimiento: forzar sobre un apply vivo sí corrompe el state.">Confirmas y haces <code>force-unlock</code></button></li>
+    <li><button data-correct="false" data-why="Borrar el objeto del state destruye el mapa entre tu código y AWS. El siguiente apply intentaría recrear una infraestructura que ya existe.">Borras el objeto del state</button></li>
+    <li><button data-correct="false" data-why="No hay caducidad. El lock de S3 es un objeto normal: si nadie lo borra, sigue ahí indefinidamente bloqueando al equipo entero.">Esperas a que el lock caduque</button></li>
+    <li><button data-correct="false" data-why="Cambiar la key equivale a empezar con un state vacío. Terraform dejaría de conocer todos los recursos existentes, que quedarían huérfanos y facturando.">Cambias la <code>key</code> del backend</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">De las cuatro protecciones del bucket de state, ¿cuál es la única que te
+  salva cuando alguien ejecuta un <code>terraform state rm</code> equivocado?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El versionado conserva la escritura anterior. El state corrupto se sube como versión nueva y la buena sigue ahí, recuperable por su VersionId.">El versionado del bucket S3</button></li>
+    <li><button data-correct="false" data-why="El bloqueo evita escrituras simultáneas, no escrituras equivocadas. Un solo comando erróneo coge el lock correctamente y hace el destrozo.">El bloqueo con <code>use_lockfile</code></button></li>
+    <li><button data-correct="false" data-why="El cifrado protege frente a quien lea los bytes sin permiso. No tiene absolutamente nada que ver con recuperar contenido perdido.">El cifrado en reposo AES-256</button></li>
+    <li><button data-correct="false" data-why="Bloquear el acceso público impide que un extraño lo lea. Contra tu propio comando ejecutado con tus credenciales no hace nada.">El bloqueo de acceso público</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<details class="recall">
+  <summary>El rastro que Terraform dejó en el directorio tras migrar: ¿qué encontraste?
+    <span class="recall-hint">Mira el tamaño del fichero y ábrelo. ¿Se parece a algo que ya conocías?</span>
+  </summary>
+  <p>Terraform conserva en disco una copia del state que había antes de la migración —el
+  fichero <code>terraform.tfstate.backup</code>—, y en <code>.terraform/</code> guarda un
+  pequeño fichero que anota <em>qué backend está configurado</em>. Ese segundo es el que hace
+  que, tras clonar el repositorio, un <code>terraform init</code> sepa a dónde ir.</p>
+  <p>Los dos están en tu <code>.gitignore</code>. Y el <code>.backup</code> conviene mirarlo
+  antes de borrarlo: es tu red de seguridad si la migración hubiera salido mal.</p>
+  <p><strong>La conclusión importante:</strong> el state ya no vive en tu portátil, pero
+  quedan restos. Cuando trabajes en varias máquinas, esos restos son lo que hay que ignorar
+  siempre — la verdad está en S3.</p>
+</details>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://developer.hashicorp.com/terraform/language/state/purpose">
+  <strong>Purpose of Terraform State</strong></a> — HashiCorp, unos 10 minutos. Es corto y es
+  la mejor explicación que existe de <em>por qué</em> el state tiene que existir. Contesta con
+  argumentos las cuatro objeciones obvias («¿por qué no consultar la API?», «¿y los
+  metadatos?», «¿y el rendimiento?», «¿y trabajar en equipo?»). Después, si te quedan ganas,
+  <a href="https://developer.hashicorp.com/terraform/language/state/locking">State: Locking</a>
+  tarda dos minutos más.</p>
+  <p>Y el capítulo 3 de <em>Terraform: Up &amp; Running</em>, que ya tienes en
+  <a href="../RESOURCES.md">RESOURCES.md</a>, es el tratamiento largo del mismo tema. Es el
+  capítulo del que más se habla en entrevistas.</p>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 04 — Deja de ser root.</strong> Llevas tres lecciones desplegando con las
+  credenciales raíz de tu cuenta, que es la peor práctica que existe en AWS y la primera que
+  te va a señalar cualquiera que mire tu repositorio. Vas a crear una identidad para Terraform
+  con permisos acotados, y aquí viene lo interesante: al quitarte poder, el backend que
+  acabas de montar <em>puede dejar de funcionar</em>. Ahí es donde se prueba de verdad.</p>
+  <p class="small">La lección 02 anunciaba las dos cosas —state e IAM— en una sola sesión. Son
+  cuarenta minutos cada una y son temas distintos: dónde vive el state y quién tiene permiso
+  para tocarlo. Las he separado.</p>
+  <div class="nav-links">
+    <a href="./0002-haz-que-la-alarma-suene.html">← Lección 02</a>
+    <a href="../reference/aws-s3.html">Referencia: S3</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Me interesan dos cosas concretas: el mensaje completo de
+    <code>Error acquiring the state lock</code>, y qué encontraste en el directorio después de
+    migrar. Y si el <code>init -migrate-state</code> te ha preguntado algo que no esperabas,
+    <strong>páralo y pregúntame antes de responder</strong> — es el único momento de este
+    curso en que responder que sí a destiempo puede costarte el state.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

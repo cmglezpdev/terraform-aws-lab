@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon S3</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon S3</h1>
+  <p class="deck">Almacenamiento de objetos: guardas un fichero bajo una clave y lo recuperas
+  por HTTP. No es un disco, no es un sistema de ficheros, y esa diferencia es exactamente lo
+  que hay que entender para no usarlo mal.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Almacenamiento de objetos</dd></div>
+    <div><dt>Ámbito</dt><dd>El bucket es regional; el <em>nombre</em> es global</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><b>Sí.</b> Un bucket vacío cuesta 0,00 USD. Solo pagas bytes guardados y peticiones.</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_s3_bucket</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/00-foundations">00</a>, 02, 05, 07</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+
+<p>Un almacén de <strong>objetos</strong>. Un objeto son tres cosas: unos bytes, una
+<strong>clave</strong> (una cadena de texto que lo identifica dentro del bucket) y unos
+metadatos. Se escribe entero y se lee entero: <em>no puedes modificar el byte 4.096 de un
+objeto</em>. Si cambias algo, subes el objeto completo otra vez.</p>
+
+<p>Un <strong>bucket</strong> es el contenedor. Vive en una región concreta y su nombre debe
+ser único en todo AWS, no solo en tu cuenta.</p>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>S3 es un <strong>guardarropa</strong>, no una estantería. Entregas una bolsa, te dan un
+  número, y con ese número recuperas la bolsa entera. No puedes pedir «sácame solo el
+  calcetín izquierdo y cámbialo».</p>
+  <p><strong>Dónde se rompe la analogía:</strong> las claves llevan barras
+  (<code>logs/2026/08/app.log</code>) y la consola las dibuja como carpetas. <em>No hay
+  carpetas.</em> Es una sola cadena de texto plana. Por eso «renombrar una carpeta» en S3
+  significa copiar cada objeto a una clave nueva y borrar el viejo — y por eso esa operación
+  es lenta y cuesta dinero cuando hay muchos objetos.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+
+<div class="ref-grid">
+  <div class="ref-card">
+    <h3>El backend del state de Terraform</h3>
+    <p>Es el uso de este curso. Un fichero JSON de unos kilobytes, versionado, cifrado y con
+    bloqueo. Cuesta cero y es el estándar de la industria.
+    <a href="../lessons/0003-saca-el-state-de-tu-portatil.html">Lección 03</a>.</p>
+  </div>
+  <div class="ref-card">
+    <h3>El origen de un sitio estático</h3>
+    <p>El HTML, JS y CSS compilados de un frontend, servidos al mundo a través de CloudFront.
+    El bucket permanece privado; solo CloudFront puede leerlo. Proyecto 05.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Buzón de entrada de datos</h3>
+    <p>Un cliente sube un CSV, S3 emite un evento a EventBridge, una Lambda lo procesa. El
+    bucket es el disparador, no solo el almacén. Proyecto 02.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Data lake y logs</h3>
+    <p>Terabytes de eventos en Parquet que Athena consulta sin moverlos. Aquí es donde las
+    clases de almacenamiento y las reglas de ciclo de vida dejan de ser teoría.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Copias de seguridad y archivo</h3>
+    <p>Volcados de base de datos que hay que conservar siete años por normativa y que casi
+    nunca se leen. Es el caso de Glacier Deep Archive.</p>
+  </div>
+</div>
+
+<h2>Los tipos que existen</h2>
+
+<p>En S3 «tipo» significa dos cosas distintas, y conviene no mezclarlas: el <strong>tipo de
+bucket</strong> y la <strong>clase de almacenamiento</strong> de cada objeto.</p>
+
+<h3>Tipos de bucket</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué lo distingue</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>General purpose</b></td>
+      <td>El de siempre. Multi-AZ, todas las clases de almacenamiento, todas las
+      funcionalidades.</td>
+      <td>Por defecto. El 99% de los casos, incluido todo este curso.</td>
+    </tr>
+    <tr>
+      <td><b>Directory</b> (S3 Express One Zone)</td>
+      <td>Una sola AZ, latencia de un dígito de milisegundos, nombre acabado en
+      <code>--x-s3</code>. Recurso Terraform distinto: <code>aws_s3_directory_bucket</code>.</td>
+      <td>Cargas con cientos de miles de peticiones por segundo donde la latencia manda y los
+      datos son reconstruibles.</td>
+    </tr>
+    <tr>
+      <td><b>Table</b></td>
+      <td>Buckets gestionados para tablas Apache Iceberg. Nombre acabado en
+      <code>--table-s3</code>.</td>
+      <td>Analítica. Fuera del alcance de este curso.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Clases de almacenamiento</h3>
+
+<p>La clase se decide <strong>por objeto</strong>, no por bucket, y se cambia sola con reglas
+de ciclo de vida. Las columnas que importan son las tres últimas: son las que generan facturas
+inesperadas.</p>
+
+<div class="scroll-x">
+<table>
+  <thead>
+    <tr>
+      <th>Clase</th><th>Diseñada para</th><th>AZ</th><th>Disponibilidad</th>
+      <th>Duración mínima</th><th>Tamaño mín. facturable</th><th>Precio USD/GB-mes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>STANDARD</code></td><td>Acceso frecuente, milisegundos</td><td>≥3</td>
+      <td>99,99%</td><td>—</td><td>—</td><td><b>0,023</b></td>
+    </tr>
+    <tr>
+      <td><code>INTELLIGENT_TIERING</code></td><td>Patrón de acceso desconocido</td><td>≥3</td>
+      <td>99,9%</td><td>—</td><td>—</td><td>0,023 → 0,0125 → 0,004 → 0,0036 → 0,00099</td>
+    </tr>
+    <tr>
+      <td><code>STANDARD_IA</code></td><td>Acceso ~1 vez al mes</td><td>≥3</td>
+      <td>99,9%</td><td><b>30 días</b></td><td><b>128 KB</b></td><td>0,0125 + tarifa de recuperación</td>
+    </tr>
+    <tr>
+      <td><code>ONEZONE_IA</code></td><td>Igual, pero recreable</td><td><b>1</b></td>
+      <td>99,5%</td><td><b>30 días</b></td><td><b>128 KB</b></td><td>0,01 + tarifa de recuperación</td>
+    </tr>
+    <tr>
+      <td><code>GLACIER_IR</code></td><td>Archivo con acceso en milisegundos</td><td>≥3</td>
+      <td>99,9%</td><td><b>90 días</b></td><td><b>128 KB</b></td><td>0,004 + tarifa de recuperación</td>
+    </tr>
+    <tr>
+      <td><code>GLACIER</code></td><td>Archivo, recuperación en minutos-horas</td><td>≥3</td>
+      <td>99,99% tras restaurar</td><td><b>90 días</b></td><td>+40 KB de metadatos</td><td>0,0036 + tarifa de recuperación</td>
+    </tr>
+    <tr>
+      <td><code>DEEP_ARCHIVE</code></td><td>Archivo legal, acceso en horas</td><td>≥3</td>
+      <td>99,99% tras restaurar</td><td><b>180 días</b></td><td>+40 KB de metadatos</td><td>ver nota ↓</td>
+    </tr>
+    <tr>
+      <td><code>EXPRESS_ONEZONE</code></td><td>Latencia mínima</td><td><b>1</b></td>
+      <td>99,95%</td><td>—</td><td>—</td><td>0,11</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p class="small">Todas las clases están diseñadas para una durabilidad de
+<strong>99,999999999%</strong> (once nueves) excepto Reduced Redundancy, que AWS recomienda
+explícitamente no usar. Fuente:
+<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html#sc-compare">Comparing the Amazon S3 storage classes</a>.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Si no sabes cada cuánto se lee un objeto, usa <code>INTELLIGENT_TIERING</code> y
+  deja de pensar.</strong> No tiene tarifa de recuperación ni duración mínima, y mueve los
+  objetos solo. Cobra una pequeña tarifa de monitorización por objeto, así que deja de
+  compensar cuando tienes millones de objetos diminutos.</p>
+  <p>Si <em>sí</em> lo sabes: <code>STANDARD</code> para lo que se lee a diario,
+  <code>STANDARD_IA</code> para lo que se lee al mes, <code>DEEP_ARCHIVE</code> para lo que
+  guardas por obligación legal. Y nunca metas en IA o Glacier objetos que vas a borrar
+  pronto: la duración mínima se cobra igual.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<p>Cinco propiedades. Con estas cinco no cometes los errores clásicos:</p>
+
+<ul>
+  <li><strong>Consistencia fuerte.</strong> Desde diciembre de 2020, un <code>GET</code>
+  posterior a un <code>PUT</code> devuelve siempre la versión nueva, sin ventana de
+  inconsistencia y sin coste extra
+  (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel">fuente</a>).
+  El material anterior a esa fecha —que sigue circulando— te dirá lo contrario.</li>
+
+  <li><strong>Escrituras condicionales.</strong> Puedes enviar un <code>PUT</code> con la
+  cabecera <code>If-None-Match: *</code>, y S3 lo rechaza si la clave ya existe
+  (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html">fuente</a>).
+  Esto convierte a S3 en un mecanismo de exclusión mutua. <strong>Es exactamente el motor del
+  <code>use_lockfile</code> de Terraform</strong>: el lock no es magia, es un objeto que solo
+  puede crear el primero que llegue.</li>
+
+  <li><strong>El versionado no sobrescribe: apila.</strong> Con versionado activo, cada
+  <code>PUT</code> sobre la misma clave crea una versión nueva y conserva la anterior. Un
+  <code>DELETE</code> no borra: coloca un <em>delete marker</em> encima. El objeto sigue ahí
+  y sigue pagándose. Para borrar de verdad hay que borrar cada versión por su
+  <code>VersionId</code>.</li>
+
+  <li><strong>Cifrado en reposo, siempre.</strong> Desde el <strong>5 de enero de 2023</strong>
+  todos los objetos nuevos se cifran con SSE-S3 (AES-256) automáticamente, sin coste y
+  <strong>sin posibilidad de desactivarlo</strong>
+  (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-encryption-faq.html">FAQ oficial</a>).
+  Si un tutorial te hace escribir un recurso solo para «activar el cifrado», ese tutorial es
+  anterior a 2023.</li>
+
+  <li><strong>Privado por defecto.</strong> «By default, new buckets, access points, and
+  objects don't allow public access»
+  (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html">Block Public Access</a>).
+  Los buckets filtrados de las noticias no eran públicos por descuido de AWS: alguien
+  desactivó esto a mano.</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Existir un bucket vacío</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Almacenamiento <code>STANDARD</code>, primeros 50 TB</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,023 USD / GB-mes</code></td></tr>
+    <tr><td>Almacenamiento <code>STANDARD</code>, siguientes 450 TB</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,022 USD / GB-mes</code></td></tr>
+    <tr><td><code>PUT</code>, <code>COPY</code>, <code>POST</code>, <code>LIST</code></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,005 USD / 1.000</code></td></tr>
+    <tr><td><code>GET</code> y todas las demás</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0004 USD / 1.000</code></td></tr>
+    <tr><td><code>DELETE</code></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Transferencia de entrada desde internet</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Transferencia de salida a internet, primeros 100 GB/mes</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Peticiones de ciclo de vida a Deep Archive</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,05 USD / 1.000</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="cost-stamp">Región <code>us-east-1</code>. Precios leídos el <b>2026-08-23</b> del
+fichero oficial de tarifas
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json"><code>AmazonS3/current/us-east-1/index.json</code></a>
+(Price List API pública, <code>publicationDate</code> 2026-08-18). Los 100 GB gratis de
+salida son agregados entre todos los servicios y regiones, según
+<a href="https://aws.amazon.com/s3/pricing/">aws.amazon.com/s3/pricing</a>.</p>
+
+<p class="small"><b>Nota sobre <code>DEEP_ARCHIVE</code>:</b> el fichero de tarifas de
+<code>us-east-1</code> de esa fecha solo publica la entrada de <em>staging</em>
+(0,021 USD/GB-mes), no la tarifa de la clase en sí. No la escribo aquí porque no he podido
+verificarla en una fuente primaria. Consulta la
+<a href="https://calculator.aws/">calculadora</a> antes de basar una decisión en ella. Lo que
+sí está verificado es el tier <em>Deep Archive Access</em> de Intelligent-Tiering:
+0,00099 USD/GB-mes.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p><strong>1. Las versiones antiguas se pagan.</strong> Activas el versionado, sobrescribes
+  un fichero de 1 GB cada día, y a los tres meses estás pagando 90 GB por un objeto que crees
+  que ocupa uno. La solución es una regla de ciclo de vida que expire las versiones no
+  actuales. Para el state de Terraform da igual: son kilobytes.</p>
+  <p><strong>2. Las peticiones, no los bytes.</strong> Diez millones de objetos de 1 KB
+  ocupan 10 GB (0,23 USD/mes) pero listarlos y leerlos cuesta bastante más que guardarlos.
+  En S3, muchos objetos pequeños es un patrón caro.</p>
+  <p><strong>3. La salida a internet.</strong> Almacenar es barato; sacar los datos, no. Es
+  la razón de poner CloudFront delante de un bucket público, y de por qué «migrar de nube» es
+  caro. La entrada, en cambio, es gratis: entrar es fácil.</p>
+  <p><strong>4. Los multipart uploads abortados.</strong> Una subida grande que falla deja
+  partes huérfanas que ocupan y se facturan, y no se ven en la consola. Se limpian con una
+  regla de ciclo de vida <code>abort_incomplete_multipart_upload</code>. Es el coste fantasma
+  clásico de S3.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Buckets por cuenta</td><td><code>10.000</code></td><td>Sí, por Service Quotas</td></tr>
+    <tr><td>Objetos por bucket</td><td><code>sin límite</code></td><td>—</td></tr>
+    <tr><td>Tamaño total del bucket</td><td><code>sin límite</code></td><td>—</td></tr>
+    <tr><td>Tamaño de un objeto (multipart)</td><td><code>50 TB</code></td><td>No</td></tr>
+    <tr><td>Tamaño de un objeto en un solo <code>PUT</code></td><td><code>5 GB</code></td><td>No</td></tr>
+    <tr><td>Subida desde la consola web</td><td><code>160 GB</code></td><td>No</td></tr>
+    <tr><td>Longitud del nombre del bucket</td><td><code>3 a 63 caracteres</code></td><td>No</td></tr>
+    <tr><td>Caracteres del nombre</td><td><code>a-z 0-9 . -</code></td><td>No. Ni mayúsculas ni guiones bajos</td></tr>
+    <tr><td>Región y nombre tras crear el bucket</td><td><code>inmutables</code></td><td>No. Cambiarlos = recrear</td></tr>
+    <tr><td>Etiquetas por objeto</td><td><code>10</code></td><td>No</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El nombre del bucket es global, y eso duele</span>
+  <p>«Each bucket name must be unique across all AWS accounts in all the AWS Regions within a
+  partition»
+  (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html">naming rules</a>).
+  <code>logs</code>, <code>backups</code> y <code>data</code> están cogidos desde 2007. Por eso
+  todo el mundo escribe <code>algo-&lt;id-de-cuenta&gt;</code> o le pega un sufijo aleatorio.</p>
+  <p>Peor: <strong>al borrar un bucket, otra cuenta puede quedarse con el nombre</strong> y
+  empezar a recibir las peticiones que iban dirigidas al tuyo. AWS recomienda literalmente
+  vaciar el bucket y conservarlo antes que borrarlo.</p>
+  <p><b>La salida moderna:</b> el <em>account regional namespace</em>. Si nombras el bucket
+  <code>&lt;prefijo&gt;-&lt;id-cuenta&gt;-&lt;región&gt;-an</code> y pasas
+  <code>bucket_namespace = "account-regional"</code>, ese nombre queda reservado a tu cuenta
+  para siempre y nadie más puede reclamarlo. El precio es que el ID de cuenta va escrito en
+  el nombre.</p>
+</div>
+
+<h2>Cuándo NO usarlo</h2>
+
+<div class="verdict">
+  <div class="yes">
+    <h3>Úsalo si</h3>
+    <ul>
+      <li>Escribes y lees ficheros <strong>enteros</strong>.</li>
+      <li>El volumen es imprevisible o enorme.</li>
+      <li>Necesitas durabilidad de once nueves sin gestionar nada.</li>
+      <li>Los datos se leen desde varios sitios a la vez.</li>
+      <li>Quieres que subir un fichero dispare un proceso.</li>
+    </ul>
+  </div>
+  <div class="no">
+    <h3>No lo uses si</h3>
+    <ul>
+      <li>Necesitas <strong>modificar trozos</strong> de un fichero grande.</li>
+      <li>Necesitas semántica POSIX: <code>rename</code>, bloqueo de ficheros, permisos Unix.</li>
+      <li>Consultas por campos, no por clave.</li>
+      <li>Necesitas latencia por debajo del milisegundo.</li>
+      <li>Son millones de registros diminutos que se leen sueltos.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>EBS</b></td>
+      <td>EBS es un disco de bloques que se monta en <em>una</em> instancia EC2. S3 es una API
+      HTTP a la que llega cualquiera.</td>
+      <td>Necesitas un sistema de ficheros con escrituras parciales: la raíz de un servidor,
+      los datos de una base de datos.</td>
+    </tr>
+    <tr>
+      <td><b>EFS</b></td>
+      <td>EFS es NFS gestionado: semántica POSIX real y montaje simultáneo desde muchas
+      instancias. Cuesta bastante más por GB.</td>
+      <td>Un software heredado espera un <code>/mnt/algo</code> y no lo vas a reescribir.</td>
+    </tr>
+    <tr>
+      <td><b>DynamoDB</b></td>
+      <td>DynamoDB indexa y consulta registros pequeños en milisegundos. S3 solo sabe buscar
+      por clave exacta o listar por prefijo.</td>
+      <td>Buscas «todos los pedidos de este usuario en marzo». Eso en S3 es un
+      <code>LIST</code> completo, y es caro y lento.</td>
+    </tr>
+    <tr>
+      <td><b>S3 Express One Zone</b></td>
+      <td>Diez veces más rápido y una sola AZ, a casi cinco veces el precio por GB
+      (0,11 frente a 0,023).</td>
+      <td>La latencia es tu cuello de botella y puedes reconstruir los datos si cae la AZ.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+
+<p>Desde la versión 4 del provider, <code>aws_s3_bucket</code> <strong>solo crea el
+bucket</strong>. Cada característica —versionado, ciclo de vida, cifrado, política— es un
+recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
+<code>versioning { }</code> dentro del recurso, es de antes de 2022.</p>
+
+<div class="code">
+  <div class="code-label"><span>bucket privado y versionado</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_s3_bucket"</b> <b class="s">"state"</b> {
+  <b class="at">bucket</b> = <b class="s">"tf-state-</b>${data.aws_caller_identity.current.account_id}<b class="s">"</b>
+
+  <b class="k">lifecycle</b> {
+    <b class="at">prevent_destroy</b> = <b class="n">true</b>   <b class="c"># nadie borra esto por accidente</b>
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_s3_bucket_versioning"</b> <b class="s">"state"</b> {
+  <b class="at">bucket</b> = aws_s3_bucket.state.id
+  <b class="k">versioning_configuration</b> {
+    <b class="at">status</b> = <b class="s">"Enabled"</b>   <b class="c"># Enabled | Suspended | Disabled</b>
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_s3_bucket_public_access_block"</b> <b class="s">"state"</b> {
+  <b class="at">bucket</b>                  = aws_s3_bucket.state.id
+  <b class="at">block_public_acls</b>       = <b class="n">true</b>
+  <b class="at">block_public_policy</b>     = <b class="n">true</b>
+  <b class="at">ignore_public_acls</b>      = <b class="n">true</b>
+  <b class="at">restrict_public_buckets</b> = <b class="n">true</b>
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas</span>
+  <p><strong><code>destroy</code> falla si el bucket tiene objetos.</strong> S3 no permite
+  borrar un bucket no vacío. El atajo es <code>force_destroy = true</code>, que borra todos
+  los objetos —incluidas todas las versiones— sin posibilidad de recuperarlos. En un bucket de
+  state, nunca.</p>
+  <p><strong><code>prevent_destroy = true</code> bloquea el <code>destroy</code> del stack
+  entero</strong>, no solo de ese recurso. Es lo que quieres para el bucket del state, pero
+  significa que ese proyecto ya no se tumba con un comando.</p>
+  <p><strong>Los cuatro <code>true</code> del <em>public access block</em> son redundantes
+  hoy</strong>: los buckets nuevos ya nacen así. Se escriben igual, por dos razones — dejan la
+  intención por escrito para quien lea el repositorio, y hacen que Terraform detecte
+  <em>drift</em> si alguien los desactiva a mano. Sobre lo que Terraform no gestiona, no hay
+  <code>plan</code> que valga.</p>
+  <p><strong>Borrar el recurso <code>aws_s3_bucket_versioning</code> no desactiva el
+  versionado: lo pone en <code>Suspended</code></strong>, que no es lo mismo. Las versiones
+  antiguas siguen existiendo y siguen facturándose.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Guardas volcados diarios de base de datos. Se conservan por norma legal
+  siete años, y en cuatro años nadie ha leído ninguno. ¿Qué clase eliges?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Está diseñada justo para esto: acceso menos de una vez al año y recuperación en horas. La duración mínima de 180 días no molesta cuando guardas siete años.">Glacier Deep Archive, por norma</button></li>
+    <li><button data-correct="false" data-why="Pagarías 0,023 USD/GB-mes por datos que nadie lee. Con volcados diarios durante siete años, la diferencia es de dos órdenes de magnitud.">S3 Standard, por defecto</button></li>
+    <li><button data-correct="false" data-why="Sirve si necesitas los datos en milisegundos. Aquí no los necesitas nunca, así que pagas de más por una latencia que no usas.">Glacier Instant, por rapidez</button></li>
+    <li><button data-correct="false" data-why="Su tarifa de monitorización por objeto y su tier más barato pierden frente a elegir Deep Archive a mano cuando el patrón ya lo conoces.">Intelligent-Tiering, por comodidad</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Un compañero te pide revisar su código: crea un bucket y añade un recurso
+  <code>aws_s3_bucket_server_side_encryption_configuration</code> con <code>AES256</code>
+  «para que los datos estén cifrados». ¿Qué le dices?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Desde el 5 de enero de 2023 SSE-S3 con AES-256 se aplica a todos los objetos nuevos, gratis y sin poder desactivarlo. Ese recurso declara lo que ya ocurre.">Ese cifrado ya está puesto</button></li>
+    <li><button data-correct="false" data-why="El recurso es válido y no rompe nada; simplemente no cambia el comportamiento. Está de más, no está mal.">Ese recurso rompe el apply</button></li>
+    <li><button data-correct="false" data-why="AES256 en S3 significa SSE-S3, que es gratis. El que sí cuesta es SSE-KMS, con clave propia y llamadas facturadas a KMS.">Ese cifrado tiene coste extra</button></li>
+    <li><button data-correct="false" data-why="Lo que se cifra en reposo es el contenido del objeto, nunca la clave ni el nombre del bucket, que son visibles en la URL.">Ese cifrado oculta las claves</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Tu aplicación guarda diez millones de registros de 2 KB, y lee unos
+  cuantos sueltos por su identificador cada segundo. ¿Dónde los pones?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Registros pequeños leídos por clave a alta frecuencia son el caso canónico de DynamoDB: latencia de milisegundos y coste por petición mucho menor.">En DynamoDB, por petición</button></li>
+    <li><button data-correct="false" data-why="Los 20 GB serían baratísimos, pero pagarías una petición GET por lectura y una latencia muy superior. En S3, muchos objetos diminutos es un antipatrón.">En S3 Standard, económico</button></li>
+    <li><button data-correct="false" data-why="Empeora el problema: añade una tarifa de recuperación y un mínimo facturable de 128 KB por objeto, sesenta veces el tamaño real de cada registro.">En S3 Standard-IA, barato</button></li>
+    <li><button data-correct="false" data-why="Resuelve la latencia pero no el modelo de acceso ni el coste por petición, y encima pierde la resiliencia multi-AZ a cambio.">En S3 Express, veloz</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">Un bucket con versionado guarda un objeto de 1 GB que se sobrescribe cada
+  día. Al cabo de 30 días, ¿cuánto almacenamiento estás pagando?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El versionado apila: cada sobrescritura crea una versión nueva y conserva todas las anteriores. 30 versiones de 1 GB son 30 GB, unos 0,69 USD al mes.">Unos treinta gigabytes guardados</button></li>
+    <li><button data-correct="false" data-why="Eso sería sin versionado. Con versionado activo, sobrescribir no reemplaza nada: añade una versión encima y conserva la vieja.">Un solo gigabyte guardado</button></li>
+    <li><button data-correct="false" data-why="S3 no consolida ni deduplica versiones por su cuenta. Solo desaparecen si escribes una regla de ciclo de vida que las expire.">Dos gigabytes tras consolidar</button></li>
+    <li><button data-correct="false" data-why="No hay ninguna retención automática de siete días en S3. Sin regla de ciclo de vida, las versiones se guardan indefinidamente.">Siete gigabytes por retención</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/0003-saca-el-state-de-tu-portatil.html">Lección 03</a>
+    <a href="./terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> Las reglas de ciclo de vida se quedan fuera de esta ficha y son la
+    mitad de lo que hace barato a S3 de verdad. Cuando llegues al proyecto 02 pídemelas, o
+    pídemelas antes si te pica la curiosidad.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
