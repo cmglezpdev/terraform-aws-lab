@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chuleta · Terraform CLI y HCL</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Documento de referencia · imprimible</p>
+  <h1>Terraform: CLI y HCL de un vistazo</h1>
+  <p class="deck">Lo que consultas a diario. Verificado contra Terraform 1.15 y el provider
+  AWS 6.x.</p>
+</header>
+
+<main>
+
+<h2>Ciclo de vida</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>Los cinco comandos</h3>
+<pre><code>terraform init      # descarga providers
+terraform fmt       # formatea el HCL
+terraform validate  # sintaxis y tipos
+terraform plan      # calcula el diff
+terraform apply     # ejecuta el diff
+terraform destroy   # lo borra todo</code></pre>
+    <p><code>init</code> se ejecuta al empezar y cada vez que cambies providers o backend.
+    <code>fmt</code> y <code>validate</code>, antes de cada commit.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Símbolos del plan</h3>
+    <table>
+      <tbody>
+        <tr><td><code>+</code></td><td>crear</td></tr>
+        <tr><td><code>-</code></td><td>destruir</td></tr>
+        <tr><td><code>~</code></td><td>modificar en sitio</td></tr>
+        <tr><td><code>-/+</code></td><td><strong>destruir y recrear</strong> — peligroso</td></tr>
+        <tr><td><code>&lt;=</code></td><td>leer (data source)</td></tr>
+      </tbody>
+    </table>
+    <p><code>-/+</code> aparece cuando cambias un atributo que AWS no permite modificar
+    (<em>forces replacement</em>). Si sale junto a una base de datos, para.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Flags que se usan de verdad</h3>
+<pre><code>plan -out=tf.plan     # guarda el plan
+apply tf.plan         # aplica ESE plan exacto
+apply -auto-approve   # sin preguntar (solo CI)
+plan -destroy         # qué haría destroy
+-target=aws_s3_bucket.x  # solo un recurso
+-var-file=prod.tfvars
+-refresh=false        # no consultar AWS</code></pre>
+    <p><code>-target</code> es una <strong>válvula de emergencia</strong>, no una forma de
+    trabajar. Deja el state parcialmente aplicado.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Inspeccionar el state</h3>
+<pre><code>terraform state list
+terraform state show ADDR
+terraform show           # todo el state
+terraform show -json     # legible por máquina
+terraform output
+terraform output -raw NOMBRE</code></pre>
+    <p>Una <em>dirección</em> es <code>tipo.nombre</code>, con
+    <code>["clave"]</code> si viene de <code>for_each</code> o
+    <code>[0]</code> si viene de <code>count</code>.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Cirugía sobre el state</h3>
+<pre><code>terraform state mv A B    # renombrar
+terraform state rm ADDR   # olvidar (no borra)
+terraform import ADDR ID  # adoptar existente
+terraform force-unlock ID # lock colgado</code></pre>
+    <p><code>state rm</code> hace que Terraform <strong>olvide</strong> el recurso: sigue
+    existiendo en AWS y ya nadie lo gestiona. Es como se crean los huérfanos que pagas.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Workspaces</h3>
+<pre><code>terraform workspace list
+terraform workspace new dev
+terraform workspace select prod</code></pre>
+    <p>Un state separado por workspace, mismo código. Sirve para entornos efímeros;
+    para <code>dev</code>/<code>prod</code> de verdad se prefieren directorios separados
+    (lo veremos en el proyecto 07).</p>
+  </div>
+
+</div>
+
+<h2>Bloques del lenguaje</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3><code>terraform</code> — configuración global</h3>
+<pre><code>terraform {
+  required_version = "&gt;= 1.9"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~&gt; 6.0"
+    }
+  }
+  backend "s3" { ... }
+}</code></pre>
+    <p>No admite variables: se evalúa antes que nada.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>resource</code> — algo que creas</h3>
+<pre><code>resource "aws_s3_bucket" "logs" {
+  bucket = "mi-bucket-de-logs"
+}
+
+# referencia:
+aws_s3_bucket.logs.arn</code></pre>
+    <p>Referenciar un recurso desde otro crea una <strong>dependencia implícita</strong>.
+    Es la forma correcta; <code>depends_on</code> es el último recurso.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>data</code> — algo que consultas</h3>
+<pre><code>data "aws_caller_identity" "yo" {}
+data "aws_region" "actual" {}
+
+# referencia (lleva "data." delante):
+data.aws_caller_identity.yo.account_id</code></pre>
+    <p>No crea nada. Lee lo que ya existe, dentro o fuera de tu Terraform.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>variable</code> — entrada</h3>
+<pre><code>variable "instance_count" {
+  description = "Cuántas instancias."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.instance_count &lt;= 4
+    error_message = "Máximo 4, por coste."
+  }
+}</code></pre>
+    <p>Siempre <code>type</code> y <code>description</code>. Sin
+    <code>default</code>, es obligatoria.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>output</code> — salida</h3>
+<pre><code>output "api_url" {
+  description = "URL pública de la API."
+  value       = aws_apigatewayv2_api.x.api_endpoint
+  sensitive   = false
+}</code></pre>
+    <p>Es la interfaz pública de un módulo. <code>sensitive = true</code> lo oculta en la
+    consola — pero <strong>no</strong> en el state.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>locals</code> — valores calculados</h3>
+<pre><code>locals {
+  name_prefix = "${var.project}-${var.env}"
+  common_tags = {
+    Environment = var.env
+  }
+}
+
+# referencia:
+local.name_prefix</code></pre>
+    <p>Nombre en plural al declarar (<code>locals</code>), en singular al usar
+    (<code>local.</code>).</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>module</code> — código reutilizable</h3>
+<pre><code>module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~&gt; 5.0"
+  name    = "principal"
+}
+
+# referencia:
+module.vpc.private_subnets</code></pre>
+    <p>Fija <code>version</code> siempre que el <code>source</code> sea remoto.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>provider</code> con <code>alias</code></h3>
+<pre><code>provider "aws" {
+  alias  = "virginia"
+  region = "us-east-1"
+}
+
+resource "aws_acm_certificate" "cdn" {
+  provider = aws.virginia
+}</code></pre>
+    <p>Necesario para multi-región. Los certificados de CloudFront <em>tienen</em> que estar
+    en <code>us-east-1</code>.</p>
+  </div>
+
+</div>
+
+<h2>Meta-argumentos</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3><code>for_each</code> vs <code>count</code></h3>
+<pre><code># for_each: clave estable
+resource "aws_sqs_queue" "q" {
+  for_each = toset(["pedidos", "emails"])
+  name     = each.key
+}
+# → aws_sqs_queue.q["pedidos"]
+
+# count: índice frágil
+resource "aws_instance" "web" {
+  count = 3
+}
+# → aws_instance.web[0]</code></pre>
+    <p><strong>Usa <code>for_each</code> casi siempre.</strong> Con <code>count</code>, borrar
+    el elemento del medio <em>reindexa</em> los siguientes y Terraform destruye y recrea
+    recursos que no habías tocado. Con <code>for_each</code> la clave no se mueve.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>depends_on</code></h3>
+<pre><code>resource "aws_lambda_function" "f" {
+  depends_on = [
+    aws_iam_role_policy_attachment.logs
+  ]
+}</code></pre>
+    <p>Solo para dependencias que Terraform no puede ver: típicamente permisos IAM que deben
+    existir <em>antes</em> aunque nada los referencie.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>lifecycle</code></h3>
+<pre><code>lifecycle {
+  create_before_destroy = true
+  prevent_destroy       = true
+  ignore_changes        = [tags["LastScan"]]
+  replace_triggered_by  = [null_resource.x]
+}</code></pre>
+    <p><code>prevent_destroy</code> en producción sobre bases de datos.
+    <code>ignore_changes</code> para lo que modifica otro sistema.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>dynamic</code> — bloques repetidos</h3>
+<pre><code>dynamic "ingress" {
+  for_each = var.puertos
+  content {
+    from_port = ingress.value
+    to_port   = ingress.value
+    protocol  = "tcp"
+  }
+}</code></pre>
+    <p>Para repetir <em>bloques anidados</em>, no recursos. Típico en security groups.</p>
+  </div>
+
+</div>
+
+<h2>Expresiones y funciones</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>Sintaxis frecuente</h3>
+<pre><code>"${var.a}-${var.b}"       # interpolación
+var.env == "prod" ? 3 : 1  # condicional
+[for s in var.l : upper(s)]        # for de lista
+{ for k, v in var.m : k =&gt; v.id }  # for de mapa
+var.x != null ? var.x : "def"
+try(var.x.y, "por defecto")</code></pre>
+  </div>
+
+  <div class="ref-card">
+    <h3>Funciones que usarás</h3>
+<pre><code>toset(["a","b"])     # lista → set
+merge(a, b)          # une mapas
+lookup(m, "k", "def")
+coalesce(a, b, c)    # primer no-nulo
+join("-", lista)
+jsonencode({ a = 1 })
+file("${path.module}/x.json")
+cidrsubnet("10.0.0.0/16", 8, 3)</code></pre>
+    <p><code>cidrsubnet</code> es la que te calcula las subredes en el proyecto 04.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Restricciones de versión</h3>
+    <table>
+      <tbody>
+        <tr><td><code>~&gt; 6.0</code></td><td>cualquier 6.x, nunca 7.0</td></tr>
+        <tr><td><code>~&gt; 6.1.0</code></td><td>cualquier 6.1.x, nunca 6.2</td></tr>
+        <tr><td><code>&gt;= 1.9</code></td><td>esa o superior, sin techo</td></tr>
+        <tr><td><code>= 6.61.0</code></td><td>exactamente esa</td></tr>
+      </tbody>
+    </table>
+    <p>Para providers, <code>~&gt;</code> con la versión mayor fijada.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Valores del entorno</h3>
+<pre><code>path.module   # dir del módulo actual
+path.root     # dir del módulo raíz
+terraform.workspace
+each.key / each.value   # for_each
+count.index             # count</code></pre>
+  </div>
+
+</div>
+
+<h2>Backend S3 — la forma actual</h2>
+
+<div class="ref-grid">
+  <div class="ref-card" style="grid-column: 1 / -1;">
+    <h3>Con bloqueo nativo, sin DynamoDB</h3>
+<pre><code>terraform {
+  backend "s3" {
+    bucket       = "tf-state-999999999999"
+    key          = "00-foundations/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true      # ← bloqueo nativo de S3
+  }
+}</code></pre>
+    <p><strong>Aviso importante:</strong> casi todo el material que encuentres en internet
+    (cursos, blogs, respuestas de Stack Overflow) te dirá que uses
+    <code>dynamodb_table = "..."</code> para el bloqueo. Eso está
+    <strong>deprecado</strong> y desaparecerá en una versión futura: el bloqueo por
+    DynamoDB se sustituyó por un fichero de lock en el propio bucket.
+    (<a href="https://developer.hashicorp.com/terraform/language/backend/s3">docs del backend s3</a>)</p>
+    <p>Un backend <strong>no admite variables ni interpolación</strong>. Si necesitas que
+    cambie por entorno, se pasa por línea de comandos:
+    <code>terraform init -backend-config=prod.hcl</code>.</p>
+  </div>
+</div>
+
+<h2>Cuando algo va mal</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>«Error acquiring the state lock»</h3>
+    <p>Un <code>apply</code> anterior murió sin soltar el lock. Copia el <code>ID</code> del
+    mensaje de error y:</p>
+<pre><code>terraform force-unlock ID</code></pre>
+    <p>Antes de hacerlo, <strong>asegúrate de que nadie más está aplicando</strong>. Es
+    exactamente la situación que el lock existe para evitar.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>«already exists»</h3>
+    <p>El recurso existe en AWS pero no en tu state. Lo adoptas en vez de recrearlo:</p>
+<pre><code>terraform import aws_s3_bucket.x mi-bucket</code></pre>
+    <p>O en Terraform &ge; 1.5, con un bloque <code>import</code> en el código, que además
+    te deja verlo en el <code>plan</code> antes de ejecutarlo.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Un plan propone cambios que no pediste</h3>
+    <p>Es <strong>drift</strong>: alguien tocó AWS a mano, o el provider cambió de versión.
+    Diagnóstico:</p>
+<pre><code>terraform plan -refresh-only</code></pre>
+    <p>Muestra qué ha cambiado en la realidad, sin proponer tocarla.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Ver qué hace Terraform por dentro</h3>
+<pre><code>TF_LOG=DEBUG terraform apply
+TF_LOG=TRACE TF_LOG_PATH=tf.log terraform apply</code></pre>
+    <p>Verboso hasta lo absurdo, pero es la única forma de ver las llamadas HTTP reales a la
+    API de AWS cuando un error no tiene sentido.</p>
+  </div>
+
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="../lessons/0001-el-primer-apply.html">Lección 01</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="https://developer.hashicorp.com/terraform/cli">Referencia oficial del CLI</a>
+  </div>
+  <div class="ask">
+    <b>¿Falta algo aquí?</b> Esta chuleta crece contigo. Si durante un proyecto usas un
+    comando o un patrón que no está, dímelo y lo añado.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

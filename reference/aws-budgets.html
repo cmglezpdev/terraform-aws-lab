@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · AWS Budgets</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>AWS Budgets</h1>
+  <p class="deck">Vigila lo que gastas y te avisa antes de que la factura te sorprenda.
+  No cobra nada, no corta nada por sí solo, y tarda hasta 12 horas en enterarse.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Gestión de costes</dd></div>
+    <div><dt>Ámbito</dt><dd>Global (la API vive en <code>us-east-1</code>)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost free">gratis</span> sin acciones</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí. Debe quedarse puesto.</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_budgets_budget</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/00-foundations">proyecto 00</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+
+<p>Un servicio que lee tus datos de facturación una o varias veces al día, los compara con
+un umbral que tú defines, y manda un correo o un mensaje a un topic SNS cuando lo cruzas.
+Eso es todo lo que hace.</p>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve, y dónde se rompe</span>
+  <p>Es el aviso de «te queda poca batería» del móvil: no apaga nada, no ahorra nada, solo te
+  informa a tiempo para que actúes tú.</p>
+  <p><strong>Dónde se rompe la analogía:</strong> el móvil sabe su batería al instante.
+  Budgets lee datos de facturación que AWS actualiza <strong>hasta tres veces al día, con
+  8-12 horas entre actualizaciones</strong>. Un recurso que arranca a las 10:00 puede no
+  aparecer en un presupuesto hasta las 22:00.
+  (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html">fuente</a>)
+  Por eso el presupuesto es una <em>red secundaria</em>: la primaria es tu disciplina de
+  <code>terraform destroy</code>.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+
+<div class="ref-grid">
+  <div class="ref-card">
+    <h3>El recurso olvidado un viernes</h3>
+    <p>Alguien levanta un entorno de pruebas con NAT Gateway y RDS, se va el fin de semana y
+    no lo destruye. Sin alarma, lo descubres el día 1 del mes siguiente. Con alarma de
+    proyección, el sábado.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Techo por equipo o por proyecto</h3>
+    <p>Con <code>cost_filter</code> sobre etiquetas: «el equipo de datos tiene 2.000 USD/mes».
+    Es la base de cualquier reparto interno de costes.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Vigilar el free tier</h3>
+    <p>Un presupuesto de tipo <code>USAGE</code> sobre horas de EC2 te avisa antes de pasarte
+    de las 750 horas gratis, no después.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Detectar una fuga o un abuso</h3>
+    <p>Una clave filtrada minando cripto dispara un pico de gasto. La alarma de proyección es
+    a menudo la primera señal — y a veces la única.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Cortar de verdad (con acciones)</h3>
+    <p>Un <em>budget action</em> puede aplicar una política IAM restrictiva o parar instancias
+    EC2/RDS al cruzar el umbral. Es la única parte del servicio que no es solo avisar — y la
+    única que cuesta dinero.</p>
+  </div>
+</div>
+
+<h2>Los tipos que existen</h2>
+
+<p>Seis tipos. Los dos primeros son los que usarás; los cuatro últimos solo tienen sentido si
+tu empresa compra capacidad por adelantado.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué mide</th><th>Cuándo lo usas</th></tr></thead>
+  <tbody>
+    <tr><td><code>COST</code></td><td>Dinero gastado</td><td><strong>El que quieres el 90% de las veces.</strong> «No más de 30 USD este mes.»</td></tr>
+    <tr><td><code>USAGE</code></td><td>Unidades consumidas: horas, GB, peticiones</td><td>Vigilar el free tier, o un límite físico antes de tocar una cuota del servicio.</td></tr>
+    <tr><td><code>RI_UTILIZATION</code></td><td>% de uso de tus Reserved Instances</td><td>Has pagado capacidad reservada por adelantado y quieres saber si la desaprovechas.</td></tr>
+    <tr><td><code>RI_COVERAGE</code></td><td>% de tus horas cubiertas por RIs</td><td>Saber cuánto estás pagando a precio completo pudiendo tenerlo reservado.</td></tr>
+    <tr><td><code>SAVINGS_PLANS_UTILIZATION</code></td><td>% de uso de tus Savings Plans</td><td>Igual que RI_UTILIZATION, pero para Savings Plans.</td></tr>
+    <tr><td><code>SAVINGS_PLANS_COVERAGE</code></td><td>% de gasto cubierto por Savings Plans</td><td>Igual que RI_COVERAGE, pero para Savings Plans.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuente:
+<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html">Managing your costs with AWS Budgets</a>.</p>
+
+<h3>Y dentro de cada uno, dos clases de alarma</h3>
+
+<p>Esta es la distinción que de verdad importa, y la que decide si tu alarma sirve de algo:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th><code>ACTUAL</code></th><th><code>FORECASTED</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>Qué compara</b></td><td>Lo que ya has gastado</td><td>Lo que AWS proyecta que gastarás a fin de periodo</td></tr>
+    <tr><td><b>Cuándo avisa</b></td><td>Cuando el dinero ya se fue</td><td>El mismo día en que el ritmo se dispara</td></tr>
+    <tr><td><b>Cuántas veces</b></td><td><strong>Una sola vez</strong> por periodo, la primera que se cruza</td><td>Varias: si la proyección baja del umbral y vuelve a subir, avisa otra vez</td></tr>
+    <tr><td><b>Requisito oculto</b></td><td>Ninguno</td><td><strong>~5 semanas de historial de uso</strong> en la cuenta</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa que casi nadie sabe</span>
+  <p>«AWS requires approximately <strong>5 weeks of usage data</strong> to generate budget
+  forecasts. If you set a budget to alert based on a forecasted amount, this budget alert
+  isn't triggered until you have enough historical usage information.»
+  (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html">Best practices for AWS Budgets</a>)</p>
+  <p>Es decir: en una cuenta nueva o con poco uso, la alarma <code>FORECASTED</code> —la
+  buena— <strong>no se dispara</strong>. Está creada, aparece en la consola, y no hace nada.
+  De ahí sale la regla práctica: <strong>en una cuenta joven, siempre al menos una alarma
+  <code>ACTUAL</code> a un umbral bajo</strong>, aunque llegue tarde. Es la única que
+  funciona seguro desde el día uno.</p>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Un presupuesto <code>COST</code> mensual con <strong>tres</strong> notificaciones:
+  <code>ACTUAL</code> al 50%, <code>ACTUAL</code> al 90% y <code>FORECASTED</code> al 100%.
+  Las dos primeras funcionan desde hoy; la tercera empieza a servir cuando la cuenta tenga
+  historial. Cubre los dos regímenes sin pensar más.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<p>Cuatro hechos bastan para no cometer errores con este servicio:</p>
+
+<ul>
+  <li><strong>No es tiempo real.</strong> Lee datos de facturación que se refrescan hasta 3
+  veces al día. Y hay un segundo retraso, previo: entre que usas un recurso y que ese uso se
+  factura. Suma ambos.</li>
+  <li><strong>Notifica, no actúa.</strong> Un presupuesto normal no para, no borra y no
+  bloquea nada. Para eso hacen falta <em>budget actions</em>, que son otra cosa y sí cuestan.</li>
+  <li><strong>Correo suelto y topic SNS son caminos distintos.</strong> Con
+  <code>subscriber_email_addresses</code>, AWS manda la alerta directamente desde
+  <code>budgets@costalerts.amazonaws.com</code> y <strong>no hay nada que confirmar</strong>.
+  Con <code>subscriber_sns_topic_arns</code>, SNS sí manda un correo de confirmación que hay
+  que aceptar. El procedimiento oficial lo separa en dos pasos y pone la nota de confirmación
+  únicamente en el de SNS:
+  (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/create-cost-budget.html">Creating a cost budget</a>)</li>
+  <li><strong>Hay un tercer destino que casi nadie conoce: AWS Chatbot.</strong> Budgets sabe
+  mandar alertas a Slack o Amazon Chime de forma nativa, sin escribir código. Se configura
+  desde la consola de AWS Chatbot, no desde el presupuesto. Para cualquier otro destino
+  (Telegram, Discord, un webhook propio) hace falta un topic SNS con una Lambda suscrita.</li>
+  <li><strong>Los periodos no se solapan con nada.</strong> Un presupuesto <code>MONTHLY</code>
+  se reinicia el día 1. Si el día 28 cruzaste el umbral <code>ACTUAL</code>, ya no volverá a
+  avisarte hasta el mes siguiente por mucho que sigas gastando.</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Presupuestos sin acciones (los normales)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Notificaciones por correo</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Primeros 2 presupuestos <em>con acciones</em></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Cada presupuesto con acciones a partir del 3º</td><td><span class="tag-cost usage">por día</span></td><td><code>0,10 USD/día</code></td></tr>
+    <tr><td>Topic SNS asociado (si lo añades)</td><td><span class="tag-cost usage">por uso</span></td><td>1M peticiones/mes gratis</td></tr>
+  </tbody>
+</table>
+<p class="cost-stamp">Verificado el 2026-08-23 en
+<a href="https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/">AWS Budgets Pricing</a>.
+Precios sin región: el servicio es global.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p>Nada. Este es uno de los poquísimos servicios de AWS donde el uso normal es literalmente
+  gratis y sin límite de cantidad. <strong>No hay ninguna excusa para no tener un presupuesto
+  en cualquier cuenta AWS</strong>, y no tenerlo es lo primero que delata una cuenta
+  descuidada en una auditoría.</p>
+  <p>La única línea que cobra es la de <em>budget actions</em>, y solo a partir del tercero.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Direcciones de correo por notificación</td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Destinos nativos por alerta</td><td>correo, 1 topic SNS, AWS Chatbot</td><td>No</td></tr>
+    <tr><td>Topics SNS por notificación</td><td><code>1</code></td><td>No</td></tr>
+    <tr><td>Retraso de actualización de datos</td><td><code>8-12 h</code></td><td>No</td></tr>
+    <tr><td>Historial necesario para proyecciones</td><td><code>~5 semanas</code></td><td>No</td></tr>
+    <tr><td>Duración de un presupuesto de periodo personalizado</td><td><code>3 años</code></td><td>No</td></tr>
+    <tr><td>Topic SNS en otra cuenta</td><td><code>No soportado</code></td><td>No</td></tr>
+  </tbody>
+</table>
+<p class="small">Fuentes:
+<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html">Best practices</a> ·
+<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-sns-policy.html">SNS topic for budget notifications</a>.</p>
+
+<h2>Cuándo NO usarlo</h2>
+
+<div class="verdict">
+  <div class="yes">
+    <h3>Úsalo si</h3>
+    <ul>
+      <li>Quieres un techo de gasto y que te avisen al acercarte.</li>
+      <li>Necesitas repartir coste por equipo, proyecto o etiqueta.</li>
+      <li>Vigilas consumo de free tier en unidades, no en dinero.</li>
+      <li>Quieres una señal temprana de una clave filtrada.</li>
+    </ul>
+  </div>
+  <div class="no">
+    <h3>No lo uses si</h3>
+    <ul>
+      <li>Necesitas reaccionar en minutos: llega con horas de retraso.</li>
+      <li>Esperas que corte el gasto solo: no lo hace sin acciones.</li>
+      <li>Quieres analizar <em>por qué</em> subió el gasto: eso es Cost Explorer.</li>
+      <li>Quieres alarmar sobre métricas técnicas: eso es CloudWatch.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Cost Explorer</b></td>
+      <td>Budgets vigila hacia adelante y avisa. Cost Explorer analiza hacia atrás y no avisa de nada.</td>
+      <td>Quieres saber <em>qué servicio</em> disparó la factura del mes pasado.</td>
+    </tr>
+    <tr>
+      <td><b>CloudWatch Alarms</b></td>
+      <td>CloudWatch alarma sobre métricas técnicas con granularidad de minuto. Budgets, sobre dinero con granularidad de medio día.</td>
+      <td>Quieres reaccionar rápido, o alarmar sobre CPU, errores o latencia.</td>
+    </tr>
+    <tr>
+      <td><b>Cost Anomaly Detection</b></td>
+      <td>Budgets compara con un umbral que tú fijas. Anomaly Detection aprende tu patrón y detecta lo raro sin umbral.</td>
+      <td>No sabes qué número poner porque tu gasto varía mucho mes a mes.</td>
+    </tr>
+    <tr>
+      <td><b>Service Quotas</b></td>
+      <td>Budgets avisa de coste o uso. Service Quotas es el límite duro que AWS te impone.</td>
+      <td>Un <code>apply</code> falla con «limit exceeded» y necesitas pedir una ampliación.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+
+<div class="code">
+  <div class="code-label"><span>presupuesto mensual con las tres alarmas recomendadas</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_budgets_budget"</b> <b class="s">"monthly"</b> {
+  <b class="at">name</b>         = <b class="s">"curso-terraform-mensual"</b>
+  <b class="at">budget_type</b>  = <b class="s">"COST"</b>      <b class="c"># obligatorio</b>
+  <b class="at">time_unit</b>    = <b class="s">"MONTHLY"</b>   <b class="c"># obligatorio</b>
+  <b class="at">limit_amount</b> = <b class="s">"30"</b>        <b class="c"># string, no number</b>
+  <b class="at">limit_unit</b>   = <b class="s">"USD"</b>
+
+  <b class="k">dynamic</b> <b class="s">"notification"</b> {
+    <b class="at">for_each</b> = [
+      { type = <b class="s">"ACTUAL"</b>,     threshold = <b class="n">50</b>  },
+      { type = <b class="s">"ACTUAL"</b>,     threshold = <b class="n">90</b>  },
+      { type = <b class="s">"FORECASTED"</b>, threshold = <b class="n">100</b> },
+    ]
+    <b class="k">content</b> {
+      <b class="at">notification_type</b>          = notification.value.type
+      <b class="at">threshold</b>                  = notification.value.threshold
+      <b class="at">comparison_operator</b>        = <b class="s">"GREATER_THAN"</b>
+      <b class="at">threshold_type</b>             = <b class="s">"PERCENTAGE"</b>
+      <b class="at">subscriber_email_addresses</b> = [var.alert_email]
+      <b class="at">subscriber_sns_topic_arns</b>   = [aws_sns_topic.alerts.arn]
+    }
+  }
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas</span>
+  <p><strong><code>limit_amount</code> es un string</strong>, no un número. Si lo alimentas
+  desde una variable numérica, envuélvelo en <code>tostring()</code>.</p>
+  <p><strong>Un topic SNS cifrado no funciona.</strong> AWS lo dice literalmente: «The SNS
+  topic is encrypted — the SNS topic won't work without additional permissions». Si activas
+  <code>kms_master_key_id</code> en el topic, necesitas además una política de clave KMS que
+  permita a <code>budgets.amazonaws.com</code> usarla.</p>
+  <p><strong>El topic SNS necesita política de recurso.</strong> No basta con referenciarlo:
+  hay que autorizar a <code>budgets.amazonaws.com</code> a publicar en él. Se ve en la
+  <a href="../lessons/0002-haz-que-la-alarma-suene.html">lección 02</a>.</p>
+  <p><strong>Cuidado al cambiar <code>name</code>.</strong> El nombre es el identificador del
+  presupuesto: cambiarlo provoca <code>-/+</code> (destruir y recrear), y las alarmas
+  <code>ACTUAL</code> ya disparadas de ese periodo se olvidan.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Acabas de abrir una cuenta AWS y montas una alarma <code>FORECASTED</code> al 100%. Al día siguiente levantas un NAT Gateway y se te olvida destruirlo. ¿Qué pasa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Las proyecciones necesitan unas 5 semanas de historial de uso. Antes de eso la alarma existe pero jamás se dispara.">La alarma no se dispara nunca</button></li>
+    <li><button data-correct="false" data-why="No hay retraso de 12 horas aquí: es que la proyección directamente no puede calcularse sin historial suficiente.">La alarma se dispara doce horas después</button></li>
+    <li><button data-correct="false" data-why="Budgets no corta nada por sí solo. Parar recursos exige un budget action, que es otra funcionalidad.">La alarma detiene ese NAT Gateway</button></li>
+    <li><button data-correct="false" data-why="El límite de 30 USD es solo un umbral de aviso: AWS no impide gastar por encima de un presupuesto.">La alarma bloquea el gasto extra</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Tu factura del mes pasado fue el triple de lo normal y quieres saber qué servicio la disparó. ¿Qué abres?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Analiza el gasto ya ocurrido y lo desglosa por servicio, región, etiqueta y periodo. Es la herramienta forense.">Abres la consola de Cost Explorer</button></li>
+    <li><button data-correct="false" data-why="Budgets solo compara un total contra un umbral y avisa. No desglosa ni explica de dónde vino el gasto.">Abres la consola de AWS Budgets</button></li>
+    <li><button data-correct="false" data-why="Alarma sobre métricas técnicas como CPU o errores, no sobre el desglose de tu factura por servicio.">Abres la consola de CloudWatch Alarms</button></li>
+    <li><button data-correct="false" data-why="Muestra los límites duros que AWS impone por servicio. No tiene ninguna relación con el gasto.">Abres la consola de Service Quotas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Quieres cinco presupuestos distintos, uno por proyecto, todos con alarmas por correo. ¿Cuánto te cuesta al mes?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Los presupuestos sin acciones son gratis y sin límite de cantidad. Solo los budget actions cuestan, a partir del tercero.">Cuesta cero dólares al mes</button></li>
+    <li><button data-correct="false" data-why="Ese sería el precio si los cinco tuvieran acciones configuradas: tres de pago a 0,10 USD/día. Con solo alarmas, no.">Cuesta unos nueve dólares mensuales</button></li>
+    <li><button data-correct="false" data-why="No existe ningún cargo por dirección de correo notificada. Las notificaciones por correo son gratuitas.">Cuesta según correos enviados</button></li>
+    <li><button data-correct="false" data-why="Los dos primeros gratis se aplican a presupuestos CON acciones. Los presupuestos normales no tienen ese límite.">Cuesta desde el tercer presupuesto</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">Cruzaste el umbral <code>ACTUAL</code> al 50% el día 12 y te llegó el correo. Sigues gastando y el día 20 vas por el 80%. ¿Recibes otro aviso de esa misma notificación?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Las alarmas ACTUAL se envían una sola vez por presupuesto y periodo, la primera vez que se cruza el umbral. Por eso se ponen varias a umbrales distintos.">No, hasta el periodo siguiente</button></li>
+    <li><button data-correct="false" data-why="Ese comportamiento repetido es el de las alarmas FORECASTED, que pueden avisar varias veces si la proyección oscila.">Sí, cada vez que suba más</button></li>
+    <li><button data-correct="false" data-why="No existe ninguna cadencia diaria de recordatorio. Budgets avisa por cruce de umbral, no por calendario.">Sí, un recordatorio cada día</button></li>
+    <li><button data-correct="false" data-why="El refresco de 8-12 horas afecta a cuándo se detecta el cruce, no a cuántas veces se notifica un umbral ya cruzado.">Sí, cada ocho o doce horas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/0001-el-primer-apply.html">Lección 01</a>
+    <a href="../lessons/0002-haz-que-la-alarma-suene.html">Lección 02</a>
+    <a href="./aws-sns.html">Referencia: Amazon SNS</a>
+    <a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> Si quieres montar un presupuesto por etiqueta, uno de tipo
+    <code>USAGE</code> sobre el free tier, o un <em>budget action</em> que pare instancias de
+    verdad, dímelo y lo construimos.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

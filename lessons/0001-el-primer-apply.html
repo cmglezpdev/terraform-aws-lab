@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 01 · El primer apply que no es de juguete</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 01 · Proyecto <code>00-foundations</code></p>
+  <h1>El primer <code>apply</code> que no es de juguete</h1>
+  <p class="deck">Antes de desplegar nada en AWS montas la red de seguridad. Hoy creas
+  un presupuesto con alarma —con Terraform, no a mano— y abres el fichero de state
+  para ver qué guarda Terraform realmente.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 35 min</span>
+    <span><b>Coste</b> 0,00 USD</span>
+    <span><b>Terraform</b> provider · resource · plan/apply · state</span>
+    <span><b>AWS</b> Budgets</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Por qué esto y no un bucket S3</h2>
+
+<p>En el proyecto <a href="../ROADMAP.md"><code>04-vpc-three-tier</code></a> vas a levantar un
+NAT Gateway, un ALB y una base de datos RDS. Esas tres cosas cobran por hora estén o no
+en uso, y la primera vez que a alguien se le olvida un <code>destroy</code> un viernes,
+el lunes tiene una factura de 40 USD. El presupuesto con alarma es el cinturón de
+seguridad de todo el curso, así que va primero.</p>
+
+<p>Pero hay una segunda razón, y es la que te sirve en una entrevista: <strong>este es
+literalmente el primer commit de cualquier repositorio de infraestructura real</strong>.
+Nadie empieza un repo de Terraform creando un bucket. Se empieza estableciendo los
+límites de la cuenta. Que tu repo empiece así dice más de ti que cualquier módulo
+sofisticado que venga después.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Lo que vamos a hacer mal a propósito</span>
+  <p>Hoy vas a ejecutar Terraform con las credenciales <strong>root</strong> de tu cuenta.
+  Eso está mal y lo sabemos. Lo hacemos porque crear el usuario IAM que usaremos a partir
+  de mañana requiere permisos que solo root tiene de entrada. Root hará exactamente dos
+  cosas en todo el curso: este presupuesto, y crear ese usuario en la
+  <a href="#siguiente">lección 03</a>. Después, nunca más.</p>
+</div>
+
+<h2>El modelo mental: tres realidades, no dos</h2>
+
+<p>Casi todo el mundo que viene de tutoriales cree que Terraform compara <em>tu código</em>
+contra <em>AWS</em>. No es así, y esa confusión es la raíz de la mitad de los problemas
+que verás. Terraform maneja <strong>tres</strong> representaciones de tu infraestructura:</p>
+
+<figure>
+<div class="scroll-x">
+<svg viewBox="0 0 620 330" width="620" role="img" aria-labelledby="diag1-title" style="font-family: ui-sans-serif, system-ui, sans-serif;">
+  <title id="diag1-title">Diagrama: configuración, state y realidad, y cómo plan y apply se mueven entre ellos</title>
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-soft)"/>
+    </marker>
+    <marker id="arw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+    </marker>
+  </defs>
+
+  <!-- Configuración -->
+  <rect x="30" y="50" width="180" height="70" rx="6" fill="var(--tf-bg)" stroke="var(--tf)" stroke-width="1.5"/>
+  <text x="120" y="80" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Configuración</text>
+  <text x="120" y="100" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">tus ficheros *.tf — lo que quieres</text>
+
+  <!-- Realidad -->
+  <rect x="410" y="50" width="180" height="70" rx="6" fill="var(--aws-bg)" stroke="var(--aws)" stroke-width="1.5"/>
+  <text x="500" y="80" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Realidad</text>
+  <text x="500" y="100" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">la API de AWS — lo que hay</text>
+
+  <!-- State -->
+  <rect x="220" y="225" width="180" height="70" rx="6" fill="var(--bg-sunk)" stroke="var(--ink-faint)" stroke-width="1.5"/>
+  <text x="310" y="255" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">State</text>
+  <text x="310" y="275" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">terraform.tfstate — lo que cree</text>
+
+  <!-- apply: config -> realidad -->
+  <line x1="214" y1="75" x2="404" y2="75" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#arw2)"/>
+  <text x="309" y="40" text-anchor="middle" font-size="12" font-weight="600" fill="var(--accent)">③ apply ejecuta el diff</text>
+  <text x="309" y="27" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">crea, modifica o destruye recursos</text>
+
+  <!-- diff: config <-> state -->
+  <line x1="138" y1="124" x2="248" y2="221" stroke="var(--ink-soft)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arw)" marker-start="url(#arw)"/>
+  <text x="128" y="176" text-anchor="end" font-size="12" font-weight="600" fill="var(--ink)">② el diff</text>
+  <text x="128" y="191" text-anchor="end" font-size="10.5" fill="var(--ink-faint)">esto es el plan</text>
+
+  <!-- refresh: realidad -> state -->
+  <line x1="482" y1="124" x2="372" y2="221" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#arw)"/>
+  <text x="494" y="170" font-size="12" font-weight="600" fill="var(--ink)">① refresh</text>
+  <text x="494" y="185" font-size="10.5" fill="var(--ink-faint)">pregunta a AWS por cada</text>
+  <text x="494" y="198" font-size="10.5" fill="var(--ink-faint)">recurso que ya conoce</text>
+</svg>
+</div>
+<figcaption>Un <code>terraform plan</code> hace ① y ②. Un <code>terraform apply</code> hace
+①, ②, ③ y luego reescribe el state con el resultado.</figcaption>
+</figure>
+
+<p>Esto explica cosas que de otro modo parecen magia negra:</p>
+
+<ul>
+  <li>Si borras un recurso <strong>a mano en la consola de AWS</strong>, el siguiente
+  <code>plan</code> lo detecta en el paso ① y te propone recrearlo. El state se ha
+  <em>desincronizado</em> de la realidad, y Terraform lo corrige.</li>
+  <li>Si borras el <strong>fichero de state</strong>, Terraform olvida que esos recursos
+  existen y te propone crearlos otra vez — aunque ya estén ahí. Por eso el state es el
+  activo más valioso de tu infraestructura, y por eso en la lección 02 lo sacaremos de tu
+  portátil a un bucket S3.</li>
+  <li>Si alguien modifica el recurso a mano (le cambia una etiqueta), el paso ① lo ve y el
+  paso ② te propone revertirlo. Eso se llama <strong>drift</strong>, y es la palabra que
+  te van a preguntar en una entrevista.</li>
+</ul>
+
+<div class="callout tf">
+  <span class="callout-title">Vocabulario que se usa de verdad</span>
+  <p><strong>Provider</strong>: un plugin que traduce tu HCL a llamadas de la API de un
+  servicio. <code>hashicorp/aws</code> es un binario que Terraform descarga y que sabe
+  hablar con AWS.<br>
+  <strong>Resource</strong>: una cosa que Terraform crea y cuya vida gestiona.<br>
+  <strong>Drift</strong>: la diferencia entre el state y la realidad.<br>
+  Todos estos entran en el <a href="../GLOSSARY.md">glosario</a>.</p>
+</div>
+
+<h2>Manos a la obra</h2>
+
+<ol class="steps">
+
+<li>
+<h3>Recupera tus credenciales y comprueba en qué cuenta estás</h3>
+<p>Ahora mismo no tienes sesión activa. Y antes de crear nada, la regla de oro:
+<strong>nunca ejecutes Terraform sin haber comprobado en qué cuenta AWS estás</strong>.</p>
+<pre><code>aws login --profile personal
+aws sts get-caller-identity --profile personal</code></pre>
+<p>Tienes que ver la cuenta <code>999999999999</code>. Si ves <code>111111111111</code>,
+estás en el perfil equivocado — esa es la cuenta <code>dara</code>.</p>
+<p>Ahora exporta el perfil para toda la sesión de terminal, para no repetir
+<code>--profile</code> ni escribirlo dentro del código:</p>
+<pre><code>export AWS_PROFILE=personal</code></pre>
+<div class="callout why">
+  <span class="callout-title">Por qué por variable de entorno y no en el .tf</span>
+  <p>Podrías escribir <code>profile = "personal"</code> dentro del bloque
+  <code>provider</code>. No lo hagas. Ese nombre de perfil solo existe en tu portátil: en
+  GitHub Actions, en el portátil de un compañero o en un servidor de CI no significa nada,
+  y el código deja de ser portable. <strong>La configuración describe la infraestructura;
+  las credenciales vienen del entorno.</strong> Esa separación es un criterio real de
+  revisión de código.</p>
+</div>
+</li>
+
+<li>
+<h3>Crea el proyecto</h3>
+<pre><code>cd ~/Dev/terraform
+mkdir -p projects/00-foundations
+cd projects/00-foundations</code></pre>
+</li>
+
+<li>
+<h3>Declara la versión de Terraform y del provider</h3>
+<p>Escribe este fichero. Sí, a mano — teclear HCL es parte del ejercicio.</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/versions.tf</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">terraform</b> {
+  <b class="at">required_version</b> = <b class="s">"&gt;= 1.9"</b>
+
+  <b class="k">required_providers</b> {
+    aws = {
+      <b class="at">source</b>  = <b class="s">"hashicorp/aws"</b>
+      <b class="at">version</b> = <b class="s">"~&gt; 6.0"</b>
+    }
+  }
+}
+
+<b class="k">provider</b> <b class="s">"aws"</b> {
+  <b class="at">region</b> = <b class="s">"us-east-1"</b>
+
+  <b class="c"># Se aplican automáticamente a TODO recurso que soporte etiquetas.</b>
+  <b class="k">default_tags</b> {
+    <b class="at">tags</b> = {
+      Project   = <b class="s">"terraform-course"</b>
+      Stack     = <b class="s">"00-foundations"</b>
+      ManagedBy = <b class="s">"terraform"</b>
+    }
+  }
+}</code></pre>
+</div>
+<div class="callout aws">
+  <span class="callout-title">Por qué default_tags importa más de lo que parece</span>
+  <p>La etiqueta <code>ManagedBy = "terraform"</code> te permite responder en cualquier
+  momento a la pregunta «¿qué hay en mi cuenta que <em>no</em> gestiona Terraform?». En una
+  cuenta real esa es la pregunta que separa una infraestructura sana de un vertedero.
+  También es como localizas recursos huérfanos que se te olvidó destruir — y por tanto,
+  como controlas la factura.</p>
+</div>
+<p><code>~&gt; 6.0</code> significa «cualquier 6.x, pero nunca 7.0». La versión mayor de un
+provider puede romper tu código sin avisar; esto te protege. Hoy la última es la
+<a href="https://registry.terraform.io/providers/hashicorp/aws/latest">6.61.0</a>.</p>
+</li>
+
+<li>
+<h3>Inicializa y mira lo que ha pasado</h3>
+<pre><code>terraform init</code></pre>
+<p>Ahora inspecciona lo que ha aparecido en el directorio. Esto no es curiosidad ociosa:
+saber qué es cada fichero es la mitad de entender Terraform.</p>
+<pre><code>ls -a
+du -sh .terraform
+cat .terraform.lock.hcl</code></pre>
+<table>
+  <thead><tr><th>Fichero</th><th>Qué es</th><th>¿A git?</th></tr></thead>
+  <tbody>
+    <tr><td><code>.terraform/</code></td><td>El binario del provider descargado (~600 MB). Caché local, recreable.</td><td><strong>No</strong></td></tr>
+    <tr><td><code>.terraform.lock.hcl</code></td><td>La versión <em>exacta</em> del provider y sus hashes. Garantiza que tú y tu CI usáis el mismo binario.</td><td><strong>Sí, siempre</strong></td></tr>
+  </tbody>
+</table>
+<p>El lock file es el equivalente de <code>package-lock.json</code>. La gente lo ignora en
+<code>.gitignore</code> por error constantemente, y luego su CI usa una versión distinta
+del provider que la suya y aparecen diffs fantasma.
+(<a href="https://developer.hashicorp.com/terraform/language/files/dependency-lock">docs</a>)</p>
+</li>
+
+<li>
+<h3>Escribe el presupuesto</h3>
+<p>Esto es lo que has venido a construir. Fíjate en <code>var.alert_email</code>: tu correo
+no se escribe en el código, porque este repo va a ser público.</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/budget.tf</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">variable</b> <b class="s">"alert_email"</b> {
+  <b class="at">description</b> = <b class="s">"Correo que recibe las alarmas de gasto."</b>
+  <b class="at">type</b>        = string
+}
+
+<b class="k">variable</b> <b class="s">"monthly_budget_usd"</b> {
+  <b class="at">description</b> = <b class="s">"Techo de gasto mensual en dólares."</b>
+  <b class="at">type</b>        = number
+  <b class="at">default</b>     = <b class="n">30</b>
+}
+
+<b class="k">resource</b> <b class="s">"aws_budgets_budget"</b> <b class="s">"monthly"</b> {
+  <b class="at">name</b>         = <b class="s">"curso-terraform-mensual"</b>
+  <b class="at">budget_type</b>  = <b class="s">"COST"</b>
+  <b class="at">time_unit</b>    = <b class="s">"MONTHLY"</b>
+  <b class="at">limit_amount</b> = <b class="k">tostring</b>(var.monthly_budget_usd)
+  <b class="at">limit_unit</b>   = <b class="s">"USD"</b>
+
+  <b class="c"># AVISO TEMPRANO: al 50% del gasto real ya consumido.</b>
+  <b class="k">notification</b> {
+    <b class="at">notification_type</b>          = <b class="s">"ACTUAL"</b>
+    <b class="at">comparison_operator</b>        = <b class="s">"GREATER_THAN"</b>
+    <b class="at">threshold</b>                  = <b class="n">50</b>
+    <b class="at">threshold_type</b>             = <b class="s">"PERCENTAGE"</b>
+    <b class="at">subscriber_email_addresses</b> = [var.alert_email]
+  }
+
+  <b class="c"># AVISO REAL: AWS proyecta que a fin de mes te pasarás del 100%.</b>
+  <b class="c"># Este es el que de verdad te salva: avisa ANTES de gastar.</b>
+  <b class="k">notification</b> {
+    <b class="at">notification_type</b>          = <b class="s">"FORECASTED"</b>
+    <b class="at">comparison_operator</b>        = <b class="s">"GREATER_THAN"</b>
+    <b class="at">threshold</b>                  = <b class="n">100</b>
+    <b class="at">threshold_type</b>             = <b class="s">"PERCENTAGE"</b>
+    <b class="at">subscriber_email_addresses</b> = [var.alert_email]
+  }
+}
+
+<b class="k">output</b> <b class="s">"budget_console_url"</b> {
+  <b class="at">description</b> = <b class="s">"Dónde ver el presupuesto en la consola de AWS."</b>
+  <b class="at">value</b>       = <b class="s">"https://console.aws.amazon.com/billing/home#/budgets"</b>
+}</code></pre>
+</div>
+<div class="callout why">
+  <span class="callout-title">ACTUAL vs FORECASTED</span>
+  <p>Una alarma sobre gasto <code>ACTUAL</code> te avisa cuando <em>ya</em> has gastado el
+  dinero: llega tarde por definición. <code>FORECASTED</code> usa la proyección de AWS a fin
+  de mes, así que un NAT Gateway olvidado un martes te avisa el martes, no el día 28. En una
+  cuenta de aprendizaje la alarma de proyección es la que importa. Es también la respuesta
+  que quieren oír si te preguntan por control de costes.</p>
+</div>
+<p>Ahora el fichero con tu correo, que <strong>no</strong> va a git:</p>
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/terraform.tfvars</span><span class="tag">nuevo · fuera de git</span></div>
+<pre><code>alert_email        = <b class="s">"tu-correo@example.com"</b>
+monthly_budget_usd = <b class="n">30</b></code></pre>
+</div>
+<p>Terraform carga <code>terraform.tfvars</code> automáticamente, sin pasar ningún flag.</p>
+</li>
+
+<li>
+<h3>Lee el plan antes de aplicarlo</h3>
+<pre><code>terraform plan</code></pre>
+<p>Antes de seguir, <strong>léelo de verdad</strong>. Busca estas cuatro cosas:</p>
+<ul>
+  <li>La línea de resumen: <code>Plan: 1 to add, 0 to change, 0 to destroy.</code></li>
+  <li>El símbolo <code>+</code> delante del recurso — significa «crear».</li>
+  <li>Los valores <code>(known after apply)</code>: cosas que AWS decide, no tú (ARNs, IDs).</li>
+  <li>Tus <code>default_tags</code>, que aparecen aunque no las escribieras en el recurso.</li>
+</ul>
+<div class="callout trap">
+  <span class="callout-title">El hábito que separa a un profesional</span>
+  <p>Leer el plan no es un trámite antes de teclear <code>yes</code>. En un equipo real el
+  plan es el <em>artefacto de revisión</em>: se pega en el pull request y un compañero lo
+  aprueba. Los símbolos que verás durante el curso son
+  <code>+</code> crear, <code>-</code> destruir, <code>~</code> modificar en sitio, y
+  <code>-/+</code> <strong>destruir y recrear</strong>. Ese último es el peligroso: si sale
+  al lado de tu base de datos, para y piensa.</p>
+</div>
+</li>
+
+<li>
+<h3>Aplica</h3>
+<pre><code>terraform apply</code></pre>
+<p>Terraform vuelve a calcular el plan, te lo enseña y te pide confirmación. Escribe
+<code>yes</code>. Debería tardar un par de segundos.</p>
+<p>Verifícalo desde fuera de Terraform — otro hábito que vale la pena coger:</p>
+<pre><code>aws budgets describe-budgets --account-id 999999999999 \
+  --query 'Budgets[].{Nombre:BudgetName,Limite:BudgetLimit.Amount}' --output table</code></pre>
+<div class="callout trap">
+  <span class="callout-title">Corrección — esto lo dije mal</span>
+  <p>Aquí escribí originalmente que AWS te enviaría un correo de confirmación de suscripción.
+  <strong>No cuentes con ello</strong>: con <code>subscriber_email_addresses</code> a secas,
+  AWS gestiona la suscripción internamente y el comportamiento no es observable desde tu
+  cuenta.</p>
+  <p>Peor aún: la alarma <code>FORECASTED</code> que acabas de crear
+  <strong>no puede dispararse</strong> hasta que tu cuenta acumule unas 5 semanas de historial
+  de uso (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html">AWS
+  Budgets — Best practices</a>). Está creada, y está inerte.</p>
+  <p>Las dos cosas se arreglan y se <em>prueban</em> en la
+  <a href="./0002-haz-que-la-alarma-suene.html">lección 02</a>. Si quieres el detalle completo
+  del servicio —tipos, límites, coste, cuándo no usarlo— está en
+  <a href="../reference/aws-budgets.html">reference/aws-budgets.html</a>.</p>
+</div>
+</li>
+
+<li>
+<h3>Abre el state y mira qué guarda</h3>
+<p>Este es el paso que casi nadie da, y el que más te va a servir.</p>
+<pre><code>ls -la terraform.tfstate
+cat terraform.tfstate | head -40</code></pre>
+<p>Fíjate en la estructura: un JSON con <code>"version"</code>, <code>"serial"</code>,
+<code>"lineage"</code> y una lista de <code>"resources"</code>. Cada recurso tiene su
+<strong>dirección</strong> (<code>aws_budgets_budget.monthly</code>) y sus
+<code>attributes</code> — <em>todos</em> los atributos, incluidos los que AWS rellenó.</p>
+<p>Compáralo con la vista que da Terraform:</p>
+<pre><code>terraform state list
+terraform state show aws_budgets_budget.monthly</code></pre>
+<div class="callout trap">
+  <span class="callout-title">El state guarda secretos en texto plano</span>
+  <p>Aquí solo hay un correo. Pero cuando en el proyecto 04 crees una base de datos RDS, la
+  <strong>contraseña quedará escrita en claro</strong> dentro de este JSON. Terraform no
+  cifra el state, y no hay opción para que lo haga.
+  (<a href="https://developer.hashicorp.com/terraform/language/state/sensitive-data">docs oficiales</a>)</p>
+  <p>De ahí salen dos reglas que no se negocian: <strong>el state nunca va a git</strong>, y
+  <strong>el state vive en un bucket S3 cifrado y con acceso restringido</strong>. Lo segundo
+  es la lección 02.</p>
+</div>
+<p>En la raíz del repositorio ya te he dejado el <code>.gitignore</code>. Ábrelo y comprueba que entiendes cada línea — esto es lo que impide que ese JSON acabe publicado en GitHub:</p>
+<div class="code">
+  <div class="code-label"><span>~/Dev/terraform/.gitignore</span><span class="tag">ya creado</span></div>
+<pre><code>.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+.terraform.tfstate.lock.info</code></pre>
+</div>
+<p>Nota lo que <em>no</em> está en esa lista: <code>.terraform.lock.hcl</code>. Ese sí va a git.</p>
+</li>
+
+<li>
+<h3>Entiende <code>destroy</code> sin ejecutarlo</h3>
+<p>El presupuesto se queda. Es lo único de todo el curso que no se destruye — cuesta cero y
+te protege. Pero quiero que veas qué haría <code>destroy</code>, sin hacerlo:</p>
+<pre><code>terraform plan -destroy</code></pre>
+<p>Sale <code>Plan: 0 to add, 0 to change, 1 to destroy.</code> y cada atributo precedido de
+<code>-</code>. Es un plan normal, solo que calculado contra un objetivo vacío.
+<strong>No ejecutes <code>terraform destroy</code>.</strong></p>
+</li>
+
+</ol>
+
+<h3>Checklist</h3>
+<ul class="checklist" data-key="l01-v1">
+  <li><input type="checkbox" id="c1"><label for="c1">Verifiqué con <code>sts get-caller-identity</code> que estoy en la cuenta 999999999999</label></li>
+  <li><input type="checkbox" id="c2"><label for="c2">El presupuesto aparece en la consola de AWS</label></li>
+  <li><input type="checkbox" id="c3"><label for="c3">Confirmé la suscripción de notificaciones desde mi correo</label></li>
+  <li><input type="checkbox" id="c4"><label for="c4">Abrí <code>terraform.tfstate</code> y localicé <code>serial</code>, <code>lineage</code> y <code>resources</code></label></li>
+  <li><input type="checkbox" id="c5"><label for="c5">El <code>.gitignore</code> excluye el state y los <code>.tfvars</code>, pero no el lock file</label></li>
+</ul>
+
+<h2>Comprueba que se te ha quedado</h2>
+
+<p class="small">Responde sin volver a subir. Fallar aquí es útil: es lo que hace que
+mañana lo recuerdes.</p>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Borras un recurso a mano desde la consola de AWS. ¿Qué ve el siguiente <code>terraform plan</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El refresh consulta AWS, descubre que el recurso ya no está, actualiza el state, y el diff contra tu configuración da «falta crearlo».">Que hay que volver a crear ese recurso</button></li>
+    <li><button data-correct="false" data-why="Un plan sin cambios ocurriría si la realidad coincidiera con tu configuración, y aquí no coincide.">Que no hay ningún cambio pendiente</button></li>
+    <li><button data-correct="false" data-why="Terraform no falla por drift; lo detecta y te propone corregirlo. Fallar sería inútil.">Que el state está roto y falla</button></li>
+    <li><button data-correct="false" data-why="Terraform nunca borra tu código. El código es la fuente de la verdad, no el destino.">Que hay que borrar ese código</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">De estos cuatro ficheros, ¿cuál es el único que <strong>sí</strong> debe estar en git?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Fija la versión exacta del provider y sus hashes, para que tu CI use el mismo binario que tú. Es el package-lock.json de Terraform.">El fichero <code>.terraform.lock.hcl</code></button></li>
+    <li><button data-correct="false" data-why="Contiene atributos reales de tu infraestructura, incluidos secretos en texto plano. Va a S3 cifrado, no a git.">El fichero <code>terraform.tfstate</code></button></li>
+    <li><button data-correct="false" data-why="Contiene valores propios de tu entorno, como tu correo. Se publica una versión .example, nunca el real.">El fichero <code>terraform.tfvars</code></button></li>
+    <li><button data-correct="false" data-why="Es caché local de binarios descargados: cientos de megas, y se recrea con terraform init.">El directorio <code>.terraform/</code></button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Quieres que te avisen antes de gastar de más, no después. ¿Qué alarma configuras?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Usa la proyección de AWS a fin de mes, así que un recurso olvidado dispara el aviso el mismo día, no cuando el dinero ya se fue.">Una del tipo <code>FORECASTED</code> al 100%</button></li>
+    <li><button data-correct="false" data-why="Avisa cuando el dinero ya está gastado. Sirve como red secundaria, pero llega tarde por definición.">Una del tipo <code>ACTUAL</code> al 100%</button></li>
+    <li><button data-correct="false" data-why="El tipo de presupuesto mide unidades consumidas, no dinero. No responde a la pregunta del gasto.">Una del tipo <code>USAGE</code> al 100%</button></li>
+    <li><button data-correct="false" data-why="Un presupuesto de AWS no corta nada por sí solo: notifica. Frenar el gasto requiere automatización aparte.">Una que corte todos los recursos</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<details class="recall">
+  <summary>Explícalo con tus palabras antes de abrir
+    <span class="recall-hint">Di en voz alta, sin mirar: ¿por qué el state es el activo más valioso de una infraestructura Terraform?</span>
+  </summary>
+  <p>Porque el state es <strong>el único sitio donde vive la correspondencia entre tu código
+  y los recursos reales de AWS</strong>. Tu código dice «quiero un presupuesto llamado
+  <code>monthly</code>»; AWS tiene un presupuesto con un identificador. Solo el state sabe
+  que son el mismo.</p>
+  <p>Si lo pierdes, Terraform no puede saber qué recursos ya gestiona. Vuelve a proponer
+  crearlo todo, y el <code>apply</code> falla con «ya existe» — o peor, crea duplicados.
+  Recuperarse de eso significa <code>terraform import</code> recurso por recurso, a mano.</p>
+  <p>De ahí salen las tres propiedades que le exigimos: <strong>durable</strong> (no en tu
+  portátil), <strong>bloqueable</strong> (que dos personas no lo escriban a la vez) y
+  <strong>versionado</strong> (poder volver a la versión de ayer). Esas tres son
+  exactamente lo que resuelve el backend S3 de la lección 02.</p>
+</details>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://developer.hashicorp.com/terraform/language/state">Terraform Language —
+  <strong>State</strong></a>, documentación oficial de HashiCorp. Léete la página principal
+  y «Purpose of Terraform State» (unos 10 minutos). Es la explicación de primera mano de por
+  qué el state existe, escrita por quienes decidieron que existiera — y contesta la objeción
+  obvia de «¿por qué no consultar AWS directamente cada vez?».</p>
+</div>
+
+<div class="next" id="siguiente">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 03 — Saca el state de tu portátil.</strong> Creas el bucket S3 con
+  cifrado y versionado, migras el state local al remoto sin perderlo, y activas el bloqueo
+  nativo con <code>use_lockfile</code>. De paso creas el usuario IAM que sustituye a root, y
+  cierras la puerta de root para siempre. El problema del huevo y la gallina —«¿quién crea
+  el bucket donde vive el state?»— tiene una respuesta concreta y la vas a ver.</p>
+  <div class="nav-links">
+    <a href="./0002-haz-que-la-alarma-suene.html">Lección 02 →</a>
+    <a href="../reference/aws-budgets.html">Referencia: AWS Budgets</a>
+    <a href="../ROADMAP.md">Roadmap completo</a>
+    <a href="../MISSION.md">La misión</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../RESOURCES.md">Recursos</a>
+  </div>
+  <div class="ask">
+    <b>Soy tu profesor, no un PDF.</b> Si algo no ha encajado —por qué
+    <code>known after apply</code>, qué es <code>lineage</code>, qué pasa si dos personas
+    hacen <code>apply</code> a la vez, o cualquier error que te haya salido— pregúntamelo en
+    el chat. Pegar el mensaje de error entero es la forma más rápida.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
