@@ -134,7 +134,13 @@ data "aws_region" "actual" {}
 
 # referencia (lleva "data." delante):
 data.aws_caller_identity.yo.account_id</code></pre>
-    <p>No crea nada. Lee lo que ya existe, dentro o fuera de tu Terraform.</p>
+    <p>No crea nada, no aparece en el <code>destroy</code>, y se resuelve durante el
+    <code>plan</code>. Lee lo que ya existe, dentro o fuera de tu Terraform.</p>
+    <p><strong>Ojo:</strong> no todos consultan AWS.
+    <code>aws_iam_policy_document</code> no llama a ninguna API: es una
+    <em>función local</em> que convierte HCL en JSON, disfrazada de data source porque el
+    lenguaje no tenía otra forma de expresarlo. Lo mismo pasa con
+    <code>archive_file</code>. Si un data source no necesita credenciales, es de estos.</p>
   </div>
 
   <div class="ref-card">
@@ -344,6 +350,66 @@ count.index             # count</code></pre>
     cambie por entorno, se pasa por línea de comandos:
     <code>terraform init -backend-config=prod.hcl</code>.</p>
   </div>
+</div>
+
+<h2>Cuando no sabes qué valores acepta un argumento</h2>
+
+<p>El autocompletado del editor sabe que <code>budget_type</code> es un <code>string</code>
+obligatorio, pero <strong>no sabe</strong> que solo acepta seis valores. No es un fallo de la
+extensión: el esquema que el provider le entrega solo lleva el tipo, nunca la lista de valores
+válidos. Esa lista vive en código, dentro del binario del provider. De ahí que haya que
+sacarla de otro sitio.</p>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>1. Escribe mal a propósito</h3>
+    <p>El truco más rápido, y no necesita credenciales ni tocar AWS:</p>
+<pre><code>budget_type = "MONEY"   # inventado
+
+terraform validate</code></pre>
+<pre><code>Error: expected budget_type to be one of
+["USAGE" "COST" "RI_UTILIZATION" "RI_COVERAGE"
+ "SAVINGS_PLANS_UTILIZATION"
+ "SAVINGS_PLANS_COVERAGE"], got MONEY</code></pre>
+    <p>El provider te enumera los valores válidos en el propio error. Funciona con cualquier
+    argumento que tenga lista cerrada. <strong>Es tu autocompletado real.</strong></p>
+  </div>
+
+  <div class="ref-card">
+    <h3>2. Pregunta al esquema</h3>
+    <p>Para saber <em>qué argumentos existen</em>, si son obligatorios y de qué tipo, sin
+    abrir el navegador:</p>
+<pre><code>terraform providers schema -json \
+  | jq '.provider_schemas
+        | .[].resource_schemas
+        | .aws_budgets_budget.block.attributes'</code></pre>
+    <p>Es la verdad absoluta sobre tu versión exacta del provider. Lo que no trae —nunca— son
+    los valores permitidos.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>3. La documentación en crudo</h3>
+    <p>La web del Registry es una SPA y se lee mal. El mismo contenido, en texto:</p>
+<pre><code>https://raw.githubusercontent.com/
+  hashicorp/terraform-provider-aws/main/
+  website/docs/r/RECURSO.html.markdown</code></pre>
+    <p>Sustituye <code>RECURSO</code> sin el prefijo <code>aws_</code>:
+    <code>budgets_budget</code>, <code>iam_user</code>. Cámbialo por <code>d/</code> en vez de
+    <code>r/</code> para los data sources.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>4. El nombre de la acción IAM</h3>
+    <p>Para <code>actions = [...]</code> no hay esquema que valga: son las operaciones de la
+    API de cada servicio. La lista canónica, servicio a servicio:</p>
+<pre><code>https://docs.aws.amazon.com/service-authorization/
+  latest/reference/reference_policy_actions-resources
+  -contextkeys.html</code></pre>
+    <p>Trae además qué ARN admite cada acción y qué claves de condición. Es la única fuente
+    que no se inventa nada.</p>
+  </div>
+
 </div>
 
 <h2>Cuando algo va mal</h2>
