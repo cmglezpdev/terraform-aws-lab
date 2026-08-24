@@ -1,0 +1,73 @@
+# Terraform + AWS: Recursos
+
+## Knowledge
+
+### Terraform — fuentes primarias
+
+- [Terraform Language Documentation (HashiCorp)](https://developer.hashicorp.com/terraform/language)
+  La referencia canónica del lenguaje HCL: bloques, expresiones, funciones, meta-argumentos.
+  Úsala para: cualquier duda de sintaxis. Es la única fuente que nunca está desactualizada.
+- [Terraform Style Guide (HashiCorp)](https://developer.hashicorp.com/terraform/language/style)
+  Convenciones oficiales de nombres, orden de bloques y estructura de ficheros.
+  Úsala para: escribir código que parezca escrito por un profesional, no por un tutorial.
+- [Standard Module Structure](https://developer.hashicorp.com/terraform/language/modules/develop/structure)
+  Cómo se estructura un módulo de verdad (`main.tf`, `variables.tf`, `outputs.tf`, `modules/`).
+  Úsala para: los proyectos 01 en adelante, cuando empecemos a modularizar.
+- [Backend Type: s3](https://developer.hashicorp.com/terraform/language/backend/s3)
+  Configuración del backend remoto. **Ojo**: `use_lockfile = true` es lo actual; el locking
+  con DynamoDB está deprecado. Úsala para: el proyecto 00.
+- [State: Locking](https://developer.hashicorp.com/terraform/language/state/locking)
+  Qué es un lock, por qué existe, y `terraform force-unlock` cuando algo se queda colgado.
+- [Terraform AWS Provider — Registry Docs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+  Documentación de cada `resource` y `data source` de AWS, con ejemplos.
+  Úsala para: **siempre**. Antes de escribir cualquier recurso AWS, busca aquí sus argumentos.
+
+### Terraform — libro y práctica
+
+- [Libro: _Terraform: Up & Running_ (3ª ed.), Yevgeniy Brikman — O'Reilly](https://www.terraformupandrunning.com/)
+  El libro de referencia del ecosistema, escrito por el cofundador de Gruntwork. Cubre state,
+  módulos, secretos, testing y multi-provider con opinión fuerte y justificada.
+  Úsalo para: entender el *porqué* de los patrones, no solo el cómo. Capítulos 3 (state) y
+  4 (módulos) son los que más te van a servir en entrevistas.
+- [terraform-aws-modules (GitHub)](https://github.com/terraform-aws-modules)
+  Los módulos comunitarios de facto para VPC, EKS, RDS, ALB. Millones de descargas.
+  Úsalos para: los proyectos 04 y 06. Y **léelos por dentro** — son el mejor ejemplo de
+  Terraform avanzado que vas a encontrar gratis.
+
+### AWS
+
+- [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)
+  Los cinco (ahora seis) pilares con los que AWS juzga una arquitectura.
+  Úsalo para: justificar decisiones de diseño en entrevistas. El vocabulario de aquí es
+  literalmente el que usan los entrevistadores.
+- [AWS Architecture Center](https://aws.amazon.com/architecture/)
+  Arquitecturas de referencia por caso de uso, con diagramas oficiales.
+  Úsalo para: contrastar tu diseño con el que AWS recomienda antes de construirlo.
+- [AWS Pricing Calculator](https://calculator.aws/)
+  Úsalo para: estimar el coste **antes** de `apply` en los proyectos 04 y 06.
+- [Amazon Bedrock — Model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
+  Cómo habilitar modelos. Los de Anthropic exigen un formulario de primer uso desde consola.
+  Úsalo para: el proyecto 03.
+- [AWS Free Tier — cambios de julio 2025](https://aws.amazon.com/blogs/aws/aws-free-tier-update-new-customers-can-get-started-and-explore-aws-with-up-to-200-in-credits/)
+  Las cuentas creadas desde el 15/07/2025 tienen un modelo distinto (créditos + 6 meses).
+  Úsalo para: saber en qué régimen está tu cuenta antes de asumir que algo es gratis.
+
+## Wisdom (Comunidades)
+
+- [r/Terraform](https://reddit.com/r/Terraform)
+  Alto ratio de señal. Gente resolviendo problemas reales de state, módulos y CI.
+  Úsala para: enseñar tu estructura de proyecto y que te la critiquen antes de una entrevista.
+- [HashiCorp Discuss — Terraform](https://discuss.hashicorp.com/c/terraform-core/27)
+  Foro oficial. Responden ingenieros de HashiCorp.
+  Úsalo para: dudas de comportamiento del core (state, providers, plan diffs raros).
+- [r/aws](https://reddit.com/r/aws)
+  Úsala para: preguntas de diseño y de coste. La gente es brutalmente honesta sobre facturas.
+- [Stack Overflow — tag `terraform`](https://stackoverflow.com/questions/tagged/terraform)
+  Úsalo para: errores concretos con mensaje literal. Busca el mensaje entre comillas.
+
+## Gaps
+
+- Falta un recurso de calidad sobre **testing de Terraform** (Terratest, `terraform test`).
+  Buscarlo cuando lleguemos al proyecto 07.
+- Falta una fuente fiable sobre **patrones de red multi-región** en AWS más allá del marketing.
+  Buscarlo antes del proyecto 05.
