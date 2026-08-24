@@ -1,0 +1,33 @@
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Valores locales: pueden contener correos, IDs de cuenta o secretos.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Planes guardados: contienen valores reales del state.
+*.tfplan
+*.plan
+
+# --- Node / TypeScript ---
+node_modules/
+dist/
+build/
+*.zip
+*.tsbuildinfo
+
+# --- Sistema ---
+.DS_Store
+.env
+.env.*
+# NOTA: .terraform.lock.hcl NO está ignorado a propósito. Debe versionarse.
