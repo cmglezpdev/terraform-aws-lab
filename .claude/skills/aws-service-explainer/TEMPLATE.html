@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon {SERVICIO}</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>{Nombre completo del servicio}</h1>
+  <p class="deck">{Una frase. Qué problema resuelve, sin marketing.}</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>{Mensajería / Cómputo / Red / …}</dd></div>
+    <div><dt>Ámbito</dt><dd>{Regional o global}</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost free|usage|hour">{gratis|por uso|por hora}</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>{Sí, no cobra en reposo / No, cobra 0,0X USD/h}</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_{recurso}</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/NN-x">proyecto NN</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>{Definición operativa, no comercial.}</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>{Analogía concreta, y dónde se rompe la analogía.}</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>{Caso 1}</h3><p>{Situación concreta, no abstracción.}</p></div>
+  <!-- 3-5 tarjetas -->
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>{Por qué hay más de uno.}</p>
+<table>
+  <thead><tr><th>Tipo</th><th>Qué lo distingue</th><th>Cuándo</th><th>Coste</th></tr></thead>
+  <tbody><tr><td><code>{tipo}</code></td><td>{…}</td><td>{…}</td><td>{…}</td></tr></tbody>
+</table>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>{Una regla accionable para elegir sin pensarlo dos veces.}</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+<p>{Garantías: entrega, orden, durabilidad, latencia, sincronía. Solo el modelo mental
+mínimo para no cometer errores.}</p>
+
+<h2>Cuánto cuesta</h2>
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>{…}</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+  </tbody>
+</table>
+<p class="cost-stamp">Precios de la región {us-east-1}, verificados el {AAAA-MM-DD} en
+<a href="{url}">{fuente}</a>. Cámbialos si han pasado meses.</p>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p>{El coste oculto real de este servicio.}</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody><tr><td>{…}</td><td><code>{…}</code></td><td>{Sí, por ticket / No}</td></tr></tbody>
+</table>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul><li>{…}</li></ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul><li>{…}</li></ul></div>
+</div>
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody><tr><td>{…}</td><td>{…}</td><td>{…}</td></tr></tbody>
+</table>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>ejemplo mínimo</span><span class="tag">hcl</span></div>
+<pre><code>{recurso principal con argumentos obligatorios}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas</span>
+  <p>{Lo que rompe el apply o el destroy con este recurso.}</p>
+</div>
+
+<h2>Comprueba</h2>
+<!-- 3-4 .quiz. Al menos una de coste y una de elegir variante.
+     Todas las opciones con el MISMO número de palabras. -->
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de N</p>
+  <p class="quiz-q">{Escenario que exige criterio, no memoria.}</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="{Por qué sí.}">{Opción de N palabras}</button></li>
+    <li><button data-correct="false" data-why="{Por qué no.}">{Opción de N palabras}</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/{lección donde aparece}">Lección</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="{doc oficial}">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> {Invitación concreta ligada a este servicio.}
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
