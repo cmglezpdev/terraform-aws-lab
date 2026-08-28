@@ -59,6 +59,7 @@ data "aws_iam_policy_document" "terraform_course" {
       "sns:*",
       "iam:*",
       "lambda:*",
+      "dynamodb:*",
       "logs:*",
       "sts:GetCallerIdentity"
     ]
