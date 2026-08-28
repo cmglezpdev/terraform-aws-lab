@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "prebuild": "rm -rf dist",
-    "build": "esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --outfile=dist/index.mjs",
+    "build": "esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/index.mjs",
     "test": "node --test 'src/**/*.test.ts'",
     "test:watch": "node --test --watch 'src/**/*.test.ts'"
   },
@@ -16,6 +16,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1120.0",
     "zod": "^4.4.3"
   }
 }
