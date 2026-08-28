@@ -62,6 +62,13 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Invocación síncrona** / **asíncrona** / **event source mapping** — introducidas en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
 - **`local`** — introducido en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
 - **Dependencia explícita** (`depends_on`) — introducida en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **Adaptador** / **Capa de dominio** / **Caso de uso** — introducidos en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Tipo marcado** (*branded type*) — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Parse, don't validate** — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Tree shaking** — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Sourcemap** — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Layer** (Lambda) — introducida en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Ejecución duradera** / **Capacity provider** — introducidos en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
 
 ## AWS
 
@@ -143,6 +150,14 @@ Referencias completas por servicio en [`reference/`](./reference/README.md).
   identidad que ejecuta `terraform apply` la llamamos siempre **usuario `terraform`**.
 - **«Build»** es transformar TypeScript en el `.js` empaquetado, y ocurre siempre **fuera**
   de Terraform. Cuando digamos «desplegar» nos referimos solo al `apply`.
+- **«Artefacto»** es el `.zip` que Lambda ejecuta, no tu repositorio. La diferencia importa:
+  el repositorio tiene tests, sourcemaps y `node_modules`; el artefacto tiene un fichero.
+- **«Bundle»** es el `dist/index.mjs` que produce esbuild, con las dependencias dentro. No
+  confundir con el `.zip` (el artefacto), que es lo que sube a AWS.
+- **«Dominio»** significa siempre la capa de reglas de negocio del código de una Lambda, nunca
+  un nombre DNS. Para lo segundo diremos **dominio DNS**, con las dos palabras.
+- **«Test»** sin apellido significa test unitario ejecutado con `node --test`, sin AWS. Probar
+  contra AWS real lo llamamos siempre **verificar** o **test de integración**.
 - **«Perfil»** es un perfil de la AWS CLI en `~/.aws/config`. Desde la lección 04,
   `personal` es la identidad de trabajo (usuario IAM `terraform`) y `personal-root` es la
   vía de escape. No confundir con *instance profile*, que es otra cosa de IAM.

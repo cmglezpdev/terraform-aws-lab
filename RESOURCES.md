@@ -77,6 +77,35 @@
   Las cuentas creadas desde el 15/07/2025 tienen un modelo distinto (créditos + 6 meses).
   Úsalo para: saber en qué régimen está tu cuenta antes de asumir que algo es gratis.
 
+### Código de la Lambda: TypeScript, empaquetado y tests
+
+- [Code best practices for TypeScript Lambda functions (AWS)](https://docs.aws.amazon.com/lambda/latest/dg/typescript-handler.html#typescript-best-practices)
+  Cuatro viñetas, y la primera lo dice todo: *«Separate the Lambda handler from your core logic.
+  This allows you to make a more unit-testable function.»* Es la fuente que justifica la
+  arquitectura en capas del proyecto 01 sin recurrir a ningún blog de DDD.
+  Úsala para: defender en una entrevista por qué organizas así una Lambda.
+- [Using the SDK for JavaScript v3 in your handler (AWS)](https://docs.aws.amazon.com/lambda/latest/dg/typescript-handler.html#typescript-example-sdk-usage)
+  Dice por qué empaquetar el SDK aunque venga en el runtime: la versión menor la elige AWS y
+  la actualiza cuando quiere. Úsala para: los proyectos 01, 02 y 03.
+- [Lambda quotas (AWS)](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)
+  Los números duros: 50 MB de zip por la API, 250 MB descomprimido incluyendo layers, 5 layers
+  por función, 6 MB de payload síncrono. Úsala para: comprobar antes de afirmar.
+- [Node.js test runner (Node.js docs)](https://nodejs.org/api/test.html)
+  `node:test`, `mock`, `--watch` y el glob de ficheros. Cero dependencias.
+  Úsala para: los tests de todos los proyectos con código propio.
+- [TypeScript en Node.js — type stripping (Node.js docs)](https://nodejs.org/api/typescript.html)
+  Qué sintaxis se puede borrar y cuál no. Explica el `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` de las
+  *parameter properties*, los `enum` y los `namespace`.
+- [Zod — documentación oficial](https://zod.dev/)
+  Esquemas, `safeParse`, `.brand()`, y [Zod Mini](https://zod.dev/packages/mini) con su API de
+  funciones sueltas para *tree shaking*. Úsala para: validar en la frontera de cualquier Lambda.
+- [Lambda durable functions (AWS)](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html)
+  Checkpoint y replay, *steps* y *waits*, y la comparación honesta con Step Functions.
+  Úsala para: el proyecto 03, donde encadenar llamadas a un modelo sí lo justifica.
+- [Lambda Managed Instances (AWS)](https://docs.aws.amazon.com/lambda/latest/dg/lambda-managed-instances.html)
+  Qué es un *capacity provider*, el +15% de gestión, y la tabla de diferencias con Lambda por
+  defecto. Lo importante para una entrevista es la multi-concurrencia por entorno.
+
 ## Wisdom (Comunidades)
 
 - [r/Terraform](https://reddit.com/r/Terraform)
@@ -93,6 +122,7 @@
 ## Gaps
 
 - Falta un recurso de calidad sobre **testing de Terraform** (Terratest, `terraform test`).
-  Buscarlo cuando lleguemos al proyecto 07.
+  Buscarlo cuando lleguemos al proyecto 07. Ojo: los tests de la lección 06 son de *tu código*,
+  no de la infraestructura — son dos disciplinas distintas y no hay que mezclarlas.
 - Falta una fuente fiable sobre **patrones de red multi-región** en AWS más allá del marketing.
   Buscarlo antes del proyecto 05.

@@ -9,6 +9,12 @@ lecciones —que se leen una vez—, esto es lo que vuelves a abrir seis meses d
 |---|---|
 | [terraform-cli.html](./terraform-cli.html) | Comandos, símbolos del plan, bloques del lenguaje, meta-argumentos, backend S3, y qué hacer cuando algo falla |
 
+## Cadena de herramientas
+
+| Documento | Qué contiene |
+|---|---|
+| [typescript-lambda.html](./typescript-lambda.html) | Las tres capas y la pregunta que las decide, *parse don't validate*, tamaños medidos del artefacto, dónde meter una dependencia (bundle / layer / runtime), tests con `node --test` sin dependencias, y qué prueba cada nivel |
+
 ## Servicios AWS
 
 Un fichero por servicio. Cada uno responde las mismas ocho preguntas: qué es, para qué se
@@ -22,6 +28,9 @@ usarlo, y cómo se escribe en Terraform. Todos terminan con preguntas de comprob
 | [Amazon S3](./aws-s3.html) | Por uso, cero en reposo | 00, 02, 05, 07 |
 | [AWS IAM](./aws-iam.html) | Gratis, siempre | 00 y todos los demás |
 | [AWS Lambda](./aws-lambda.html) | Por uso, cero en reposo | 01, 02, 03 |
+
+La ficha de Lambda incluye además [las dos capacidades de *Custom settings*](./aws-lambda.html#capacidades-2026)
+—*durable execution* y *EC2 capacity provider*— y por qué ninguna encaja en este curso.
 
 _Pendientes: API Gateway, DynamoDB, SQS, EventBridge, VPC, ALB, RDS, CloudFront,
 Bedrock, EKS._

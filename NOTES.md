@@ -155,6 +155,75 @@ correcto igualmente— pero si algún día instala la 26 en local, el target sig
   *es* el aprendizaje y es lo que le separa en una entrevista — pero **siempre acompañado de
   una herramienta concreta**, nunca como consuelo suelto.
 
+## Lección 06 — el código de la Lambda (2026-08-25, LR-0011)
+
+Frenó el roadmap por su cuenta: *«solo tengo una función demasiado trivial»*. Primera vez que
+rechaza avanzar por sentir que el ejemplo es de juguete — hay que atenderlo, no aplazarlo.
+
+- **La frase de AWS que ordena todo** y es vocabulario compartido desde hoy:
+  *«Separate the Lambda handler from your core logic. This allows you to make a more
+  unit-testable function.»* Leída al revés es una prueba de diagnóstico: **si para probar una
+  función necesitas AWS, la función sabe demasiado sobre AWS.** Y su corolario: **la
+  testabilidad no es consecuencia de las capas, es su definición operativa.**
+- **Excepción razonada a LR-0005:** la lección dura 45 min en vez de 40 y no se partió, porque
+  separar arquitectura / dependencia / tests convertiría una regla en tres manías de estilo. La
+  lección dice dónde parar si va justo (fin del paso 3). Si vuelve a pasar, mismo criterio: se
+  parte por temas, no por minutos, y se dice siempre.
+- **Honestidad sobre el DDD:** `application/` tiene seis líneas y hoy NO se justifica. Se dijo
+  con esas palabras y se fijó fecha: la lección 07 o se borra. Precedente — cuando se introduce
+  una estructura antes de que exista su motivo, hay que decir cuándo se justificará y qué pasa
+  si no lo hace.
+- **Bug real suyo descubierto de paso:** el sourcemap viaja dentro del `.zip` porque
+  `archive_file` usa `source_dir`. Con zod son 985 857 B de `.map` frente a 327 893 B de bundle
+  — el 75% del paquete. Arreglado con `source_file`, verificado con Terraform 1.15.8: el zip
+  conserva `index.mjs` en la raíz (usa el *basename*) y baja a 65 437 B.
+- **Tamaños medidos** (esbuild 0.28.2, `--minify`, ESM, node24): sin deps 563 B → con `zod`
+  327 893 B (×582). `zod/mini` 8 944 B pero API de funciones sueltas, sin `.max()` encadenado.
+  `@aws-sdk/client-dynamodb` bundleado: 504 422 B.
+- **Tests con cero dependencias:** Node 24 ejecuta TS directamente.
+  `node --test 'src/**/*.test.ts'` — comillas simples, el glob lo expande Node.
+  Hace falta `allowImportingTsExtensions: true` (solo válido con `noEmit`).
+- **Trampa nueva que hay que recordar al escribir TypeScript de ahora en adelante:** Node borra
+  tipos, no compila. `constructor(readonly x: string)` revienta con
+  `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not supported in
+  strip-only mode`. Igual con `enum` y `namespace`.
+- **zod valida pero no normaliza.** `new URL().toString()` añadía la barra final;
+  `z.httpUrl()` no, hace falta `normalize: true`. Patrón general para repetirle: **al sustituir
+  código propio por una librería, lo que se rompe no es lo que la librería hace peor, sino lo
+  que tu código hacía sin que tú lo supieras.**
+- **La captura que trajo** eran *durable execution* y *EC2 capacity provider* (re:Invent 2025).
+  Ninguna aplica: managed instances no escala a cero y rompe la regla de coste. Ficha en
+  `reference/aws-lambda.html#capacidades-2026`. **Volver a durable execution en el proyecto 03.**
+- **Apuesta falsable pendiente de resolver:** se le predijo que el ×134 del zip apenas movería
+  el `Init Duration`. Le pedí las dos líneas `REPORT` (lección 05 y 06). **Si la apuesta falla,
+  decírselo y pasar a `zod/mini`** — el valor está en cumplir el trato salga como salga.
+- **CORRECCIÓN SUYA (2026-08-27), y tenía razón:** zod no puede vivir en `domain/`. La regla que
+  yo di («prohibido el SDK de AWS, tipos de eventos, `process.env`») era demasiado corta. La
+  buena es **nada que aparezca en el `package.json`**; globales del lenguaje (`URL`, `Date`,
+  `Intl`, `node:crypto`) sí. El reparto correcto: **la regla** en `domain/` como dato exportado,
+  **la forma del payload** en `application/` con zod, **el mecanismo** donde esté la librería.
+  Prueba: cambiar zod por Valibot no debe tocar `domain/`.
+- **Heurística nueva que salió de ahí y hay que reutilizar:** *cuando un caso de prueba no sabe a
+  qué fichero pertenece, la frontera está mal puesta*. Al mover el esquema, los tests se
+  repartieron solos y la firma del dominio pasó de `unknown` a `string`.
+- **Corrección a mí mismo sobre layers:** fui más tajante de lo que la doc respalda. AWS da cinco
+  motivos legítimos (incluido **fijar la versión del SDK embebido**) y solo desaconseja layers
+  explícitamente para **Go y Rust**, por el coste de cargar assemblies en el *Init*. Para JS es
+  un intercambio, no un error. No repetir la versión absolutista.
+- **Datos para «¿y cuando tenga muchas librerías?»** (medido 2026-08-27): siete dependencias
+  típicas de una API dan `node_modules` de 58 MB / 10 218 ficheros, bundle de 1 076 KB y zip de
+  286 KB — el **0,6%** del límite de 50 MB. esbuild reduce 54×. **Cabe Express/NestJS entero en
+  una Lambda**: la restricción no es el tamaño, es el modelo de ejecución. Vigilar el *Init*.
+- **Granularidad de funciones**: tabla de intercambios en
+  `reference/typescript-lambda.html#cuantas-lambdas`. Heurística: **agrupa por permisos, no por
+  entidad** — el eje de IAM es el único que no se compensa después. Se desarrolla en la lección
+  08 con API Gateway y el `for_each` sobre un mapa de funciones.
+- **Marco que puso él y hay que respetar:** *«no es un curso de Lambda, es un curso de Terraform
+  aplicado a AWS»*. Cuando pregunte por AWS puro: respuesta corta en el chat, material duro a la
+  ficha de referencia, y **no inventar una lección nueva** salvo que él la pida.
+- **Renumeración:** DynamoDB pasa a ser la lección 07 y API Gateway la 08. Anotado en el
+  ROADMAP, en la lección 05 (con nota fechada al pie) y en el README del proyecto 01.
+
 ## Ideas para futuras lecciones
 
 - El `plan` como herramienta de lectura: enseñarle a leer un diff de 200 líneas.
@@ -168,8 +237,9 @@ correcto igualmente— pero si algún día instala la 26 en local, el target sig
 - **Tres cosas de Lambda quedan ofrecidas al pie de `reference/aws-lambda.html`** y no se han
   enseñado: elegir la memoria midiendo (Power Tuning), `layers`, y `versions`/`aliases` para
   despliegues canarios. Ninguna hace falta para el proyecto 01.
-- **Tests del código de las Lambdas.** La lección 05 admite en «esto no lo demuestra» que
-  probar a mano no es probar. Encaja en el proyecto 07, junto a CI.
+- ~~**Tests del código de las Lambdas.**~~ — **hecho** en la lección 06 con `node --test`. Lo
+  que sigue pendiente es **ejecutarlos automáticamente** (CI) y los tests de integración contra
+  AWS real, ambos en el proyecto 07.
 - **MFA para el usuario `terraform`**: no se puede crear desde Terraform (hace falta escanear
   un QR). Queda pendiente y la lección 04 lo dice en «esto no lo demuestra».
 - **Activar el acceso de IAM a la consola de facturación** (tarea de root). Sin ello el

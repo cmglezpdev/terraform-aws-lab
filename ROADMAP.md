@@ -50,5 +50,9 @@ pago por uso y con tu volumen es prácticamente cero.
 | 03 | [Saca el state de tu portátil](./lessons/0003-saca-el-state-de-tu-portatil.html) | 00 | [S3](./reference/aws-s3.html) |
 | 04 | [Deja de ser root](./lessons/0004-deja-de-ser-root.html) | 00 | [IAM](./reference/aws-iam.html) |
 | 05 | [Tu código, ejecutándose en AWS](./lessons/0005-tu-codigo-en-aws.html) | 01 | [Lambda](./reference/aws-lambda.html), CloudWatch Logs |
-| 06 | _La memoria del acortador_ (pendiente) | 01 | DynamoDB |
-| 07 | _La puerta pública_ (pendiente) | 01 | API Gateway HTTP |
+| 06 | [El zip no es tu repositorio](./lessons/0006-el-zip-no-es-tu-repositorio.html) | 01 | [Lambda](./reference/aws-lambda.html#capacidades-2026) · [TypeScript en Lambda](./reference/typescript-lambda.html) |
+| 07 | _La memoria del acortador_ (pendiente) | 01 | DynamoDB |
+| 08 | _La puerta pública_ (pendiente) | 01 | API Gateway HTTP |
+
+La lección 06 se insertó el 2026-08-25, a petición suya, entre el cerebro y la memoria: capas,
+una dependencia real (`zod`) y tests. La memoria y la puerta corren un número cada una.

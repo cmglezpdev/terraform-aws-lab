@@ -9,8 +9,9 @@ verifica por su cuenta.
 | Pieza | Qué hace | Servicios | Lección |
 |---|---|---|---|
 | **El cerebro** | Valida la URL y genera un código corto sin sesgo | Lambda, CloudWatch Logs, IAM | [05](../../lessons/0005-tu-codigo-en-aws.html) |
-| La memoria | Guarda `código → URL` y resuelve las colisiones | DynamoDB | 06 _(pendiente)_ |
-| La puerta | Convierte todo esto en HTTP público | API Gateway HTTP | 07 _(pendiente)_ |
+| **El artefacto** | Capas, `zod` en la frontera, y tests sin dependencias | — (Node, esbuild) | [06](../../lessons/0006-el-zip-no-es-tu-repositorio.html) |
+| La memoria | Guarda `código → URL` y resuelve las colisiones | DynamoDB | 07 _(pendiente)_ |
+| La puerta | Convierte todo esto en HTTP público | API Gateway HTTP | 08 _(pendiente)_ |
 
 ## Coste
 
@@ -84,11 +85,56 @@ código se ejecuta, y ahí Node es la 24 porque el runtime es `nodejs24.x`. `nod
 en Lambda pero está en vista previa pública, sin SLA: Lambda solo publica runtimes estables
 cuando la versión entra en LTS activo. Node 24 tiene soporte hasta el 30 de abril de 2028.
 
+**El código de la Lambda está en capas, y la regla para decidir dónde va cada fichero es
+«¿esto seguiría siendo cierto en mi portátil?».** `domain/` no importa **nada** que aparezca en
+el `package.json` —ni `zod`, ni un ORM, ni un cliente HTTP—; sí puede usar globales del lenguaje
+como `URL` o `node:crypto`, porque no se instalan. `application/` orquesta y valida la forma de
+lo que entra. `handler.ts` es el único que sabe que esto es una Lambda, y `index.ts` tiene una
+línea, porque el `handler = "index.handler"` de AWS no debe dictar cómo se organiza el código.
+
+La razón no es estética, y la escribe AWS en la primera de sus buenas prácticas para TypeScript:
+*«Separate the Lambda handler from your core logic. This allows you to make a more unit-testable
+function.»* Leída al revés es una prueba de diagnóstico: **si para probar una función necesitas
+AWS, es que la función sabe demasiado sobre AWS.**
+
+**La regla vive en el dominio; el mecanismo de validación, fuera.** `ALLOWED_PROTOCOLS` y
+`MAX_URL_LENGTH` son del negocio y se exportan como datos. El esquema de `zod` que comprueba la
+*forma* del payload —«¿es un objeto con un campo `url` de tipo cadena?»— vive en el caso de uso,
+porque eso es un contrato de transporte, no una regla. La prueba de que la separación es
+correcta: **cambiar `zod` por Valibot no toca `domain/`.**
+
+Efecto secundario que confirma la frontera: los tests se reparten solos. `{ url: 42 }` y `null`
+caen en `create-link.test.ts`; `"javascript:alert(1)"` y `"ftp://…"` en `target-url.test.ts`.
+Cuando un caso de prueba no sabe a qué fichero pertenece, la frontera está mal puesta.
+
+**Tests con cero dependencias.** Node 24 ejecuta TypeScript directamente borrándole los tipos, y
+trae ejecutor de tests: `node --test 'src/**/*.test.ts'`. No hay Jest ni Vitest. El precio es que
+Node no compila, solo borra, así que la sintaxis que exige *generar* código está prohibida:
+`constructor(readonly x: string)` revienta con
+`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not supported in strip-only
+mode`. Lo mismo con `enum` y `namespace`. Hace falta `allowImportingTsExtensions: true` en el
+`tsconfig.json`, que TypeScript solo permite con `noEmit`.
+
+**El `archive_file` comprime un fichero, no el directorio.** Con `source_dir` el `.zip` se llevaba
+también `dist/index.mjs.map`, que Node no lee salvo que arranques con `--enable-source-maps`. Con
+`zod` dentro ese sourcemap pasa a pesar casi un mega —el 75% del paquete— así que se pasó a
+`source_file = "${path.module}/app/dist/index.mjs"`. El zip baja de 220 KB a 65 KB, y el
+`handler = "index.handler"` sigue valiendo porque `archive_file` usa el *basename*. Con varias
+funciones, un `archive_file` por función.
+
+**`zod` se empaqueta en el bundle; no se usa una *layer*.** Una layer para una dependencia
+JavaScript pura da lo peor de los dos mundos: tu código y sus dependencias dejan de versionarse
+juntos y se pierde el *tree shaking*, porque se sube el paquete completo. Las layers resuelven
+otro problema —compartir binarios pesados entre muchas funciones, o fijar la versión del SDK
+embebido—. Para poner en contexto el tamaño: siete dependencias típicas de una API dan un
+`node_modules` de 58 MB y 10 218 ficheros, y un bundle de 1 076 KB —el 0,6% del límite de 50 MB
+del `.zip`—.
+
 **El código corto es `base64url`, no un alfabeto «legible».** Un alfabeto de 56 símbolos con
 `byte % 56` está sesgado, porque 256 no es múltiplo de 56. `base64url` tiene 64 símbolos y
 256 sí lo es: 5 bytes dan 7 caracteres sin sesgo y sin relleno, sobre un espacio de 64⁷ ≈ 4,4
 billones. Las colisiones no desaparecen —al 50% con ~2,5 millones de enlaces— y se resuelven
-donde toca: con una escritura condicional en DynamoDB, en la lección 06.
+donde toca: con una escritura condicional en DynamoDB, en la lección 07.
 
 **Solo `http:` y `https:`.** Rechazar `javascript:`, `data:` y `file:` es una decisión de
 seguridad, no de validación: sin ella, el acortador serviría enlaces de un tercero bajo tu
@@ -101,7 +147,7 @@ export AWS_PROFILE=personal
 aws login
 aws sts get-caller-identity     # el Arn debe terminar en ":user/terraform"
 
-cd app && pnpm install && pnpm run typecheck && pnpm run build && cd ..
+cd app && pnpm install && pnpm run typecheck && pnpm run test && pnpm run build && cd ..
 
 terraform init
 terraform plan
@@ -137,6 +183,8 @@ Verificada el 2026-08-24 contra el registro de npm.
 | TypeScript | `^7.0.2` | Compilador nativo. Solo comprueba: emitir es de esbuild |
 | esbuild | `^0.28.2` | Empaqueta y transpila. **No comprueba tipos** |
 | `@types/node` | `^24.13.3` | Debe coincidir con el runtime, no con tu portátil |
+| `zod` | `^4.4.3` | **`dependencies`**, no `devDependencies`: se ejecuta en producción |
+| Tests | `node --test` | Del propio runtime. Cero dependencias de testing |
 
 Se versionan `pnpm-lock.yaml` y `pnpm-workspace.yaml`. El lockfile es el equivalente de
 `.terraform.lock.hcl`. Se ignoran `app/node_modules/`, `app/dist/` y `build/`.

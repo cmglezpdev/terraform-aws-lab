@@ -6,11 +6,16 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "prebuild": "rm -rf dist",
-    "build": "esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --outfile=dist/index.mjs"
+    "build": "esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --outfile=dist/index.mjs",
+    "test": "node --test 'src/**/*.test.ts'",
+    "test:watch": "node --test --watch 'src/**/*.test.ts'"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }

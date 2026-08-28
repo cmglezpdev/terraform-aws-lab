@@ -82,8 +82,8 @@ en tres sesiones:</p>
   <thead><tr><th>Pieza</th><th>Qué hace</th><th>Servicio</th><th>Cuándo</th></tr></thead>
   <tbody>
     <tr><td><strong>El cerebro</strong></td><td>Valida la URL y genera el código corto</td><td>Lambda</td><td><strong>Hoy</strong></td></tr>
-    <tr><td>La memoria</td><td>Guarda <code>código → URL</code> y detecta colisiones</td><td>DynamoDB</td><td>Lección 06</td></tr>
-    <tr><td>La puerta</td><td>Convierte todo esto en HTTP público</td><td>API Gateway</td><td>Lección 07</td></tr>
+    <tr><td>La memoria</td><td>Guarda <code>código → URL</code> y detecta colisiones</td><td>DynamoDB</td><td>Lección 07</td></tr>
+    <tr><td>La puerta</td><td>Convierte todo esto en HTTP público</td><td>API Gateway</td><td>Lección 08</td></tr>
   </tbody>
 </table>
 </div>
@@ -933,7 +933,7 @@ respuesta correcta, no es un retraso: revisa el <code>:*</code> del ARN.</p>
     has probado. Si dice «No changes», te falta el <code>build</code>.</li>
     <li><strong>Nada de esto es accesible desde internet.</strong> Solo se invoca con
     credenciales de AWS. Eso es una propiedad de hoy, no una carencia — la puerta pública llega
-    en la lección 07, y llega con autorización.</li>
+    en la lección 08, y llega con autorización.</li>
     <li><strong>No hay tests.</strong> Probaste el caso bueno y uno malo a mano. Cuando lleguemos
     al proyecto 07 y a CI, esto tiene que ser un fichero de tests, no un comando que recuerdas.</li>
   </ul>
@@ -1014,7 +1014,13 @@ muy por debajo de los 5 GB gratuitos.</p>
 
 <div class="next">
   <h3>Lo que viene</h3>
-  <p><strong>Lección 06 — la memoria.</strong> DynamoDB entra en escena, y con ella la primera
+  <p class="small"><b>Nota añadida el 2026-08-25.</b> Entre esta lección y DynamoDB se coló una
+  lección nueva —<a href="./0006-el-zip-no-es-tu-repositorio.html">06 · El zip no es tu
+  repositorio</a>— porque preguntaste por arquitectura, librerías y tests, y las tres cosas se
+  responden mejor <em>antes</em> de que haya una base de datos que organizar. La memoria pasa a
+  ser la <strong>lección 07</strong> y la puerta la <strong>08</strong>. El plan cambió a
+  propósito, no por olvido.</p>
+  <p><strong>Lección 07 — la memoria.</strong> DynamoDB entra en escena, y con ella la primera
   decisión de diseño de datos del curso: cuál es la clave de partición de una tabla de enlaces y
   por qué no puede ser lo que parece. Ahí resolvemos de verdad el problema de las colisiones que
   hoy hemos dejado abierto, con una <em>escritura condicional</em>, y la política del rol de

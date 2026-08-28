@@ -26,6 +26,12 @@ build/
 *.zip
 *.tsbuildinfo
 
+# Salidas de pruebas manuales contra AWS: pueden llevar datos reales.
+respuesta.json
+ok.json
+malo.json
+logtrail.txt
+
 # --- Sistema ---
 .DS_Store
 .env

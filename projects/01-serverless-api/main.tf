@@ -4,8 +4,9 @@ locals {
 }
 
 data "archive_file" "create_link" {
-  type        = "zip"
-  source_dir  = "${path.module}/app/dist"
+  type = "zip"
+  # source_dir  = "${path.module}/app/dist" # this carries with the source map and it's not needed
+  source_file = "${path.module}/app/dist/index.mjs"
   output_path = "${path.module}/build/create_link.zip"
 }
 

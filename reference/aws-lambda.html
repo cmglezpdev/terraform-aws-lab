@@ -683,6 +683,89 @@ compañero— y ver los cuatro recursos con tus ojos, la receta completa con com
 falta»</a>. Es la mejor forma de aprender un servicio nuevo de AWS: constrúyelo con clics una
 vez, y luego pide que te escriban el código.</p>
 
+<h2 id="capacidades-2026">Las dos capacidades nuevas de <em>Custom settings</em></h2>
+
+<p>Anunciadas en re:Invent 2025 y visibles al crear una función en la consola, las dos con el
+icono de «no se puede añadir ni quitar después de crear la función». Ninguna de las dos aplica a
+los proyectos de este curso, y saber <em>por qué no</em> vale tanto como saber qué son.</p>
+
+<h3>Durable execution — funciones duraderas</h3>
+
+<p>Una Lambda normal muere a los 15 minutos. Una función duradera dura <strong>hasta un
+año</strong>, mediante <em>checkpoint y replay</em>: envuelves cada paso con el SDK de ejecución
+duradera, Lambda persiste el resultado de cada paso completado, y al reanudarse
+<strong>tu código se ejecuta desde el principio otra vez</strong> saltándose los pasos ya hechos
+y usando los resultados guardados. La palabra clave es <strong>replay</strong>: tu handler tiene
+que ser determinista, porque va a correr varias veces.</p>
+
+<p>Dos primitivas: <em>steps</em> (lógica de negocio con reintentos y checkpoint automático) y
+<em>waits</em> (suspenden la ejecución <strong>sin facturar cómputo</strong>). Esperar tres días
+a que un humano apruebe algo cuesta cero. SDK disponible para JavaScript, TypeScript, Python y
+Java.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Funciones duraderas</th><th>Step Functions</th></tr></thead>
+  <tbody>
+    <tr><td>Dónde vive</td><td>Dentro de Lambda</td><td>Servicio aparte</td></tr>
+    <tr><td>Cómo se define</td><td>Código normal, secuencial</td><td>Lenguaje de grafos / diseñador visual</td></tr>
+    <tr><td>Encaja cuando</td><td>El flujo está pegado a tu lógica de negocio</td><td>Orquestas servicios de AWS entre sí (220+ integraciones)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="small">Cuotas: máx. <strong>3 000 operaciones duraderas</strong> por ejecución (no
+ampliable) y <strong>100 MB</strong> de estado persistido por ejecución (no ampliable).
+<code>ExecutionTimeout</code> va de 1 a 31 622 400 segundos; el historial se retiene entre 1 y 90
+días. Se configura con <code>DurableConfig</code>, y <strong>debe activarse al crear la
+función</strong>.</p>
+
+<h3>EC2 capacity provider — Lambda Managed Instances</h3>
+
+<p>Tus funciones dejan la flota compartida y corren sobre instancias EC2 <strong>de tu
+cuenta</strong> que Lambda gestiona entera —ciclo de vida, parcheo de SO y runtime, enrutado,
+balanceo y escalado—. A cambio facturas como EC2: precio de instancia
+<strong>más un 15% de gestión</strong>, con acceso a Savings Plans y Reserved Instances. Las
+instancias llevan la etiqueta <code>aws:lambda:capacity-provider</code>, están ocultas de la
+consola de EC2 por defecto, y <strong>no se pueden terminar a mano</strong>: se borran borrando
+el capacity provider.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Lambda (por defecto)</th><th>Managed Instances</th></tr></thead>
+  <tbody>
+    <tr><td>Concurrencia</td><td><strong>Una</strong> invocación por entorno</td><td><strong>Varias</strong> a la vez por entorno</td></tr>
+    <tr><td>Aislamiento</td><td>Multi-tenant, microVM Firecracker</td><td>Tu cuenta, contenedores sobre EC2 Nitro</td></tr>
+    <tr><td>Escalado</td><td>Al no haber entorno libre (cold start). Escala a cero</td><td>Por uso de CPU, asíncrono, sin cold start. <strong>No escala a cero</strong></td></tr>
+    <tr><td>Factura</td><td>Por duración de invocación</td><td>Por instancia, esté ociosa o no</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La consecuencia que se pasa por alto: vuelve la concurrencia dentro del proceso</span>
+  <p>Todo lo que sabías de Lambda —«un entorno atiende una invocación cada vez, así que el estado
+  de módulo es tuyo en exclusiva»— <strong>deja de ser cierto</strong>. Con multi-concurrencia,
+  varias invocaciones comparten el mismo proceso y el mismo estado global. Cualquier variable
+  fuera del handler pasa a ser estado compartido, con todo lo que eso implica.</p>
+</div>
+
+<div class="callout cost">
+  <span class="callout-title">Por qué no en este curso</span>
+  <p>Managed Instances <strong>factura por hora esté o no en uso</strong>. Los proyectos
+  serverless de este roadmap valen cero en reposo justo por estar en la flota compartida, y esa
+  propiedad es la que permite dejarlos desplegados entre sesiones. Managed Instances está pensado
+  para volumen alto y predecible; escala al doble de tráfico en cinco minutos por defecto.</p>
+  <p>Las funciones duraderas sí merecen una segunda mirada en el <strong>proyecto 03</strong>, el
+  gateway de IA: encadenar llamadas a un modelo con reintentos y esperas es su caso de uso
+  estrella.</p>
+</div>
+
+<p class="small">Fuentes: <a href="https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html">Lambda
+durable functions</a>, <a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-managed-instances.html">Lambda
+Managed Instances</a> y <a href="https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html">Lambda
+quotas</a>, consultadas el 2026-08-25.</p>
+
 <h2>Comprueba</h2>
 
 <div class="quiz">

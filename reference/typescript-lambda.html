@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · TypeScript en Lambda</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Cadena de herramientas · referencia imprimible</p>
+  <h1>TypeScript en Lambda</h1>
+  <p class="deck">Cómo se organiza, se empaqueta y se prueba el código de una Lambda escrita en
+  TypeScript. La regla que gobierna todo lo demás la escribe AWS:
+  <strong><em>«Separate the Lambda handler from your core logic. This allows you to make a more
+  unit-testable function.»</em></strong></p>
+
+  <dl class="svc-meta">
+    <div><dt>Aplica a</dt><dd>Todos los proyectos con código propio: 01, 02, 03, 06</dd></div>
+    <div><dt>Runtime</dt><dd><code>nodejs24.x</code>, <code>arm64</code>, ESM</dd></div>
+    <div><dt>Herramientas</dt><dd>pnpm · TypeScript (solo comprueba) · esbuild (empaqueta) · <code>node --test</code></dd></div>
+    <div><dt>Verificado</dt><dd>2026-08-27 · pnpm 11.23.0 · TS 7.0.2 · esbuild 0.28.2 · zod 4.4.3 · Node 24.18.0</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2 id="capas">Las tres capas, y la pregunta que las decide</h2>
+
+<p>Para saber en qué capa va un fichero, una sola pregunta: <strong>¿esto seguiría siendo cierto
+si el código se ejecutara en tu portátil?</strong></p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Capa</th><th>Qué vive ahí</th><th>Prohibido importar</th><th>Cómo se prueba</th></tr></thead>
+  <tbody>
+    <tr><td><code>domain/</code></td><td>Reglas del negocio, tipos marcados, errores propios</td><td><strong>Todo lo que esté en tu <code>package.json</code>.</strong> Solo TypeScript y globales del lenguaje</td><td>Directo, sin dobles</td></tr>
+    <tr><td><code>application/</code></td><td>Casos de uso, y validar la forma de lo que entra</td><td>SDK de AWS, tipos de eventos</td><td>Con dobles de los puertos</td></tr>
+    <tr><td><code>infrastructure/</code></td><td>Implementar puertos con el SDK de AWS</td><td>—</td><td>Tests de integración</td></tr>
+    <tr><td><code>handler.ts</code></td><td>Traducir evento ↔ caso de uso, y solo eso</td><td>—</td><td>Con eventos falsos</td></tr>
+    <tr><td><code>index.ts</code></td><td>Una línea: <code>export { handler } from "./handler.ts"</code></td><td>—</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La línea del dominio es «¿aparece en mi <code>package.json</code>?»</span>
+  <p>No es solo el SDK de AWS: <strong>ninguna dependencia externa entra en <code>domain/</code></strong>
+  —ni <code>zod</code>, ni un ORM, ni un cliente HTTP—. Una regla de negocio que depende de una
+  librería caduca cuando esa librería cambia de API, y es la parte del código que más años vive.</p>
+  <p>Globales del lenguaje sí: <code>URL</code>, <code>Date</code>, <code>Intl</code>,
+  <code>node:crypto</code>. No los instalas, están en cualquier runtime.</p>
+  <p><strong>El reparto correcto cuando validas:</strong></p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th></th><th>Dónde vive</th><th>Ejemplo</th></tr></thead>
+    <tbody>
+      <tr><td>La <strong>regla</strong></td><td><code>domain/</code>, como dato puro exportado</td><td><code>ALLOWED_PROTOCOLS</code>, <code>MAX_URL_LENGTH</code></td></tr>
+      <tr><td>La <strong>forma</strong> del payload</td><td><code>application/</code>, con zod</td><td><code>z.object({ url: z.string() })</code></td></tr>
+      <tr><td>El <strong>mecanismo</strong></td><td>Donde esté la librería</td><td><code>safeParse</code>, <code>ZodError</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Prueba de que está bien separado: <strong>cambiar zod por Valibot no debe tocar
+  <code>domain/</code>.</strong> Y en los tests, cada caso cae solo en su fichero —
+  <code>{ url: 42 }</code> contra el caso de uso, <code>"javascript:alert(1)"</code> contra el
+  dominio. Cuando un caso no sabe a qué fichero pertenece, la frontera está mal puesta.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La prueba de diagnóstico</span>
+  <p>Léelo al revés y tienes un detector de errores de diseño: <strong>si para probar una función
+  necesitas AWS, es que esa función sabe demasiado sobre AWS.</strong> La testabilidad no es una
+  consecuencia agradable de las capas: es su definición operativa. Una capa que no se prueba más
+  fácil que la de abajo no se ha ganado el directorio.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Cuándo NO montar capas</span>
+  <p>Si una función nunca va a tener entrada/salida ni pasos que orquestar, <code>application/</code>
+  sobra y crearla es cargo cult. El DDD útil no es una lista de carpetas obligatorias: es poner
+  una frontera donde hay una frontera real. Señal de que sí la hay: entra una base de datos, un
+  servicio externo, o hay reintentos.</p>
+</div>
+
+<h3>Tipos marcados (<em>branded types</em>): el <em>value object</em> sin coste</h3>
+
+<div class="code">
+<pre><code><b class="k">export type</b> ShortCode = <b class="n">string</b> & { <b class="k">readonly</b> __brand: <b class="s">"ShortCode"</b> };
+
+<b class="c">// O, si el tipo nace de un esquema de zod:</b>
+<b class="k">const</b> schema = z.httpUrl().brand&lt;<b class="s">"TargetUrl"</b>&gt;();
+<b class="k">export type</b> TargetUrl = z.infer&lt;<b class="k">typeof</b> schema&gt;;</code></pre>
+</div>
+
+<p>En tiempo de ejecución sigue siendo un <code>string</code> —cero bytes en el bundle—, pero
+TypeScript ya no deja pasar cualquier cadena donde se espera un <code>ShortCode</code>. Útil en
+cuanto manejas dos <code>string</code> distintos a la vez que no deben confundirse.</p>
+
+<h2 id="validacion">Validación en la frontera: <em>parse, don't validate</em></h2>
+
+<p>Un validador devuelve <code>true</code>/<code>false</code> y te deja el dato igual de
+sospechoso. Un <em>parser</em> devuelve un <strong>tipo distinto</strong>: la comprobación queda
+registrada en el sistema de tipos y nadie puede saltársela más abajo.</p>
+
+<div class="code">
+  <div class="code-label"><span>domain/</span><span class="tag">la regla, sin dependencias</span></div>
+<pre><code><b class="k">export const</b> ALLOWED_PROTOCOLS = [<b class="s">"http:"</b>, <b class="s">"https:"</b>] <b class="k">as const</b>;
+<b class="k">export const</b> MAX_URL_LENGTH = <b class="n">2048</b>;
+<b class="k">export type</b> TargetUrl = <b class="n">string</b> & { <b class="k">readonly</b> __brand: <b class="s">"TargetUrl"</b> };
+
+<b class="k">export function</b> parseTargetUrl(raw: <b class="n">string</b>): TargetUrl {   <b class="c">// string, no unknown</b>
+  <b class="c">// URL es un global del lenguaje. .href normaliza: añade la barra final.</b>
+  ...
+  <b class="k">return</b> parsed.href <b class="k">as</b> TargetUrl;
+}</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>application/</span><span class="tag">la forma, con zod</span></div>
+<pre><code><b class="k">const</b> createLinkInput = z.object({ url: z.string().max(MAX_URL_LENGTH) });
+
+<b class="k">export function</b> createLink(payload: <b class="n">unknown</b>): Link {
+  <b class="k">const</b> { url } = createLinkInput.parse(payload);   <b class="c">// ¿tiene la forma pactada?</b>
+  <b class="k">return</b> { code: generateShortCode(), url: parseTargetUrl(url) };  <b class="c">// ¿cumple la regla?</b>
+}</code></pre>
+</div>
+
+<ul>
+  <li><strong>El <code>event</code> del handler se tipa <code>unknown</code>, nunca con una
+  interfaz.</strong> El tipo desaparece al compilar y quien invoca es AWS: declararlo tipado no
+  valida nada, solo apaga las preguntas del compilador.</li>
+  <li><strong>Cada capa recibe datos más fuertes que la anterior.</strong> El handler recibe
+  <code>unknown</code>, el caso de uso lo convierte en <code>{ url: string }</code>, el dominio
+  recibe <code>string</code> y devuelve <code>TargetUrl</code>. Eso es «parse, don't validate»
+  aplicado de verdad: la comprobación queda registrada en el sistema de tipos y nadie puede
+  saltársela más abajo.</li>
+  <li><strong><code>safeParse</code> en la frontera con el mundo</strong>, para traducir el fallo
+  a un error tuyo. <code>parse</code> a secas vale dentro, cuando un <code>ZodError</code> que
+  sube es información útil.</li>
+  <li><strong>Cuidado con lo que la librería deja de hacer.</strong> <code>new URL(x).href</code>
+  normaliza; <code>z.httpUrl()</code> a secas no, hace falta <code>normalize: true</code>. Al
+  sustituir código propio por una librería, lo que se rompe no es lo que la librería hace peor,
+  sino lo que tu código hacía sin que lo supieras.</li>
+</ul>
+
+<h2 id="cuantas-librerias">Cuántas librerías caben, de verdad</h2>
+
+<p>La pregunta no es «¿cuántas puedo meter?» sino «¿en qué se nota?». Medido el 2026-08-27 con
+esbuild 0.28.2, <code>--minify --format=esm --target=node24</code>, sobre siete dependencias
+típicas de una API real (<code>zod</code>, cuatro clientes del SDK de AWS —DynamoDB, DocumentClient,
+S3, SNS—, <code>@aws-lambda-powertools/logger</code> y <code>date-fns</code>):</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Tamaño</th><th>Ficheros</th><th>% del límite</th></tr></thead>
+  <tbody>
+    <tr><td><code>node_modules</code> sin bundlear</td><td>58 MB</td><td>10 218</td><td>23% de los 250 MB</td></tr>
+    <tr><td>Bundle de esbuild</td><td><strong>1 076 KB</strong></td><td>1</td><td>0,4%</td></tr>
+    <tr><td>El <code>.zip</code> que sube</td><td><strong>286 KB</strong></td><td>1</td><td><strong>0,6% de los 50 MB</strong></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>esbuild reduce 58 MB a 1 MB: 54 veces menos.</strong> Esa es la respuesta a «¿y cuando
+tenga muchas dependencias?» — no pasa nada, porque el bundler elimina lo que no alcanzas desde el
+entrypoint y colapsa 10 000 ficheros en uno. Una API con siete librerías usa el
+<strong>0,6%</strong> del límite de despliegue.</p>
+
+<p>Los límites, para tenerlos delante: <strong>50 MB</strong> el <code>.zip</code> subido por la
+API, <strong>250 MB</strong> descomprimido incluyendo layers, <strong>5 layers</strong> por
+función, <strong>10 GB</strong> si empaquetas como imagen de contenedor.</p>
+
+<div class="callout why">
+  <span class="callout-title">Corolario: en una Lambda cabe una aplicación entera</span>
+  <p>Express, Fastify, Hono o NestJS completos caben de sobra, y se despliegan así en producción
+  con un adaptador que traduce el evento de API Gateway a una petición HTTP. La restricción de
+  Lambda <strong>no es el tamaño del código</strong>: es el modelo de ejecución —sin estado entre
+  invocaciones, 15 minutos de tope, arranque en frío— y el hecho de que el proceso muere.</p>
+  <p>Lo que sí conviene vigilar no es cuántos megas pesa, sino <strong>qué se ejecuta durante el
+  <em>Init</em></strong>: todo lo que hay fuera del handler corre en cada arranque en frío.
+  Conectar a una base de datos ahí se paga una vez por entorno; leer un secreto de red, también.
+  Ahí es donde se va el tiempo, no en descomprimir.</p>
+</div>
+
+<h2 id="cuantas-lambdas">Cuántas Lambdas: una por endpoint, o una para todas</h2>
+
+<p>Los dos extremos tienen nombre. <strong>Función de propósito único</strong> (una Lambda por
+operación) y <strong><em>lambdalith</em></strong> (una Lambda con un router dentro, detrás de una
+ruta comodín de API Gateway). Es un debate abierto de verdad en la comunidad; lo que sigue son
+los ejes reales, no una respuesta única.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Eje</th><th>Una por operación</th><th><em>Lambdalith</em></th></tr></thead>
+  <tbody>
+    <tr><td><strong>Permisos IAM</strong></td><td>El mínimo exacto de esa operación</td><td>La <strong>unión</strong> de todo lo que hace la API</td></tr>
+    <tr><td>Radio de explosión</td><td>Un despliegue roto rompe un endpoint</td><td>Rompe la API entera</td></tr>
+    <tr><td>Memoria y timeout</td><td>Por operación</td><td>El máximo que necesite la peor</td></tr>
+    <tr><td>Métricas y alarmas</td><td>Por operación, gratis</td><td>Hay que instrumentarlas a mano</td></tr>
+    <tr><td>Arranque en frío</td><td>Bundle menor, pero cada función se calienta por su cuenta</td><td>Bundle mayor, pero una función caliente sirve todas las rutas</td></tr>
+    <tr><td>Escalado</td><td>Cada operación escala sola</td><td>Todo compite por la misma concurrencia</td></tr>
+    <tr><td>Portabilidad</td><td>Atado a Lambda</td><td>Es una app HTTP normal: se mueve a un contenedor sin tocarla</td></tr>
+    <tr><td>Coste en Terraform</td><td>Cero con <code>for_each</code></td><td>Un recurso</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">La heurística: agrupa por permisos, no por «entidad»</span>
+  <p>El eje que decide casi siempre es el primero, porque es el único que no se puede compensar
+  después. Si dos operaciones necesitan <strong>permisos distintos</strong>, sepáralas; si
+  necesitan los mismos, agruparlas no te cuesta nada en seguridad.</p>
+  <p>Aplicado a una API de productos: <code>crearProducto</code> y <code>editarProducto</code>
+  escriben en la misma tabla con las mismas acciones — pueden compartir función.
+  <code>listarProductos</code> solo lee: separarla te da una función que <strong>no puede
+  escribir aunque la comprometan</strong>. Y <code>marcarComoVendido</code>, si además publica en
+  una cola o manda un correo, necesita permisos que ninguna otra tiene: va aparte.</p>
+  <p>Fíjate en que el criterio no es cuántos endpoints hay, sino cuántos <em>conjuntos de
+  permisos distintos</em> hay. Suelen ser tres o cuatro, no quince.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Lo que AWS dice, y lo que no dice</span>
+  <p>AWS recomienda <em>«refactor the code into smaller services»</em> según la aplicación crece,
+  y <em>«identify libraries and packages that can be replaced with services to minimize the
+  deployment size»</em>, pero reconoce que <em>«monoliths work well for the simplest serverless
+  applications»</em>. No hay una regla oficial de «una por endpoint».</p>
+  <p>Lo que sí es objetivo es el argumento de IAM: los permisos se conceden por función, así que
+  la granularidad de tus funciones <strong>es</strong> la granularidad de tu privilegio mínimo.
+  Todo lo demás son intercambios discutibles.</p>
+</div>
+
+<h2 id="artefacto">El artefacto: qué se sube y cuánto pesa</h2>
+
+<p>Medido el 2026-08-25 con esbuild 0.28.2, <code>--minify --format=esm --target=node24</code>,
+sobre el proyecto 01:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Contenido</th><th><code>index.mjs</code></th><th><code>index.mjs.map</code></th><th><code>.zip</code></th></tr></thead>
+  <tbody>
+    <tr><td>Sin dependencias</td><td>563 B</td><td>2 104 B</td><td>1 649 B</td></tr>
+    <tr><td>+ <code>zod</code></td><td>327 893 B</td><td>985 857 B</td><td>220 226 B</td></tr>
+    <tr><td>+ <code>zod</code>, sin el <code>.map</code> dentro</td><td>327 893 B</td><td>—</td><td><strong>65 437 B</strong></td></tr>
+    <tr><td>+ <code>zod/mini</code> (API distinta)</td><td>8 944 B</td><td>—</td><td>—</td></tr>
+    <tr><td><code>@aws-sdk/client-dynamodb</code> solo</td><td>504 422 B</td><td>—</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El sourcemap se cuela en el zip y no sirve dentro de Lambda</span>
+  <p><code>source_dir</code> comprime el directorio entero, y esbuild deja dos ficheros ahí. Node
+  no aplica sourcemaps salvo que arranques con <code>--enable-source-maps</code> (que en Lambda
+  se pone a mano en <code>NODE_OPTIONS</code> y tiene coste de arranque). La solución vive en
+  Terraform:</p>
+  <div class="code">
+<pre><code>data <b class="s">"archive_file"</b> <b class="s">"create_link"</b> {
+  type        = <b class="s">"zip"</b>
+  source_file = <b class="s">"${path.module}/app/dist/index.mjs"</b>   <b class="c"># no source_dir</b>
+  output_path = <b class="s">"${path.module}/build/create_link.zip"</b>
+}</code></pre>
+  </div>
+  <p class="small">Verificado con Terraform 1.15.8: con <code>source_file</code> el zip contiene
+  <code>index.mjs</code> en la raíz (usa el <em>basename</em>), así que
+  <code>handler = "index.handler"</code> sigue valiendo. Con varias funciones, un
+  <code>archive_file</code> por función.</p>
+</div>
+
+<h3>Dónde meter una dependencia</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Opción</th><th>Qué implica</th><th>Veredicto</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Bundlear con esbuild</strong></td><td>El código de la librería entra en <code>index.mjs</code></td><td><strong>Por defecto, siempre</strong></td></tr>
+    <tr><td>Subir <code>node_modules</code></td><td>Miles de ficheros; con pnpm son enlaces simbólicos</td><td>No</td></tr>
+    <tr><td><em>Layer</em></td><td>Zip aparte montado en <code>/opt</code>, máx. 5 por función</td><td>Solo para binarios pesados compartidos entre muchas funciones</td></tr>
+    <tr><td>Confiar en el SDK del runtime</td><td>Ahorra ~500 KB pero la versión menor la elige AWS</td><td>No: <a href="https://docs.aws.amazon.com/lambda/latest/dg/typescript-handler.html#typescript-example-sdk-usage">AWS recomienda empaquetarlo</a></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Una <em>layer</em> con una dependencia JavaScript pura da lo peor de los dos mundos: tu código
+y sus dependencias dejan de versionarse juntos, y pierdes el <em>tree shaking</em> porque se sube
+el paquete completo.</p>
+
+<p><strong>Sobre el <em>tree shaking</em>:</strong> <code>zod</code> encadena métodos sobre
+objetos y esbuild no puede demostrar cuáles no usarás — se lleva la librería entera.
+<code>zod/mini</code> usa funciones sueltas (<code>z.optional(z.string())</code>) y sí se poda,
+a cambio de una API distinta con métodos que no existen. Optimizar antes de medir el
+<code>Init Duration</code> real es perder el tiempo.</p>
+
+<h2 id="tests">Tests sin instalar nada</h2>
+
+<p>Node 24 trae ejecutor de tests (<code>node:test</code>) y ejecuta TypeScript borrándole los
+tipos al vuelo. No hace falta Jest, ni Vitest, ni transpilar los tests.</p>
+
+<div class="code">
+  <div class="code-label"><span>package.json</span><span class="tag">scripts</span></div>
+<pre><code><b class="s">"typecheck"</b>: <b class="s">"tsc --noEmit"</b>,
+<b class="s">"test"</b>: <b class="s">"node --test 'src/**/*.test.ts'"</b>,
+<b class="s">"test:watch"</b>: <b class="s">"node --test --watch 'src/**/*.test.ts'"</b>,</code></pre>
+</div>
+
+<p class="small">Comillas simples: el glob lo expande Node, no la shell. Los <code>.test.ts</code>
+van al lado del fichero que prueban; <code>tsc</code> los comprueba porque entran en
+<code>include: ["src"]</code>, y esbuild no los mete en el bundle porque solo sigue lo que
+alcanza desde <code>src/index.ts</code>.</p>
+
+<div class="code">
+  <div class="code-label"><span>tsconfig.json</span><span class="tag">una línea</span></div>
+<pre><code><b class="s">"noEmit"</b>: <b class="k">true</b>,
+<b class="s">"allowImportingTsExtensions"</b>: <b class="k">true</b>,</code></pre>
+</div>
+
+<p>Permite escribir <code>import "./errors.ts"</code> con la extensión real, que es lo que hace
+que el mismo fichero lo entiendan <code>tsc</code>, esbuild y Node. TypeScript solo lo acepta
+cuando no emites JavaScript — aquí <code>tsc</code> únicamente comprueba.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Sintaxis de TypeScript que Node se niega a ejecutar</span>
+  <p>Node no compila: <em>borra</em> los tipos y ejecuta lo que queda. Lo que exija
+  <strong>generar</strong> código falla con
+  <code>SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]</code>:</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Prohibido</th><th>Escribe en su lugar</th></tr></thead>
+    <tbody>
+      <tr><td><code>constructor(readonly x: string)</code> <em>(parameter property)</em></td><td>Campo declarado y asignado a mano</td></tr>
+      <tr><td><code>enum Estado { … }</code></td><td><code>const Estado = {…} as const</code> + tipo derivado</td></tr>
+      <tr><td><code>namespace X { … }</code></td><td>Un módulo</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">Mensaje literal del error: <em>«TypeScript parameter property is not supported
+  in strip-only mode»</em>. Verificado con Node 24.18.0.</p>
+</div>
+
+<h3>Qué prueba cada nivel, y qué no</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Nivel</th><th>Prueba</th><th>Ciego a</th></tr></thead>
+  <tbody>
+    <tr><td><code>pnpm run test</code></td><td>Reglas, casos límite, traducción del handler</td><td>Rol, permisos, ARNs, <code>handler</code> mal apuntado, runtime</td></tr>
+    <tr><td><code>terraform plan</code></td><td>Que el artefacto cambió (<code>source_code_hash</code>)</td><td>Si el código funciona</td></tr>
+    <tr><td><code>aws lambda invoke</code></td><td>Que el paquete arranca y el rol basta</td><td>Concurrencia, casos límite que no invocas</td></tr>
+    <tr><td><code>aws logs tail</code></td><td>Que <code>logs:PutLogEvents</code> sobre el ARN correcto funciona</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Un test unitario no prueba infraestructura.</strong> Pasaría entero con el rol roto y
+el ARN mal escrito. No los invalida: los separa.</p>
+
+<h2 id="orden">El orden, siempre igual</h2>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">nunca al revés</span></div>
+<pre><code>cd app
+pnpm run typecheck && pnpm run test && pnpm run build
+cd ..
+terraform plan       <b class="c"># aquí se resuelve archive_file: falla si dist/ no existe</b>
+terraform apply</code></pre>
+</div>
+
+<p>El build no entra en Terraform. Terraform gestiona infraestructura; construir artefactos es
+trabajo del pipeline. Y el orden no es una preferencia: <code>data "archive_file"</code> se
+resuelve durante el <code>plan</code>.</p>
+
+<h2>Comprueba</h2>
+
+<ol>
+  <li>¿En qué capa va «una URL de más de 2048 caracteres no se acorta», y por qué no en el handler?</li>
+  <li>Tu <code>plan</code> dice «No changes» después de cambiar el código. ¿Qué se te olvidó?</li>
+  <li>¿Por qué se tipa el <code>event</code> como <code>unknown</code> y no con una interfaz?</li>
+  <li>El SDK de AWS ya viene en el runtime. Da el argumento de AWS para empaquetarlo igualmente.</li>
+  <li>Node revienta con <code>ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX</code>. Nombra las tres sintaxis que lo provocan.</li>
+</ol>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./aws-lambda.html">Referencia: Lambda</a>
+    <a href="./terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../lessons/0006-el-zip-no-es-tu-repositorio.html">Lección 06</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+  </div>
+</div>
+
+</main>
+</body>
+</html>

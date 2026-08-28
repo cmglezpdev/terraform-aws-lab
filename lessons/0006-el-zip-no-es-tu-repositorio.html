@@ -1,0 +1,954 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 06 · El zip no es tu repositorio</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 06 · Proyecto <code>01-serverless-api</code></p>
+  <h1>El zip no es tu repositorio</h1>
+  <p class="deck">Tu Lambda es hoy un fichero de cuarenta líneas. Hoy se convierte en un
+  proyecto: capas, una dependencia de verdad y tests que se ejecutan solos. Las tres cosas que
+  preguntaste son <strong>la misma pregunta</strong> —dónde acaba tu repositorio y empieza el
+  artefacto que AWS ejecuta— y AWS tiene una frase de una línea que las contesta todas.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 45 min</span>
+    <span><b>Coste</b> 0,00 USD — sigue sin factura en reposo</span>
+    <span><b>Terraform</b> <code>archive_file</code> con <code>source_file</code> · cobras la deuda del <code>source_code_hash</code></span>
+    <span><b>Node</b> capas · <code>zod</code> · <code>node --test</code></span>
+  </div>
+</header>
+
+<main>
+
+<div class="callout why">
+  <span class="callout-title">Esta es la lección más larga del curso, y es deliberado</span>
+  <p>45 minutos en vez de 40. No la he partido porque partirla rompería el argumento: la
+  arquitectura existe <em>para</em> poder probar, y la dependencia externa es la excusa para ver
+  qué le pasa al artefacto. Separadas, las tres parecen manías de estilo. Juntas, son una regla.</p>
+  <p>Si hoy vas justo de tiempo, <strong>para al final del paso 3</strong> y haz el paso 4 —los
+  tests— mañana antes de DynamoDB. Está aislado a propósito: no toca ningún fichero de los
+  anteriores.</p>
+</div>
+
+<h2>Primero, recupera</h2>
+
+<p>Sin abrir nada. Las tres son piezas que vas a usar hoy, no repaso decorativo.</p>
+
+<details class="recall">
+  <summary>Cambias el TypeScript, reconstruyes, aplicas… y Terraform dice «No changes». ¿Qué argumento te salvó de eso en la lección 05?
+    <span class="recall-hint">Un nombre de fichero no cambia aunque cambie el fichero.</span>
+  </summary>
+  <p><code>source_code_hash</code>. <code>filename</code> es una <em>ruta</em>, y una ruta es la
+  misma cadena antes y después de reconstruir. <code>source_code_hash</code> le da a Terraform el
+  SHA-256 del zip, que sí cambia.</p>
+  <p>Te dije que estaba ahí <strong>por fe</strong>, porque nunca llegaste a cambiar el código y
+  ver el <code>plan</code> detectarlo. Hoy cambias el código a lo bestia y esa deuda se salda
+  sola: el <code>plan</code> del paso 5 te va a enseñar el <code>~ source_code_hash</code> con
+  tus propios ojos.</p>
+</details>
+
+<details class="recall">
+  <summary>¿Qué hay dentro del <code>.zip</code> que subiste a Lambda? Enuméralo de memoria.
+    <span class="recall-hint">Piensa en qué directorio comprime tu <code>archive_file</code>.</span>
+  </summary>
+  <p><code>source_dir = "${path.module}/app/dist"</code>, así que dentro va
+  <strong>todo lo que hay en <code>dist/</code></strong>. Y en <code>dist/</code> no hay un
+  fichero: hay dos. <code>index.mjs</code> y <code>index.mjs.map</code>.</p>
+  <p>Hoy eso te cuesta 2 KB y no lo notas. Dentro de veinte minutos, cuando instales
+  <code>zod</code>, ese segundo fichero pesará <strong>casi un megabyte</strong> y seguirá sin
+  servir para nada dentro de Lambda. Es el efecto secundario que nadie te cuenta al añadir una
+  dependencia.</p>
+</details>
+
+<details class="recall">
+  <summary>Tu handler valida la URL, genera el código y escribe un log. ¿Cuántas de esas tres cosas puedes probar hoy sin AWS?
+    <span class="recall-hint">Piensa en qué necesita credenciales y qué no.</span>
+  </summary>
+  <p><strong>Las tres</strong>, y ese es justo el problema: puedes, pero no lo haces. Nada de tu
+  lógica toca AWS —no hay ni una llamada al SDK—, así que todo es ejecutable en tu portátil en
+  milisegundos. Lo único que necesita AWS de verdad es <em>el rol, el paquete y el permiso</em>,
+  y eso no se prueba con tests.</p>
+  <p>Que sea probable y no esté probado es la definición de deuda técnica. En la lección 05 lo
+  escribí en «esto no lo demuestra»: <em>«probaste el caso bueno y uno malo a mano»</em>. Hoy se
+  paga.</p>
+</details>
+
+<h2>Tus tres preguntas, una sola respuesta</h2>
+
+<p>Las hiciste seguidas y no es casualidad:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Lo que preguntaste</th><th>Lo que en realidad estás preguntando</th></tr></thead>
+  <tbody>
+    <tr><td>«¿Cómo hago una arquitectura tipo DDD, módulos, organizar el código?»</td><td>¿Puede mi código no saber que vive en Lambda?</td></tr>
+    <tr><td>«¿Qué pasa si quiero instalar <code>zod</code>?»</td><td>¿Qué le ocurre al artefacto cuando mi repositorio crece?</td></tr>
+    <tr><td>«¿Y los tests cómo entran aquí?»</td><td>¿Qué parte de esto puedo verificar sin AWS?</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>AWS contesta las tres con una frase, y es literalmente la <strong>primera</strong> de sus
+buenas prácticas de código para Lambda en TypeScript:</p>
+
+<div class="callout aws">
+  <span class="callout-title">La regla, y viene de la documentación, no de mí</span>
+  <p><em>«Separate the Lambda handler from your core logic. This allows you to make a more
+  unit-testable function.»</em> — <a href="https://docs.aws.amazon.com/lambda/latest/dg/typescript-handler.html#typescript-best-practices">Code
+  best practices for TypeScript Lambda functions</a>, AWS.</p>
+  <p>Léela al revés y es una prueba de diagnóstico: <strong>si para probar una función necesitas
+  AWS, es que la función sabe demasiado sobre AWS.</strong> No es una preferencia estética. Es la
+  única razón técnica por la que hoy vas a mover código de sitio.</p>
+</div>
+
+<p>Todo lo de hoy sale de ahí. Las capas son <em>dónde</em> pones lo que no sabe de Lambda; los
+tests son la <em>prueba</em> de que efectivamente no lo sabe; y <code>zod</code> es lo que
+aparece en la frontera entre ambos mundos, porque una frontera es exactamente el sitio donde hay
+que desconfiar de los datos.</p>
+
+<h2>Manos a la obra</h2>
+
+<ol class="steps">
+
+<li>
+<h3>El handler es un adaptador, y solo eso</h3>
+
+<p>Tres capas, y la regla para saber en cuál va cada cosa es una sola pregunta:
+<strong>¿esto sería verdad si el código se ejecutara en tu portátil?</strong></p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Capa</th><th>Qué vive ahí</th><th>Qué tiene prohibido importar</th><th>¿Testeable sin AWS?</th></tr></thead>
+  <tbody>
+    <tr><td><code>domain/</code></td><td>Qué es una URL válida, cómo se genera un código corto</td><td><strong>Cualquier dependencia externa.</strong> Solo TypeScript y globales del lenguaje</td><td><strong>Sí, trivialmente</strong></td></tr>
+    <tr><td><code>application/</code></td><td>El caso de uso, y validar la forma de lo que entra</td><td>El SDK de AWS, tipos de eventos</td><td>Sí, con dobles</td></tr>
+    <tr><td><code>handler.ts</code></td><td>Traducir evento de Lambda ↔ caso de uso</td><td>Nada. Aquí sí sabes que estás en Lambda</td><td>Sí, con eventos falsos</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Fíjate en la columna de la derecha: <strong>la testabilidad no es una consecuencia feliz de
+las capas, es su definición</strong>. Una capa que no puedes probar más fácil que la de abajo no
+se ha ganado el directorio.</p>
+
+<div class="callout why">
+  <span class="callout-title">La columna del medio es la que más cuesta respetar</span>
+  <p>Para <code>domain/</code> dice <em>cualquier dependencia externa</em>, no solo AWS. Ni
+  <code>zod</code>, ni un ORM, ni un cliente HTTP. El motivo no es purismo: una regla de negocio
+  que depende de una librería <strong>caduca cuando esa librería cambia de API</strong>, y la
+  parte de tu código que más años vive es justo la que menos debería moverse.</p>
+  <p>Globales del lenguaje sí valen —<code>URL</code>, <code>Date</code>, <code>Intl</code>,
+  <code>node:crypto</code>—: no son dependencias que instales, están en cualquier runtime de
+  JavaScript. La línea es «¿aparece en mi <code>package.json</code>?», no «¿lo importo?».</p>
+</div>
+
+<p>Crea la estructura. Desde <code>projects/01-serverless-api/app</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>mkdir -p src/domain src/application
+git mv src/index.ts src/handler.ts   <b class="c"># o mv, si aún no lo has commiteado</b></code></pre>
+</div>
+
+<p>Y ahora los ficheros. Primero el dominio, que es todo lo que sería igual de cierto en una CLI,
+en un servidor Express o en tu portátil:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/domain/errors.ts</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">export class</b> InvalidTargetUrlError <b class="k">extends</b> Error {
+  <b class="k">readonly</b> reason: <b class="n">string</b>;
+
+  <b class="k">constructor</b>(reason: <b class="n">string</b>) {
+    <b class="k">super</b>(reason);
+    <b class="k">this</b>.name = <b class="s">"InvalidTargetUrlError"</b>;
+    <b class="k">this</b>.reason = reason;
+  }
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Ese <code>reason</code> repetido no es torpeza mía</span>
+  <p>Lo natural en TypeScript sería <code>constructor(readonly reason: string)</code> —una
+  <em>parameter property</em>, que declara y asigna el campo de una vez. <strong>No lo
+  escribas.</strong> En el paso 4 vas a ejecutar los tests con Node directamente sobre los
+  <code>.ts</code>, y Node se niega con este error exacto:</p>
+  <div class="code">
+<pre><code><b class="c">SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]:</b>
+TypeScript parameter property is not supported in strip-only mode</code></pre>
+  </div>
+  <p>Node no compila TypeScript: le <em>borra</em> los tipos y ejecuta lo que queda. Una
+  parameter property no es un tipo que se pueda borrar — es código que hay que
+  <em>generar</em>. Lo mismo pasa con <code>enum</code> y <code>namespace</code>. Es la primera
+  vez en el curso que una decisión de sintaxis la dicta la herramienta de ejecución, y verlo
+  ahora te ahorra veinte minutos de desconcierto en el paso 4.</p>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>app/src/domain/short-code.ts</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">import</b> { randomBytes } <b class="k">from</b> <b class="s">"node:crypto"</b>;
+
+<b class="c">/** 5 bytes = 40 bits = 7 caracteres en base64url, sin relleno ni sesgo. */</b>
+<b class="k">const</b> CODE_BYTES = <b class="n">5</b>;
+
+<b class="k">export type</b> ShortCode = <b class="n">string</b> & { <b class="k">readonly</b> __brand: <b class="s">"ShortCode"</b> };
+
+<b class="k">export function</b> generateShortCode(): ShortCode {
+  <b class="k">return</b> randomBytes(CODE_BYTES).toString(<b class="s">"base64url"</b>) <b class="k">as</b> ShortCode;
+}</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Ese <code>__brand</code> es lo más «DDD» de todo el fichero</span>
+  <p>Es un <strong>tipo marcado</strong> (<em>branded type</em>): sigue siendo un
+  <code>string</code> en tiempo de ejecución, pero TypeScript ya no deja pasar cualquier cadena
+  donde se espera un <code>ShortCode</code>. Es la versión ligera del <em>value object</em> de
+  DDD, sin clases y sin coste en el bundle.</p>
+  <p>Importa más de lo que parece cuando llegue DynamoDB: en una tabla de enlaces vas a manejar
+  <em>a la vez</em> un código corto y una URL, los dos <code>string</code>. El día que los
+  intercambies sin querer, el compilador te para en vez de que lo descubras en producción.</p>
+</div>
+
+<p>El caso de uso, que orquesta el dominio y no sabe nada de eventos:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/create-link.ts</span><span class="tag">nuevo</span></div>
+<pre><code><b class="k">import</b> { z } <b class="k">from</b> <b class="s">"zod"</b>;
+<b class="k">import</b> { parseTargetUrl, MAX_URL_LENGTH } <b class="k">from</b> <b class="s">"../domain/target-url.ts"</b>;
+<b class="k">import</b> { generateShortCode, <b class="k">type</b> ShortCode } <b class="k">from</b> <b class="s">"../domain/short-code.ts"</b>;
+
+<b class="c">/** La forma del payload: contrato de transporte, no regla de negocio. */</b>
+<b class="k">const</b> createLinkInput = z.object({
+  url: z.string().max(MAX_URL_LENGTH),
+});
+
+<b class="k">export interface</b> Link {
+  code: ShortCode;
+  url: <b class="n">string</b>;
+}
+
+<b class="k">export function</b> createLink(payload: <b class="n">unknown</b>): Link {
+  <b class="k">const</b> { url } = createLinkInput.parse(payload);
+  <b class="k">return</b> { code: generateShortCode(), url: parseTargetUrl(url) };
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Sí, esa capa tiene seis líneas. No, no te estoy vendiendo humo</span>
+  <p>Hoy <code>createLink</code> apenas hace nada, y si te dijera que ya se justifica te estaría
+  mintiendo. <strong>Se justifica en la lección 07</strong>, cuando reciba el repositorio de
+  DynamoDB como parámetro y tenga que reintentar ante una colisión de códigos. Ese día
+  <code>handler.ts</code> no cambia ni una línea, y el dominio tampoco. Eso es lo que compras.</p>
+  <p>Y la contraria, que importa más: si una función <strong>nunca</strong> va a tener
+  entrada/salida ni pasos que orquestar, esta capa sobra y montarla es cargo cult. El DDD de
+  verdad no es una lista de carpetas obligatorias — es poner la frontera donde hay una frontera
+  real. Aquí la hay porque mañana entra una base de datos.</p>
+</div>
+
+<p>Y el adaptador. Es el único fichero al que se le permite saber que existe Lambda:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/handler.ts</span><span class="tag">reemplaza a index.ts</span></div>
+<pre><code><b class="k">import</b> { z } <b class="k">from</b> <b class="s">"zod"</b>;
+<b class="k">import</b> { createLink } <b class="k">from</b> <b class="s">"./application/create-link.ts"</b>;
+<b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"./domain/errors.ts"</b>;
+
+<b class="k">export const</b> handler = <b class="k">async</b> (event: <b class="n">unknown</b>) =&gt; {
+  <b class="k">try</b> {
+    <b class="k">const</b> link = createLink(event);
+    console.log(JSON.stringify({ msg: <b class="s">"link created"</b>, ...link }));
+    <b class="k">return</b> link;
+  } <b class="k">catch</b> (error) {
+    <b class="k">if</b> (error <b class="k">instanceof</b> InvalidTargetUrlError) {
+      console.log(JSON.stringify({ msg: <b class="s">"rejected"</b>, reason: error.reason }));
+    } <b class="k">else if</b> (error <b class="k">instanceof</b> z.ZodError) {
+      console.log(JSON.stringify({ msg: <b class="s">"malformed"</b>, issues: error.issues }));
+    }
+    <b class="k">throw</b> error;
+  }
+};</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>app/src/index.ts</span><span class="tag">el punto de entrada</span></div>
+<pre><code><b class="k">export</b> { handler } <b class="k">from</b> <b class="s">"./handler.ts"</b>;</code></pre>
+</div>
+
+<p><code>index.ts</code> se queda con una línea a propósito: el <code>handler = "index.handler"</code>
+de tu <code>main.tf</code> apunta ahí, y así el nombre del fichero que AWS exige no contamina la
+organización de tu código. Es la misma idea que un <code>index</code> de barril, pero con un
+motivo real detrás.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El <code>event</code> entra como <code>unknown</code>, y eso no es pereza</span>
+  <p>En la lección 05 tenías <code>event: CreateLinkEvent</code>. Eso es una
+  <strong>promesa que TypeScript no puede cumplir</strong>: el tipo desaparece al compilar, y
+  quien invoca la función es AWS con un JSON que tú no controlas. Declararlo tipado no valida
+  nada; solo apaga las preguntas del compilador.</p>
+  <p><code>unknown</code> dice la verdad —«no sé qué es esto»— y obliga a que alguien lo
+  compruebe en tiempo de ejecución. Ese alguien es el paso siguiente.</p>
+</div>
+</li>
+
+<li>
+<h3>Una dependencia de verdad: <code>zod</code> en la frontera</h3>
+
+<p>Instálala. Fíjate en que va a <code>dependencies</code>, <strong>no</strong> a
+<code>devDependencies</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>pnpm add zod        <b class="c"># dependencies: se ejecuta en producción</b>
+                    <b class="c"># esbuild y typescript siguen en devDependencies: solo construyen</b></code></pre>
+</div>
+
+<p>La distinción sobrevive aunque lo empaquetes todo en un bundle: es la documentación de qué
+código llega a AWS y qué código se queda en tu portátil. El día que audites una vulnerabilidad,
+esa lista es la que miras.</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/domain/target-url.ts</span><span class="tag">nuevo · sin zod</span></div>
+<pre><code><b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"./errors.ts"</b>;
+
+<b class="c">/** La regla del negocio, como dato puro. Nadie de fuera decide esto. */</b>
+<b class="k">export const</b> ALLOWED_PROTOCOLS = [<b class="s">"http:"</b>, <b class="s">"https:"</b>] <b class="k">as const</b>;
+<b class="k">export const</b> MAX_URL_LENGTH = <b class="n">2048</b>;
+
+<b class="k">export type</b> TargetUrl = <b class="n">string</b> & { <b class="k">readonly</b> __brand: <b class="s">"TargetUrl"</b> };
+
+<b class="c">/** URL es un global del lenguaje, no una dependencia: aquí sí puede entrar. */</b>
+<b class="k">export function</b> parseTargetUrl(raw: <b class="n">string</b>): TargetUrl {
+  <b class="k">if</b> (raw.length &gt; MAX_URL_LENGTH) {
+    <b class="k">throw new</b> InvalidTargetUrlError(<b class="s">`La URL supera los ${MAX_URL_LENGTH} caracteres`</b>);
+  }
+
+  <b class="k">let</b> parsed: URL;
+  <b class="k">try</b> {
+    parsed = <b class="k">new</b> URL(raw);
+  } <b class="k">catch</b> {
+    <b class="k">throw new</b> InvalidTargetUrlError(<b class="s">"No es una URL válida"</b>);
+  }
+
+  <b class="k">if</b> (!ALLOWED_PROTOCOLS.includes(parsed.protocol <b class="k">as</b> (<b class="k">typeof</b> ALLOWED_PROTOCOLS)[<b class="n">number</b>])) {
+    <b class="k">throw new</b> InvalidTargetUrlError(<b class="s">"Solo se admiten URLs http o https"</b>);
+  }
+
+  <b class="k">return</b> parsed.href <b class="k">as</b> TargetUrl;   <b class="c">// .href normaliza: añade la barra final</b>
+}</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Por qué zod NO está aquí, aunque la validación sí</span>
+  <p>Esto lo corrigió él, y tenía razón: <strong>en la primera versión de esta lección el esquema
+  de zod vivía en <code>domain/</code></strong>, y eso contradice la regla que la propia lección
+  acaba de dar. El dominio no importa dependencias externas. Punto.</p>
+  <p>La distinción que había que hacer es más fina, y es la que vale la pena llevarse:</p>
+  <ul>
+    <li><strong>La regla es del dominio</strong> — «solo http o https, máximo 2048». Vive aquí,
+    exportada como dato (<code>ALLOWED_PROTOCOLS</code>, <code>MAX_URL_LENGTH</code>) para que
+    quien la necesite arriba la lea de una sola fuente.</li>
+    <li><strong>El mecanismo de validación es de la capa de arriba.</strong> zod es una
+    herramienta con la que <em>implementas</em> una comprobación, igual que el SDK de AWS es una
+    herramienta con la que implementas una escritura.</li>
+  </ul>
+  <p>La prueba de que la separación es correcta: si mañana cambias zod por Valibot o por
+  ArkType, <code>domain/</code> no se toca. Si el esquema viviera ahí, ese cambio de librería te
+  obligaría a editar tus reglas de negocio — que es exactamente la clase de acoplamiento que
+  las capas existen para impedir.</p>
+</div>
+
+<p>Y ahora sí, zod, en el caso de uso, validando <strong>la forma del payload</strong>:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/create-link.ts</span><span class="tag">aquí sí</span></div>
+<pre><code><b class="k">const</b> createLinkInput = z.object({
+  url: z.string().max(MAX_URL_LENGTH),   <b class="c">// el tope lo dicta el dominio</b>
+});
+
+<b class="k">export function</b> createLink(payload: <b class="n">unknown</b>): Link {
+  <b class="k">const</b> { url } = createLinkInput.parse(payload);        <b class="c">// ¿tiene la forma pactada?</b>
+  <b class="k">return</b> { code: generateShortCode(), url: parseTargetUrl(url) };  <b class="c">// ¿cumple la regla?</b>
+}</code></pre>
+</div>
+
+<p>Dos preguntas distintas, dos responsables distintos. <strong>«¿Esto es un objeto con un campo
+<code>url</code> de tipo cadena?»</strong> es un contrato de transporte: quien me invoque puede
+mandarme cualquier basura. <strong>«¿Esa cadena es una URL que este acortador acepta?»</strong>
+es una regla del negocio, y seguiría siendo la misma desde una CLI.</p>
+
+<div class="callout win">
+  <span class="callout-title">Lo que ganas al separarlas: el dominio deja de defenderse de <code>unknown</code></span>
+  <p>Fíjate en la firma: <code>parseTargetUrl(raw: string)</code>, no <code>unknown</code>. El
+  dominio ya no comprueba tipos porque <strong>la frontera lo hizo antes</strong>. Eso es lo que
+  compras con «parse, don't validate» aplicado en el sitio correcto: cada capa recibe datos más
+  fuertes que la anterior, y la de abajo puede dedicarse a lo suyo.</p>
+  <p>Lo vas a notar en los tests del paso 4: los casos <code>42</code>, <code>null</code> y
+  <code>{}</code> se prueban contra <code>createLink</code>, y los casos
+  <code>"javascript:alert(1)"</code> y <code>"ftp://…"</code> contra <code>parseTargetUrl</code>.
+  Cuando los tests se reparten solos, la frontera está bien puesta.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y el detalle que sí se te escapa: <code>.href</code>, no <code>.toString()</code> a ciegas</span>
+  <p><code>new URL("https://ejemplo.com").href</code> devuelve
+  <code>https://ejemplo.com/</code>, <strong>con barra final</strong>. Para un acortador eso
+  importa: sin normalizar, <code>https://ejemplo.com</code> y <code>https://ejemplo.com/</code>
+  serían dos filas distintas de la tabla apuntando al mismo sitio.</p>
+  <p>Lo digo porque es lo que casi te pasa al revés: si hubieras sustituido este código por
+  <code>z.httpUrl()</code> a secas, <strong>habrías perdido la normalización sin enterarte</strong>
+  — zod valida, pero no normaliza salvo que se lo pidas con <code>normalize: true</code>.
+  Comprobado con zod 4.4.3. El patrón, que se repite: <strong>al sustituir código propio por una
+  librería, lo que se rompe no es lo que la librería hace peor, sino lo que tu código hacía sin
+  que tú lo supieras.</strong></p>
+</div>
+
+<p>Comprueba y construye:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>pnpm run typecheck
+pnpm run build
+ls -l dist/</code></pre>
+</div>
+</li>
+
+<li>
+<h3>El precio del artefacto: mira ese <code>ls</code></h3>
+
+<p>Estos números están medidos con tu misma cadena de herramientas —pnpm 11.23.0, esbuild 0.28.2,
+TypeScript 7.0.2, <code>--minify</code>, <code>--format=esm</code>— el 25 de agosto de 2026:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Lección 05</th><th>Hoy, con zod</th><th>Factor</th></tr></thead>
+  <tbody>
+    <tr><td><code>dist/index.mjs</code></td><td>563 B</td><td><strong>328 068 B</strong></td><td>×583</td></tr>
+    <tr><td><code>dist/index.mjs.map</code></td><td>2 104 B</td><td><strong>986 785 B</strong></td><td>×469</td></tr>
+    <tr><td>El <code>.zip</code> que sube a AWS</td><td>1 649 B</td><td><strong>220 400 B</strong></td><td>×134</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="small">Tu cifra bailará unas decenas de bytes respecto a ésta: el bundle incluye el
+texto literal de tus mensajes de error, así que depende de cómo los hayas escrito. Lo que importa
+es el orden de magnitud, no el byte.</p>
+
+<p>Dos cosas saltan a la vista, y las dos son lecciones.</p>
+
+<div class="callout trap">
+  <span class="callout-title">1. El sourcemap viaja a AWS, pesa el triple que tu código y no sirve para nada allí</span>
+  <p>Tu <code>archive_file</code> comprime <code>source_dir = ".../app/dist"</code>, y en
+  <code>dist/</code> hay dos ficheros. El <code>.map</code> siempre ha ido dentro del zip; hasta
+  hoy pesaba 2 KB y no te enteraste. Ahora es <strong>casi un mega</strong>, el 75% del
+  paquete.</p>
+  <p>Y Node no lo lee: los sourcemaps solo se aplican si arrancas con
+  <code>--enable-source-maps</code>, que en Lambda hay que poner a mano en
+  <code>NODE_OPTIONS</code> y que además tiene coste de arranque. Estás pagando descarga y
+  descompresión en cada arranque en frío por un fichero que nadie abre.</p>
+  <p>Arréglalo donde toca, que es en Terraform. Un solo fichero en vez de un directorio:</p>
+  <div class="code">
+    <div class="code-label"><span>projects/01-serverless-api/main.tf</span><span class="tag">cambia una línea</span></div>
+<pre><code>data <b class="s">"archive_file"</b> <b class="s">"create_link"</b> {
+  type        = <b class="s">"zip"</b>
+  <b class="c"># source_dir  = "${path.module}/app/dist"   ← se llevaba también el .map</b>
+  source_file = <b class="s">"${path.module}/app/dist/index.mjs"</b>
+  output_path = <b class="s">"${path.module}/build/create_link.zip"</b>
+}</code></pre>
+  </div>
+  <p class="small">Verificado con Terraform 1.15.8 y el provider <code>archive</code>: con
+  <code>source_file</code>, el zip contiene <code>index.mjs</code> en la raíz —usa el
+  <em>basename</em>—, así que <code>handler = "index.handler"</code> sigue funcionando sin tocar
+  nada. El zip baja de 220 400 a 65 519 bytes. Y sigues teniendo el <code>.map</code> en local,
+  que es donde de verdad lo usas.</p>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">2. Trescientos kilobytes para usar una función de zod: eso es no tener <em>tree shaking</em></span>
+  <p>Tú usas <code>z.httpUrl()</code> y <code>.max()</code>. Se te ha colado la librería entera
+  porque el <code>zod</code> clásico encadena métodos sobre objetos, y esbuild no puede demostrar
+  qué métodos no vas a llamar: ante la duda, se lo lleva todo.</p>
+  <p>Existe <code>zod/mini</code>, con la misma validación pero API de funciones sueltas
+  (<code>z.optional(z.string())</code> en vez de <code>z.string().optional()</code>), y ahí el
+  <em>tree shaking</em> sí funciona: <strong>8 944 bytes</strong> en vez de 328 068, medido con
+  tu esbuild. El precio es que la API cambia y algunos métodos no existen —<code>.max()</code>
+  encadenado es uno de ellos.</p>
+  <p><strong>Para esta función, quédate con <code>zod</code> normal.</strong> No por comodidad:
+  porque 320 KB de JavaScript no son el cuello de botella de tu arranque en frío, y optimizar
+  antes de medir es una forma elegante de perder el tiempo. Lo vas a comprobar tú mismo en el
+  paso 5. Lo que sí quiero es que sepas <em>que existe la palanca</em> y por qué está ahí.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La pregunta que viene ahora: ¿y las <em>layers</em>? ¿Y no bundlear?</span>
+  <p>Tres formas de meter una dependencia en una Lambda de Node, y una de ellas es la buena:</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Opción</th><th>Qué implica</th><th>Veredicto</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Bundlear</strong> (lo tuyo)</td><td>esbuild mete el código de zod dentro de <code>index.mjs</code></td><td><strong>Sí.</strong> Un fichero, una versión, reproducible</td></tr>
+      <tr><td>Subir <code>node_modules</code></td><td>Miles de ficheros, descomprimir lento, y con pnpm son enlaces simbólicos</td><td>No. Aquí no funcionaría ni queriendo</td></tr>
+      <tr><td><strong>Layer</strong></td><td>Un zip aparte, compartido entre funciones, montado en <code>/opt</code></td><td>No para esto</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Las <em>layers</em> son un mecanismo real —máximo 5 por función, y cuentan para los 250 MB
+  descomprimidos— pero resuelven un problema que tú no tienes: compartir binarios pesados entre
+  muchas funciones sin repetirlos. Para una dependencia JavaScript pura, una layer te da lo peor
+  de los dos mundos: <strong>tu código y sus dependencias dejan de versionarse juntos</strong>, y
+  pierdes el <em>tree shaking</em>, porque lo que se sube es el paquete completo.</p>
+  <p>Hay un caso donde <em>no</em> bundlear tienta de verdad, y llega mañana: <strong>el SDK de
+  AWS ya viene dentro del runtime</strong>. Bundlear <code>@aws-sdk/client-dynamodb</code> añade
+  otros 504 KB al artefacto. Y aun así, AWS te dice que lo bundlees: <em>«we strongly recommend
+  that you include the AWS SDK clients that you need in your deployment package. This maximizes
+  backward compatibility during future Lambda runtime updates.»</em> El motivo es que el runtime
+  trae <em>una versión menor concreta</em>, distinta según la región, y AWS la actualiza cuando
+  quiere. Es exactamente el mismo argumento que tu <code>.terraform.lock.hcl</code>: lo que se
+  ejecuta en producción lo decides tú, no el proveedor.</p>
+</div>
+</li>
+
+<li>
+<h3>Tests sin instalar absolutamente nada</h3>
+
+<p>Aquí viene la sorpresa agradable. No hay que instalar Jest, ni Vitest, ni un transpilador para
+los tests. Tu Node 24 trae dos cosas que hace tres años no existían: un
+<strong>ejecutor de tests</strong> (<code>node:test</code>) y la capacidad de
+<strong>ejecutar TypeScript directamente</strong>, borrándole los tipos al vuelo.</p>
+
+<p>Primero, una línea en el <code>tsconfig.json</code> para que el compilador acepte los
+<code>import</code> con extensión <code>.ts</code> que has escrito en el paso 1:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/tsconfig.json</span><span class="tag">justo debajo de noEmit</span></div>
+<pre><code>    <b class="s">"noEmit"</b>: <b class="k">true</b>,
+    <b class="s">"allowImportingTsExtensions"</b>: <b class="k">true</b>,</code></pre>
+</div>
+
+<p class="small">TypeScript solo lo permite cuando no emites JavaScript, que es tu caso:
+<code>tsc</code> aquí únicamente comprueba, y quien construye es esbuild. Escribir la extensión
+real es lo que hace que <em>el mismo fichero</em> lo entiendan los tres: <code>tsc</code>,
+esbuild y Node.</p>
+
+<p>Y los scripts. Fíjate en las comillas simples: el glob lo expande Node, no tu shell:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/package.json</span><span class="tag">scripts</span></div>
+<pre><code>    <b class="s">"typecheck"</b>: <b class="s">"tsc --noEmit"</b>,
+    <b class="s">"test"</b>: <b class="s">"node --test 'src/**/*.test.ts'"</b>,
+    <b class="s">"test:watch"</b>: <b class="s">"node --test --watch 'src/**/*.test.ts'"</b>,</code></pre>
+</div>
+
+<p>Ahora el test del dominio. Va <strong>al lado</strong> del fichero que prueba, no en un
+<code>test/</code> paralelo: cuando muevas <code>target-url.ts</code>, su test se mueve con él.</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/domain/target-url.test.ts</span><span class="tag">la regla</span></div>
+<pre><code><b class="k">import</b> { describe, it } <b class="k">from</b> <b class="s">"node:test"</b>;
+<b class="k">import</b> assert <b class="k">from</b> <b class="s">"node:assert/strict"</b>;
+<b class="k">import</b> { parseTargetUrl } <b class="k">from</b> <b class="s">"./target-url.ts"</b>;
+<b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"./errors.ts"</b>;
+
+describe(<b class="s">"parseTargetUrl"</b>, () =&gt; {
+  it(<b class="s">"normaliza la URL que acepta"</b>, () =&gt; {
+    assert.equal(parseTargetUrl(<b class="s">"https://a.dev"</b>), <b class="s">"https://a.dev/"</b>);
+  });
+
+  <b class="c">// Solo cadenas: que sea una cadena ya lo garantizó la capa de arriba.</b>
+  <b class="k">for</b> (<b class="k">const</b> bad <b class="k">of</b> [<b class="s">"javascript:alert(1)"</b>, <b class="s">"ftp://a.dev"</b>, <b class="s">""</b>, <b class="s">"no-soy-url"</b>]) {
+    it(<b class="s">`rechaza ${JSON.stringify(bad)}`</b>, () =&gt; {
+      assert.throws(() =&gt; parseTargetUrl(bad), InvalidTargetUrlError);
+    });
+  }
+});</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/create-link.test.ts</span><span class="tag">la forma</span></div>
+<pre><code><b class="k">import</b> { z } <b class="k">from</b> <b class="s">"zod"</b>;
+<b class="k">import</b> { createLink } <b class="k">from</b> <b class="s">"./create-link.ts"</b>;
+<b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"../domain/errors.ts"</b>;
+
+describe(<b class="s">"createLink"</b>, () =&gt; {
+  it(<b class="s">"genera un código de 7 caracteres"</b>, () =&gt; {
+    assert.match(createLink({ url: <b class="s">"https://a.dev"</b> }).code, <b class="s">/^[A-Za-z0-9_-]{7}$/</b>);
+  });
+
+  <b class="c">// El payload malformado es cosa del caso de uso, no del dominio.</b>
+  <b class="k">for</b> (<b class="k">const</b> bad <b class="k">of</b> [{}, { url: <b class="n">42</b> }, { url: <b class="k">null</b> }, <b class="k">null</b>, <b class="s">"no soy un objeto"</b>]) {
+    it(<b class="s">`rechaza el payload ${JSON.stringify(bad)}`</b>, () =&gt; {
+      assert.throws(() =&gt; createLink(bad), z.ZodError);
+    });
+  }
+
+  <b class="c">// La regla sigue siendo del dominio, y se propaga sin traducirse.</b>
+  it(<b class="s">"propaga el error de dominio"</b>, () =&gt; {
+    assert.throws(() =&gt; createLink({ url: <b class="s">"ftp://a.dev"</b> }), InvalidTargetUrlError);
+  });
+});</code></pre>
+</div>
+
+<p class="small">Los <code>import</code> de <code>node:test</code> y <code>node:assert/strict</code>
+son los mismos en los tres ficheros; los omito aquí para no repetir.</p>
+
+<div class="callout win">
+  <span class="callout-title">Los tests se han repartido solos, y eso es el diagnóstico</span>
+  <p>Mira dónde ha caído cada caso. <code>42</code>, <code>null</code> y <code>{}</code> se
+  prueban contra <code>createLink</code>. <code>"javascript:alert(1)"</code> y
+  <code>"ftp://…"</code> contra <code>parseTargetUrl</code>. Nadie ha tenido que decidirlo: cada
+  caso cae donde está el responsable.</p>
+  <p><strong>Cuando un caso de prueba no sabe a qué fichero pertenece, la frontera está mal
+  puesta.</strong> Es el mejor detector de arquitectura que vas a tener, y es gratis.</p>
+</div>
+
+<p>Y el del adaptador, que prueba otra cosa distinta: que el handler <em>traduce</em> bien.</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/handler.test.ts</span><span class="tag">la traducción</span></div>
+<pre><code><b class="k">import</b> { describe, it, mock } <b class="k">from</b> <b class="s">"node:test"</b>;
+<b class="k">import</b> assert <b class="k">from</b> <b class="s">"node:assert/strict"</b>;
+<b class="k">import</b> { handler } <b class="k">from</b> <b class="s">"./handler.ts"</b>;
+<b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"./domain/errors.ts"</b>;
+
+describe(<b class="s">"handler"</b>, () =&gt; {
+  it(<b class="s">"devuelve el enlace y lo registra"</b>, <b class="k">async</b> () =&gt; {
+    mock.method(console, <b class="s">"log"</b>, () =&gt; {});          <b class="c">// silencia el log</b>
+    <b class="k">const</b> link = <b class="k">await</b> handler({ url: <b class="s">"https://developer.hashicorp.com"</b> });
+    assert.equal(link.url, <b class="s">"https://developer.hashicorp.com/"</b>);
+  });
+
+  it(<b class="s">"propaga el error de dominio"</b>, <b class="k">async</b> () =&gt; {
+    mock.method(console, <b class="s">"log"</b>, () =&gt; {});
+    <b class="k">await</b> assert.rejects(() =&gt; handler({ url: <b class="s">"ftp://a.dev"</b> }), InvalidTargetUrlError);
+  });
+});</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>pnpm run test</code></pre>
+</div>
+
+<p><strong>Catorce tests</strong> en poco más de cien milisegundos, sin una sola dependencia de
+testing añadida. Compáralo con lo que tardan tus <code>aws lambda invoke</code>.</p>
+
+<div class="callout win">
+  <span class="callout-title">Lo que acabas de demostrar sin darte cuenta</span>
+  <p>Los tests han pasado. Eso significa que <strong>ninguna de esas capas importa nada de
+  AWS</strong> — si lo hicieran, el test habría reventado buscando credenciales. La arquitectura
+  del paso 1 no es una promesa: acaba de quedar verificada por una máquina, y volverá a
+  verificarse cada vez que ejecutes <code>pnpm run test</code>.</p>
+  <p>Ese es el valor real de separar capas, y por eso la cita de AWS mete las dos ideas en la
+  misma frase.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Lo que estos tests <em>no</em> pueden probar, y no es poco</span>
+  <p>Ni uno solo de ellos se enteraría de que has escrito mal el ARN del grupo de logs, de que el
+  rol no tiene <code>logs:PutLogEvents</code>, de que el <code>handler</code> del
+  <code>main.tf</code> apunta a un fichero que ya no existe, o de que el runtime es el
+  equivocado. <strong>Un test unitario no prueba infraestructura.</strong></p>
+  <p>Eso no los invalida: los separa. La lógica se prueba con tests y la infraestructura se
+  prueba desplegando y verificando, que es exactamente lo que llevas haciendo cinco lecciones.
+  Los tests de integración de verdad —desplegar, invocar y comprobar contra AWS real— llegan en
+  el proyecto 07 con CI, porque necesitan un entorno efímero y credenciales sin claves.</p>
+</div>
+</li>
+
+<li>
+<h3>Despliega, y cobra la deuda de la lección 05</h3>
+
+<p>El orden de siempre, que ahora tiene un paso más al principio:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>export AWS_PROFILE=personal
+aws login
+aws sts get-caller-identity          <b class="c"># el Arn debe terminar en ":user/terraform"</b>
+
+cd app
+pnpm run typecheck && pnpm run test && pnpm run build
+cd ..
+
+terraform plan</code></pre>
+</div>
+
+<p><strong>Párate en el <code>plan</code> y léelo antes de aplicar.</strong> Esto es lo que te
+prometí en la lección 05 y no pudimos comprobar:</p>
+
+<div class="code">
+  <div class="code-label"><span>terraform plan</span><span class="tag">salida</span></div>
+<pre><code>  <b class="c">~ resource "aws_lambda_function" "create_link" {</b>
+        id               = <b class="s">"url-shortener-create-link"</b>
+      <b class="c">~ source_code_hash = "vN3k…" -&gt; "s5cgKjFRaIFUuST+CFn9pGIw8+AAZZ276SztCdmFqtQ="</b>
+      <b class="c">~ last_modified    = "2026-08-24T…" -&gt; (known after apply)</b>
+        <b class="c"># (todo lo demás sin cambios)</b>
+    }</code></pre>
+</div>
+
+<p>Ahí está: has cambiado seis ficheros de TypeScript, añadido una librería y reorganizado medio
+proyecto, y Terraform lo ve como <strong>una sola cosa</strong> — el hash del artefacto es
+distinto. Terraform no sabe nada de tu código; sabe que el zip que tiene registrado en el state
+ya no coincide con el que hay en disco. Esa es toda la magia, y ahora la has visto funcionar.</p>
+
+<p class="small">Si el <code>plan</code> dice «No changes», te has saltado el
+<code>pnpm run build</code>. Si falla con <em>«no such file or directory»</em> sobre
+<code>dist/index.mjs</code>, lo mismo: el <code>archive_file</code> se resuelve durante el
+<code>plan</code>, antes de hablar con AWS.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>terraform apply
+
+FN=$(terraform output -raw function_name)
+
+<b class="c"># 1. El caso bueno — fíjate en la barra final que antes no salía</b>
+aws lambda invoke --function-name "$FN" \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"url":"https://developer.hashicorp.com"}' \
+  ok.json && cat ok.json
+
+<b class="c"># 2. El caso malo — ahora el mensaje lo escribe zod, y es tuyo</b>
+aws lambda invoke --function-name "$FN" \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"url":"javascript:alert(1)"}' \
+  malo.json && cat malo.json
+
+<b class="c"># 3. Los logs, y el número que hoy importa</b>
+aws logs tail "$(terraform output -raw log_group_name)" --since 5m</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">El experimento de hoy: busca <code>Init Duration</code> en el REPORT</span>
+  <p>Has multiplicado el artefacto por 134. La pregunta honesta es <strong>cuánto cuesta eso de
+  verdad</strong>, y no te la voy a contestar yo: la tienes en tus propios logs. Compara la línea
+  <code>REPORT</code> de hoy con la que me pegaste en la lección 05 y mira el
+  <code>Init Duration</code> — solo aparece en arranques en frío, así que si no lo ves, espera
+  unos minutos e invoca otra vez.</p>
+  <p>Mi apuesta: la diferencia es más pequeña de lo que el ×134 te hace temer, porque el arranque
+  en frío lo domina el arranque de Node y de la <em>micro</em>VM, no la descarga de unos cientos
+  de kilobytes. Pero es una apuesta, y por eso la medimos. <strong>Pégame las dos líneas
+  REPORT</strong> y lo miramos juntos: si me equivoco, es una razón medida para pasarse a
+  <code>zod/mini</code>, y eso vale más que cualquier consejo de blog.</p>
+</div>
+
+<ul class="checklist" data-key="l06-verify">
+  <li><code>pnpm run test</code> da 14 tests en verde, sin dependencias nuevas de test.</li>
+  <li>El <code>plan</code> muestra <code>~ source_code_hash</code> y nada más.</li>
+  <li><code>unzip -l build/create_link.zip</code> contiene <strong>solo</strong> <code>index.mjs</code>.</li>
+  <li>El caso bueno devuelve la URL con barra final: <code>https://developer.hashicorp.com/</code>.</li>
+  <li>El caso malo da <code>FunctionError: "Unhandled"</code> con <code>Solo se admiten URLs http o https</code>.</li>
+  <li>Tienes anotado tu <code>Init Duration</code> de hoy y el de la lección 05.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que tu lógica de negocio <strong>no sabe que vive en Lambda</strong>, y no es una opinión:
+    lo prueban catorce tests que se ejecutan sin credenciales.</li>
+    <li>Que sabes qué le pasa a tu artefacto cuando añades una dependencia, con
+    <strong>números medidos</strong> y no intuiciones — incluido el fichero de un mega que se
+    colaba en el paquete sin que nadie lo mirara.</li>
+    <li>Que <code>source_code_hash</code> funciona, porque lo has visto detectar tu cambio en un
+    <code>plan</code> en vez de creértelo.</li>
+    <li>Que sabes decidir entre bundlear, <em>layer</em> y confiar en el runtime, y defender la
+    decisión con la documentación de AWS delante.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>Los tests no prueban nada de tu infraestructura.</strong> Pasarían enteros con el
+    rol roto, el ARN mal escrito o el <code>handler</code> apuntando a un fichero inexistente.
+    Solo el <code>apply</code> y el <code>invoke</code> cubren eso.</li>
+    <li><strong>Nadie ejecuta los tests por ti.</strong> Hoy dependen de que te acuerdes de
+    escribir <code>pnpm run test</code>. Un test que solo corre cuando alguien se acuerda es
+    documentación optimista. Eso lo arregla CI, en el proyecto 07.</li>
+    <li><strong>No has medido el coste real del arranque en frío todavía</strong> — tienes el
+    dato en los logs, pero hasta que compares las dos líneas <code>REPORT</code> el ×134 sigue
+    siendo una cifra sin consecuencia conocida.</li>
+    <li><strong>La capa <code>application/</code> aún no se ha ganado su sitio.</strong> Se lo
+    gana mañana o se borra. Te lo recuerdo yo si mañana no aparece la razón.</li>
+  </ul>
+</div>
+
+<h2>Y lo que viste en la consola de Lambda</h2>
+
+<p>Esos dos interruptores de <em>Custom settings</em> son capacidades nuevas —diciembre de
+2025—, y las dos llevan el icono de «no se puede cambiar después de crear la función». Ninguna
+de las dos es para ti hoy, pero saber qué son y <em>por qué no</em> es material de entrevista.</p>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía de dos capacidades</span>
+    <h2>Durable execution · EC2 capacity provider</h2>
+  </header>
+  <div class="anatomy-body">
+
+    <h3>Durable execution (funciones duraderas)</h3>
+    <p>Una Lambda normal muere a los 15 minutos como máximo. Una <strong>función duradera</strong>
+    puede durar <strong>hasta un año</strong>, y lo consigue con un truco que merece la pena
+    entender: <em>checkpoint y replay</em>. Tú envuelves cada paso con el SDK de ejecución
+    duradera; Lambda guarda el resultado de cada paso completado, y cuando la ejecución se
+    reanuda tras una pausa o un fallo, <strong>tu código se ejecuta desde el principio otra
+    vez</strong> pero saltándose los pasos ya hechos, usando los resultados guardados.</p>
+    <p>Lo que compra: puedes escribir un flujo de varios pasos —cobrar, reservar inventario,
+    esperar la aprobación de un humano, enviar— como código secuencial normal, y sobrevive a
+    caídas. Y durante las <em>esperas</em>, la función se suspende <strong>sin facturar
+    cómputo</strong>. Ahí está la gracia: esperar tres días a que alguien firme cuesta cero.</p>
+    <p>Se parece a Step Functions, y AWS compara ambos explícitamente: Step Functions es un
+    servicio aparte con un lenguaje de grafos y 220+ integraciones nativas; las funciones
+    duraderas viven <em>dentro</em> de Lambda y se escriben en TypeScript normal. La regla de
+    dedo: si el flujo está pegado a tu lógica de negocio, funciones duraderas; si orquesta
+    servicios de AWS entre sí, Step Functions.</p>
+
+    <h3>EC2 capacity provider (Lambda Managed Instances)</h3>
+    <p>Tus Lambdas normales corren en la flota compartida de AWS, aisladas con microVMs
+    Firecracker, y facturan por milisegundo de ejecución. Con un <strong>capacity
+    provider</strong>, corren sobre instancias EC2 <strong>de tu cuenta</strong> que AWS gestiona
+    por ti —parchea, escala, balancea— y facturan como EC2: precio de instancia
+    <strong>más un 15% de gestión</strong>, con acceso a Savings Plans y Reserved Instances.</p>
+    <p>El cambio más profundo no es el precio, es el <strong>modelo de concurrencia</strong>. En
+    Lambda normal, un entorno de ejecución atiende <strong>una</strong> invocación cada vez —diez
+    peticiones simultáneas son diez entornos. Sobre managed instances, un mismo entorno atiende
+    <strong>varias a la vez</strong>. Eso aprovecha mucho mejor la máquina en cargas con mucha
+    E/S… y significa que el estado global de tu módulo pasa a estar compartido entre invocaciones
+    concurrentes. Todo lo que sabías sobre seguridad de hilos vuelve a aplicar.</p>
+    <p>Además no hay arranque en frío (escala por CPU, de forma asíncrona) pero tampoco
+    <em>escala a cero</em>: mantiene el mínimo de entornos que configures, encendidos y
+    facturando.</p>
+
+    <div class="callout trap">
+      <span class="callout-title">Por qué no las vas a tocar</span>
+      <ul>
+        <li><strong>Managed instances factura por hora, encendida o no.</strong> Con tu
+        presupuesto de 30 USD/mes, eso rompe la regla del curso: tu proyecto 01 cuesta
+        exactamente cero en reposo justo porque está en la flota compartida.</li>
+        <li><strong>Están pensadas para volumen alto y predecible.</strong> Tu acortador recibe
+        las invocaciones que le mandas tú.</li>
+        <li><strong>Durable execution no aporta nada a una función de 5 segundos</strong> sin
+        pasos que reintentar ni esperas que suspender. Cuando llegue el proyecto 03 —el gateway
+        de IA— vuelve a mirarla: encadenar llamadas a un modelo con reintentos es literalmente su
+        caso de uso estrella.</li>
+      </ul>
+    </div>
+
+    <p class="small">El icono de la consola dice la verdad: la ejecución duradera
+    <strong>se activa al crear la función y no se puede cambiar luego</strong>. En Terraform eso
+    se traduce en un <code>ForceNew</code> — cambiar ese atributo destruye y recrea la función.
+    Los detalles, las cuotas y el resto de la ficha están en
+    <a href="../reference/aws-lambda.html#capacidades-2026">la referencia de Lambda</a>.</p>
+  </div>
+</section>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Tu bundle pesa 328 KB y comprime a unos 65 KB, pero el
+  <code>.zip</code> que subía a AWS pesaba 220 KB. ¿Qué había dentro de más?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="source_dir comprimía todo el directorio dist, y esbuild deja ahí dos ficheros: el bundle y su sourcemap de 986 785 bytes. El sourcemap era el 75% del paquete y Node no lo lee salvo que actives --enable-source-maps. Por eso se cambia a source_file.">El sourcemap viaja dentro del zip</button></li>
+    <li><button data-correct="false" data-why="El lockfile ni siquiera está en dist: vive en la raíz de app y sirve para instalar dependencias en tu máquina. Nunca ha formado parte del artefacto, y en un bundle no tendría ningún sentido que lo hiciera.">El lockfile viaja dentro del zip</button></li>
+    <li><button data-correct="false" data-why="El bundle sí está minificado: el script de build lleva --minify y por eso son 328 KB en vez de los 545 135 bytes que ocupa sin minificar. Quitar la minificación empeoraría el problema, no lo explicaría.">El bundle viaja sin minificar dentro</button></li>
+    <li><button data-correct="false" data-why="El tsconfig es configuración del compilador y vive en la raíz de app, fuera de dist. Solo lo usa tsc en tu portátil para comprobar tipos; en tiempo de ejecución no existe TypeScript en ninguna parte.">El tsconfig viaja dentro del zip</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">El esquema de <code>zod</code> que decide qué URL acepta el acortador,
+  ¿dónde tiene que vivir, y por qué?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Qué URL es aceptable para un acortador es una regla de negocio: sería idéntica si el acortador se usara desde una CLI o un servidor Express. Lo que sí pertenece al handler es sacar el campo url del evento, porque eso sí depende de quién invoque.">En el dominio: es regla de negocio</button></li>
+    <li><button data-correct="false" data-why="El handler es la frontera y por eso desconfía del evento, pero desconfiar no es decidir. Si la regla vive ahí, cambiar de invocador te obliga a reescribirla, y dos invocadores distintos podrían aceptar URLs distintas sin querer.">En el handler: es dato no confiable</button></li>
+    <li><button data-correct="false" data-why="Un módulo de utilidades es donde va a morir el código que nadie sabe dónde poner. La regla tiene un dueño claro —el dominio del acortador— y ponerla en utilidades borra justo la información que las capas existen para conservar.">En utilidades, que lo comparte todo</button></li>
+    <li><button data-correct="false" data-why="Terraform gestiona infraestructura, no reglas de validación de datos. Meter el patrón en una variable obligaría a un apply para cambiar una regla de negocio y dejaría la lógica repartida entre dos lenguajes sin tests que la cubran.">En Terraform, como una variable</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Mañana añades <code>@aws-sdk/client-dynamodb</code>, que ya viene incluido en
+  el runtime <code>nodejs24.x</code>. AWS recomienda empaquetarlo igualmente. ¿Por qué?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="El runtime incluye una versión menor concreta del SDK, distinta según la región, y AWS la actualiza periódicamente con cambios que pueden alterar el comportamiento. Empaquetarlo es el mismo argumento que tu .terraform.lock.hcl: la versión que corre en producción la eliges tú.">El runtime trae una versión que AWS cambia</button></li>
+    <li><button data-correct="false" data-why="El runtime sí incluye el SDK v3 completo: es justo lo que hace tentador no empaquetarlo, porque ahorra medio megabyte de artefacto. El motivo para empaquetarlo no es que falte, sino que no controlas qué versión exacta te toca.">El runtime no incluye ningún cliente SDK</button></li>
+    <li><button data-correct="false" data-why="Empaquetarlo hace el artefacto más grande, no más pequeño: son unos 504 KB adicionales medidos con esbuild. Se acepta ese coste a cambio de reproducibilidad, que es un intercambio consciente y no una optimización de tamaño.">Empaquetarlo reduce el tamaño del zip</button></li>
+    <li><button data-correct="false" data-why="Los tipos los aporta el paquete instalado en node_modules durante la comprobación con tsc, y eso pasa en tu portátil antes de construir nada. El tipado funciona igual empaquetes el SDK o lo dejes fuera del bundle.">Sin empaquetarlo el handler pierde tipos</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://docs.aws.amazon.com/lambda/latest/dg/typescript-handler.html#typescript-best-practices">
+  <strong>Code best practices for TypeScript Lambda functions</strong></a> — AWS, 5 minutos. Son
+  cuatro viñetas y hoy has aplicado las cuatro: separar el handler de la lógica, controlar las
+  dependencias que empaquetas, preferir dependencias simples que carguen rápido, y reducir el
+  paquete a lo necesario en tiempo de ejecución. Es la página que citas en una entrevista cuando
+  te pregunten por qué organizas así una Lambda.</p>
+  <p>Si te sobran diez minutos, la misma página tiene arriba
+  <a href="https://docs.aws.amazon.com/lambda/latest/dg/typescript-handler.html#typescript-handler-state"><em>Using
+  global state</em></a>: explica por qué el cliente del SDK se instancia fuera del handler. Es lo
+  primero que vas a escribir mañana con DynamoDB.</p>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 07 — la memoria.</strong> Entra DynamoDB y con ella la primera decisión de
+  diseño de datos del curso: cuál es la clave de partición de una tabla de enlaces y por qué no
+  es lo que parece. Ahí se resuelven de verdad las colisiones de códigos, con una escritura
+  condicional — y ahí es donde <code>application/create-link.ts</code> recibe el repositorio y
+  justifica su existencia, o la borramos. La política del rol crece con dos acciones más, otra
+  vez sobre un ARN concreto.</p>
+  <p><strong>Y una pregunta que dejamos abierta hoy:</strong> ¿cuántas Lambdas? Hoy tienes una
+  que crea; falta la que redirige. La respuesta corta es <strong>dos, y el motivo es IAM</strong>
+  —una necesitará <code>dynamodb:PutItem</code> y la otra <code>dynamodb:GetItem</code>, y con
+  una sola función las dos acciones viajan juntas—. La respuesta larga, con la tabla de
+  intercambios entre «una por endpoint» y <em>lambdalith</em>, está en
+  <a href="../reference/typescript-lambda.html#cuantas-lambdas">la ficha de TypeScript en
+  Lambda</a>. En Terraform se resuelve con <code>for_each</code> sobre un mapa de funciones, y
+  eso llega en la lección 08 con API Gateway.</p>
+  <p class="small">Sigue pendiente lo que arrastramos: el <strong>post-mortem del state</strong>
+  prometido en la lección 03, y el <strong>MFA del usuario <code>terraform</code></strong>. Y se
+  suma uno nuevo: <strong>ejecutar los tests automáticamente</strong>, que es el proyecto 07 con
+  CI. Ninguno bloquea el proyecto 01.</p>
+  <div class="nav-links">
+    <a href="./0005-tu-codigo-en-aws.html">← Lección 05</a>
+    <a href="../reference/typescript-lambda.html">Referencia: TypeScript en Lambda</a>
+    <a href="../reference/aws-lambda.html">Referencia: Lambda</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Tres cosas: el <code>terraform plan</code> con el
+    <code>~ source_code_hash</code>, la salida de <code>pnpm run test</code>, y —la que más me
+    interesa— <strong>las dos líneas <code>REPORT</code></strong>, la de la lección 05 y la de
+    hoy, para ver qué le ha hecho de verdad zod a tu arranque en frío. Si el
+    <code>unzip -l</code> te sigue mostrando el <code>.map</code>, pégalo también: significa que
+    el <code>archive_file</code> no cogió el cambio.
+    <br><br>
+    Y si algo de las capas te ha chirriado —te ha parecido ceremonia, o no ves dónde iría un
+    fichero concreto—, dímelo tal cual. Esa incomodidad suele señalar una frontera mal puesta, y
+    prefiero moverla ahora que cuando haya una base de datos detrás.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
