@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 07 · La memoria del acortador</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 07 · Proyecto <code>01-serverless-api</code></p>
+  <h1>La memoria del acortador</h1>
+  <p class="deck">Tu Lambda genera códigos y los tira a la basura: no hay dónde guardarlos.
+  Hoy entra DynamoDB, y con ella tres cosas que se deben entre sí: la primera decisión de
+  diseño de datos del curso, la escritura que puede machacar el enlace de otro sin avisar, y
+  el día del juicio para <code>application/</code> — la capa de seis líneas se gana el sitio
+  hoy, o la borramos como prometí.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD — on-demand, cero en reposo</span>
+    <span><b>Terraform</b> <code>aws_dynamodb_table</code> · la dependencia implícita que dibuja el grafo</span>
+    <span><b>Node</b> <code>@aws-sdk/client-dynamodb</code> · puerto y adaptador</span>
+  </div>
+</header>
+
+<main>
+
+<div class="callout why">
+  <span class="callout-title">Antes de nada: tenemos una apuesta pendiente</span>
+  <p>En la lección 06 aposté que multiplicar el zip por 134 apenas movería tu
+  <code>Init Duration</code>, y quedaste en traerme las dos líneas <code>REPORT</code> — la de
+  la lección 05 y la de después de zod. <strong>Si no me las has pegado aún, hazlo antes de
+  empezar</strong>: hoy el bundle vuelve a crecer (el SDK de DynamoDB pesa más que zod), así
+  que es la última foto limpia del «antes». Si la apuesta la perdí, el trato era pasarse a
+  <code>zod/mini</code>, y lo cumplimos.</p>
+</div>
+
+<h2>Primero, recupera</h2>
+
+<p>Sin abrir nada. Las tres son piezas que hoy tocan trabajo, no repaso decorativo.</p>
+
+<details class="recall">
+  <summary>El rol de tu Lambda tiene dos políticas y la palabra «policy» aparece en ambas. ¿Cuál mira hacia afuera y cuál hacia adentro?
+    <span class="recall-hint">La analogía era un uniforme.</span>
+  </summary>
+  <p>La <code>assume_role_policy</code> mira <strong>afuera</strong>: dice quién puede ponerse
+  el uniforme (<code>lambda.amazonaws.com</code>). La <code>aws_iam_role_policy</code> mira
+  <strong>adentro</strong>: qué puertas abre el uniforme puesto — hoy, solo escribir en su
+  grupo de logs.</p>
+  <p>Hoy no tocas la de afuera para nada: quien se pone el uniforme sigue siendo la misma
+  función. Le añades al uniforme <strong>una llave más</strong>, y verás que es una política
+  nueva pegada al mismo rol, no una línea metida en la que ya existe.</p>
+</details>
+
+<details class="recall">
+  <summary>¿Por qué dejamos vivir a <code>application/create-link.ts</code>, si tiene seis líneas y lo confesé en la propia lección?
+    <span class="recall-hint">Se fijó una fecha y una condición.</span>
+  </summary>
+  <p>Porque hoy iba a recibir <strong>el repositorio de DynamoDB como parámetro</strong> y a
+  reintentar cuando un código colisione — y si esa razón no aparecía, el trato era borrarla.
+  La cita textual de la lección 06: «se justifica en la lección 07 […] Ese día
+  <code>handler.ts</code> no cambia ni una línea, y el dominio tampoco. Eso es lo que
+  compras».</p>
+  <p>Hoy comprobamos si eso era verdad o era humo. Spoiler: se comprueba mirando el
+  <code>git diff</code>, no creyéndome a mí.</p>
+</details>
+
+<details class="recall">
+  <summary>La pregunta de tres partes para cualquier pieza de infraestructura con permisos. Enúnciala de memoria.
+    <span class="recall-hint">Identidad, quién, sobre qué.</span>
+  </summary>
+  <p>(1) ¿Con qué identidad actúa? (2) ¿Quién puede usar esa identidad? (3) ¿Sobre qué actúa,
+  y quién crea esos recursos?</p>
+  <p>Para tu Lambda hoy: (1) el mismo rol de siempre, (2) el mismo servicio de siempre — y lo
+  único que cambia es (3): antes actuaba sobre un grupo de logs, ahora también sobre
+  <strong>una tabla</strong>. Un recurso nuevo, una llave nueva, y las dos cosas las crea
+  Terraform. Cuando la respuesta a una pregunta no cambia, su código tampoco. Compruébalo
+  luego en el diff.</p>
+</details>
+
+<h2>La decisión que parece trivial y no lo es: la clave</h2>
+
+<p>Una tabla de DynamoDB exige elegir <strong>la clave de partición</strong> al crearla, y no
+se puede cambiar después. Tu reflejo de SQL dice: «un <code>id</code> autoincremental, y ya».
+Y aquí tropieza dos veces:</p>
+
+<ul>
+  <li><strong>No existe el autoincremento.</strong> No hay un contador central que repartir
+  entre las máquinas que forman la tabla — un contador único es justo lo que no escala, y
+  DynamoDB prefiere no ofrecértelo a ofrecértelo lento. El identificador lo traes tú.</li>
+  <li><strong>La clave es la pregunta, no un número de fila.</strong> La única consulta
+  barata es «dame el ítem con esta clave». ¿Qué sabrá tu redirección cuando llegue una
+  petición? <code>GET /{code}</code> — sabe el código y nada más. Si la clave fuera otra
+  cosa, leer un enlace exigiría recorrer la tabla entera.</li>
+</ul>
+
+<p>Así que la clave es <code>code</code>. Y aquí una elegancia que ya tenías comprada sin
+saberlo: tus códigos salen de <code>randomBytes</code>, y una clave <strong>uniformemente
+aleatoria</strong> es el mejor caso posible para DynamoDB — el hash reparte los ítems
+perfectamente entre particiones físicas, sin puntos calientes. La decisión de la lección 05
+(bytes aleatorios, no un contador) resulta ser también la decisión correcta de base de
+datos.</p>
+
+<div class="callout trap">
+  <span class="callout-title">El contraejemplo que cae en entrevista</span>
+  <p>«Pon la fecha de clave de partición, así listamos por día.» Cada partición física
+  sirve como máximo <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">1 000
+  escrituras por segundo</a> — con la fecha de clave, <em>todo el tráfico de hoy</em> cae en
+  la misma partición, y ese es tu techo aunque la tabla tenga mil particiones aburridas. Se
+  llama <em>hot partition</em>, y se evita en el diseño, no en la operación: la clave se
+  elige para la consulta del producto y para repartir. Listar por día es un informe, y los
+  informes se hacen fuera — está en la ficha.</p>
+</div>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía de un servicio</span>
+    <h2>Amazon DynamoDB</h2>
+  </header>
+  <div class="anatomy-body">
+    <h3>Qué es</h3>
+    <p>Un mapa clave → ítem repartido entre muchas máquinas: le das la clave y responde en
+    pocos milisegundos, tengas cien filas o cien mil millones. Sin servidores que gestionar y
+    pagando por petición. La contrapartida exacta: <strong>iterar es carísimo</strong> —
+    recorrer la tabla (<code>Scan</code>) lee y factura cada byte — y las preguntas que la
+    tabla puede responder se deciden al diseñar las claves, no al escribir la consulta.</p>
+
+    <h3>Los tipos que existen</h3>
+    <p>Dos decisiones independientes: cómo pagas y qué clase de almacenamiento.
+    <code>PAY_PER_REQUEST</code> (on-demand) cobra por petición y escala a cero — tu caso, y
+    el de casi todo el mundo al empezar. <code>PROVISIONED</code> reserva capacidad por hora,
+    la uses o no: solo compensa con tráfico plano, sostenido y medido. La clase
+    <code>STANDARD_INFREQUENT_ACCESS</code> abarata el almacenamiento un 60% y encarece las
+    peticiones un 25%, para tablas grandes que casi nadie lee. Y aparte: réplicas globales
+    activas-activas, y DAX, una caché en memoria que cobra por nodo-hora esté o no en
+    uso.</p>
+
+    <h3>Cuánto cuesta</h3>
+    <p>On-demand en us-east-1: <strong>0,625 USD por millón de escrituras</strong> y
+    <strong>0,125 USD por millón de lecturas</strong>. Los primeros 25 GB-mes de
+    almacenamiento, gratis; después, 0,25 USD/GB-mes. Tu acortador: un ítem ronda los 100
+    bytes, mil enlaces cuestan 0,000625 USD de escritura, y la tabla en reposo cuesta
+    exactamente cero — este proyecto sigue pudiendo quedarse desplegado. Verificado el
+    2026-08-28 contra la Price List API.</p>
+
+    <p class="small">Tipos de datos, unidades RCU/WRU, límites (el ítem de 400 KB, el 1 MB de
+    <code>Scan</code>), cuándo NO usarlo y las trampas de Terraform:
+    <a href="../reference/aws-dynamodb.html">ficha completa de DynamoDB</a>.</p>
+  </div>
+</section>
+
+<h2>Manos a la obra</h2>
+
+<ol class="steps">
+
+<li>
+<h3>La tabla, en cuatro argumentos</h3>
+
+<p>En <code>main.tf</code>, encima del bloque de IAM:</p>
+
+<div class="code">
+  <div class="code-label"><span>main.tf</span><span class="tag">nuevo recurso</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_dynamodb_table"</b> <b class="s">"links"</b> {
+  name         = local.name              <b class="c"># "url-shortener"</b>
+  billing_mode = <b class="s">"PAY_PER_REQUEST"</b>
+  hash_key     = <b class="s">"code"</b>
+
+  <b class="c"># Solo los atributos que son clave. Declarar "url" aquí provoca</b>
+  <b class="c"># un plan infinito: attribute no es un esquema, es la lista de claves.</b>
+  attribute {
+    name = <b class="s">"code"</b>
+    type = <b class="s">"S"</b>
+  }
+}</code></pre>
+</div>
+
+<p>Cuatro argumentos y dos de ellos son trampas conocidas:</p>
+
+<div class="callout trap">
+  <span class="callout-title"><code>billing_mode</code> tiene el default equivocado para ti</span>
+  <p>Si lo omites, el provider elige <code>PROVISIONED</code> — capacidad reservada que se
+  factura <strong>por hora, la uses o no</strong>, y que además te obligaría a declarar
+  <code>read_capacity</code> y <code>write_capacity</code>. El free tier de 25 unidades lo
+  taparía en tu cuenta… hasta la tabla en que deje de taparlo. Escríbelo siempre, aunque sea
+  para decir lo que querías de todos modos: es la diferencia entre «cero en reposo» y «una
+  reserva silenciosa por hora». ¿Te suena? Es <code>x86_64</code> otra vez: el default del
+  provider no es el default que tu proyecto quiere.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y <code>attribute</code> no significa lo que parece</span>
+  <p>Viniendo de SQL, esto parece el <code>CREATE TABLE</code> y pide declarar cada columna:
+  <code>code</code>, <code>url</code>, <code>created_at</code>… <strong>No lo hagas.</strong>
+  DynamoDB no tiene esquema — cada ítem lleva los atributos que quiera — y este bloque solo
+  enumera los atributos que son clave de la tabla o de un índice. El provider
+  <a href="https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table">lo
+  documenta con nombre y apellidos</a>: un atributo de más aquí produce un <em>plan
+  infinito</em> — cada <code>apply</code> intenta indexarlo, no puede, y el siguiente
+  <code>plan</code> vuelve a proponer el mismo cambio, para siempre. Es de las pocas trampas
+  de Terraform que ni el <code>validate</code> ni el <code>plan</code> te avisan: la
+  descubres cuando el drift no desaparece nunca.</p>
+</div>
+
+<p>Fíjate también en lo que <em>no</em> está: <code>hash_key</code> es <em>ForceNew</em> —
+cambiarla luego destruye la tabla con sus datos dentro, y por eso la sección anterior de esta
+lección existe. Las claves se piensan una vez.</p>
+</li>
+
+<li>
+<h3>La llave nueva del uniforme</h3>
+
+<p>Te debo una corrección: al final de la lección 06 te dije que la política del rol crecería
+«con dos acciones más». Mentira piadosa del que escribe de memoria — son <strong>una</strong>:
+<code>dynamodb:PutItem</code>. La segunda (<code>GetItem</code>) es de la función que
+redirige, que no existe todavía, y regalársela a esta sería exactamente el vicio que la
+heurística de la ficha prohíbe: <em>agrupa por permisos</em> significa que quien no lee, no
+tiene la llave de leer.</p>
+
+<div class="code">
+  <div class="code-label"><span>main.tf</span><span class="tag">antes de la función</span></div>
+<pre><code><b class="k">data</b> <b class="s">"aws_iam_policy_document"</b> <b class="s">"create_link_put"</b> {
+  statement {
+    sid       = <b class="s">"PutLinks"</b>
+    actions   = [<b class="s">"dynamodb:PutItem"</b>]
+    resources = [aws_dynamodb_table.links.arn]
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_iam_role_policy"</b> <b class="s">"create_link_put"</b> {
+  name   = <b class="s">"put-links"</b>
+  role   = aws_iam_role.create_link.id
+  policy = data.aws_iam_policy_document.create_link_put.json
+}</code></pre>
+</div>
+
+<p>Una acción, un ARN, y ni un asterisco. Nota que es una <strong>política nueva</strong>
+pegada al mismo rol, no una línea añadida a <code>write-own-logs</code>: cada política cuenta
+una historia completa —«esta función escribe en su tabla»—, y el día que la redirección exista
+podrás leer los permisos del sistema como un índice. Y a diferencia del ARN del grupo de
+logs, aquí no hay sufijo <code>:*</code> que perseguir: actúas sobre la tabla, no sobre hijos
+suyos.</p>
+</li>
+
+<li>
+<h3>El puerto y el adaptador</h3>
+
+<p>Ahora el código. La pregunta que ordena este paso: ¿dónde puede aparecer el SDK de AWS?
+Por la regla de la lección 06 —nada del <code>package.json</code> ni en <code>domain/</code>
+ni en sus reglas— el SDK solo puede vivir en un sitio nuevo. Créalo, e instala el
+cliente:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>mkdir src/infrastructure
+pnpm add @aws-sdk/client-dynamodb      <b class="c"># dependencies: se ejecuta en producción</b></code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El SDK rompe tu build de ESM, y el error solo se ve en Lambda</span>
+  <p>Parte del SDK está publicado como CommonJS con <code>require("node:https")</code>
+  dentro. esbuild, al empaquetar a ESM, convierte esos <code>require</code> en un <em>stub</em>
+  que busca un <code>require</code> real en el ámbito del módulo… y en un <code>.mjs</code> no
+  existe. El resultado es esta bomba de relojería al invocar:</p>
+  <div class="code">
+<pre><code><b class="c">Error: Dynamic require of "node:https" is not supported</b>
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)</code></pre>
+  </div>
+  <p>Y lo retorcido: <strong>en tu portátil puede no reproducirse.</strong> Si importas el
+  bundle desde un contexto CommonJS (un <code>node -e</code>, un test runner en CJS), el stub
+  encuentra el <code>require</code> de ese contexto y funciona — el fallo solo aparece cuando
+  el fichero se carga como ESM de verdad, que es exactamente lo que hace el runtime de
+  Lambda. Me pasó a mí preparando esta lección: mi prueba de humo pasaba y el
+  <code>invoke</code> reventaba.</p>
+  <p>El arreglo es darle al stub lo que busca — un <code>require</code> real, fabricado con
+  <code>createRequire</code> e inyectado al principio del bundle con <code>--banner</code>.
+  Actualiza el script de build en <code>app/package.json</code>:</p>
+  <div class="code">
+  <div class="code-label"><span>app/package.json</span><span class="tag">script build</span></div>
+<pre><code>"build": "esbuild src/index.ts --bundle --minify --sourcemap
+  --platform=node --target=node24 --format=esm
+  <b class="k">--banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"</b>
+  --outfile=dist/index.mjs"</code></pre>
+  </div>
+  <p class="small">(En el JSON va todo en una línea; aquí está partido para poder leerlo.
+  Son 93 bytes más de bundle.) La alternativa habría sido volver a CommonJS — pero el ESM de
+  la lección 06 tenía sus motivos, y un banner de una línea no es precio suficiente para
+  renunciar a ellos.</p>
+</div>
+
+<p>Pero antes del adaptador, el contrato. La capa de aplicación no va a pedir «un cliente de
+DynamoDB»: va a declarar <strong>qué necesita de la persistencia, en su propio idioma</strong>
+— eso es un <em>puerto</em>, y es una interfaz de TypeScript de las de toda la vida:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/link-repository.ts</span><span class="tag">nuevo · el puerto</span></div>
+<pre><code><b class="k">import type</b> { ShortCode } <b class="k">from</b> <b class="s">"../domain/short-code.ts"</b>;
+<b class="k">import type</b> { TargetUrl } <b class="k">from</b> <b class="s">"../domain/target-url.ts"</b>;
+
+<b class="k">export interface</b> Link {
+  code: ShortCode;
+  url: TargetUrl;
+}
+
+<b class="c">/** El puerto: qué necesita la aplicación de la persistencia, en su idioma. */</b>
+<b class="k">export interface</b> LinkRepository {
+  <b class="c">/** Guarda el enlace. Lanza CodeCollisionError si el código ya está cogido. */</b>
+  save(link: Link): <b class="n">Promise</b>&lt;<b class="n">void</b>&gt;;
+}
+
+<b class="c">/** Parte del contrato del puerto: cada implementación traduce sus errores a este. */</b>
+<b class="k">export class</b> CodeCollisionError <b class="k">extends</b> Error {
+  <b class="k">readonly</b> code: <b class="n">string</b>;
+
+  <b class="k">constructor</b>(code: <b class="n">string</b>) {
+    <b class="k">super</b>(<b class="s">`Short code already taken: ${code}`</b>);
+    <b class="k">this</b>.name = <b class="s">"CodeCollisionError"</b>;
+    <b class="k">this</b>.code = code;
+  }
+}</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Por qué el error vive junto al puerto, y no en <code>domain/errors.ts</code></span>
+  <p>Aplica la heurística de la lección 06: ¿qué test se rompería? «Colisión de códigos» es
+  un concepto de <strong>persistencia</strong> — el dominio genera códigos, pero no sabe que
+  se guardan, así que no puede saber que chocan. Y no es del adaptador, porque cualquier
+  implementación (DynamoDB, Postgres, un mapa en memoria) debe lanzar <em>este mismo</em>
+  error para que la aplicación reaccione igual. Es el idioma del contrato → vive con el
+  contrato. Cuando un fichero no sabe a qué capa pertenece, pregúntale a sus tests.</p>
+  <p>De paso, <code>Link</code> se muda aquí y su campo <code>url</code> sube de
+  <code>string</code> a <code>TargetUrl</code>: lo que se guarda es una URL ya validada, y
+  ahora el compilador lo exige.</p>
+</div>
+
+<p>Y ahora sí, el adaptador — el único fichero del proyecto que sabe que existe DynamoDB:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/infrastructure/dynamodb-link-repository.ts</span><span class="tag">nuevo · el adaptador</span></div>
+<pre><code><b class="k">import</b> {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+  PutItemCommand,
+} <b class="k">from</b> <b class="s">"@aws-sdk/client-dynamodb"</b>;
+<b class="k">import</b> { CodeCollisionError, <b class="k">type</b> Link, <b class="k">type</b> LinkRepository } <b class="k">from</b> <b class="s">"../application/link-repository.ts"</b>;
+
+<b class="k">export class</b> DynamoDbLinkRepository <b class="k">implements</b> LinkRepository {
+  <b class="k">private readonly</b> client: DynamoDBClient;
+  <b class="k">private readonly</b> tableName: <b class="n">string</b>;
+
+  <b class="c">// Sin parameter properties: Node borra tipos, no genera código.</b>
+  <b class="k">constructor</b>(client: DynamoDBClient, tableName: <b class="n">string</b>) {
+    <b class="k">this</b>.client = client;
+    <b class="k">this</b>.tableName = tableName;
+  }
+
+  <b class="k">async</b> save(link: Link): <b class="n">Promise</b>&lt;<b class="n">void</b>&gt; {
+    <b class="k">try</b> {
+      <b class="k">await this</b>.client.send(<b class="k">new</b> PutItemCommand({
+        TableName: <b class="k">this</b>.tableName,
+        Item: {
+          code:       { S: link.code },
+          url:        { S: link.url },
+          created_at: { S: <b class="k">new</b> Date().toISOString() },
+        },
+        <b class="c">// Sin esto, PutItem es un upsert: machacaría en silencio</b>
+        <b class="c">// el enlace de quien tuviera este código antes.</b>
+        ConditionExpression: <b class="s">"attribute_not_exists(code)"</b>,
+      }));
+    } <b class="k">catch</b> (error) {
+      <b class="k">if</b> (error <b class="k">instanceof</b> ConditionalCheckFailedException) {
+        <b class="k">throw new</b> CodeCollisionError(link.code);
+      }
+      <b class="k">throw</b> error;
+    }
+  }
+}</code></pre>
+</div>
+
+<p>Tres cosas de este fichero que valen el precio de la lección:</p>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa central de hoy: <code>PutItem</code> no inserta — reemplaza</span>
+  <p>Sin la <code>ConditionExpression</code>, escribir un código que ya existe
+  <strong>devuelve 200 y machaca el ítem anterior</strong>. El enlace de otro usuario pasa a
+  apuntar a tu URL, sin error, sin log, sin nada. Es el mismo género de fallo silencioso que
+  el ARN de logs sin <code>:*</code> de la lección 05: no revienta, <em>corrompe</em>.
+  <code>attribute_not_exists(code)</code> convierte «comprueba y escribe» en una sola
+  operación atómica en el servidor — no hay hueco entre mirar y escribir donde otro pueda
+  colarse. Comprobarlo tú antes con un <code>GetItem</code> no cierra ese hueco, y además
+  necesitaría una llave que esta función no tiene.</p>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Ese <code>{ S: … }</code> no es ruido: es el tipado de DynamoDB</span>
+  <p>La API nativa exige el tipo de cada valor: <code>S</code> string, <code>N</code> number,
+  <code>B</code> binary. Existe un segundo paquete (<code>@aws-sdk/lib-dynamodb</code>) que
+  lo esconde y te deja escribir objetos planos — para dos atributos no compensa arrastrar
+  otra dependencia, y verlo desnudo una vez enseña qué hay debajo. Cuando el proyecto 02
+  tenga ítems de verdad, lo reevaluamos.</p>
+  <p>Y la condición no pide permisos extra: <code>PutItem</code> con o sin condición es la
+  misma acción de IAM. La llave del paso 2 ya vale.</p>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Y fíjate en lo que el adaptador <em>no</em> hace</span>
+  <p>No valida la URL, no genera códigos, no reintenta, no loguea. Traduce: del idioma del
+  contrato (<code>save</code>, <code>CodeCollisionError</code>) al idioma de la herramienta
+  (<code>PutItemCommand</code>, <code>ConditionalCheckFailedException</code>), y nada más.
+  La prueba de Valibot de la lección 06 tiene aquí su gemela: <strong>cambiar DynamoDB por
+  Postgres debe tocar solo este fichero</strong>.</p>
+</div>
+</li>
+
+<li>
+<h3>El día del juicio para <code>application/</code></h3>
+
+<p>La promesa era: «recibe el repositorio y reintenta ante colisiones, y <code>handler.ts</code>
+y el dominio no cambian». Aquí está el caso de uso pagando su deuda:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/create-link.ts</span><span class="tag">se gana el sitio</span></div>
+<pre><code><b class="k">import</b> { z } <b class="k">from</b> <b class="s">"zod"</b>;
+<b class="k">import</b> { generateShortCode } <b class="k">from</b> <b class="s">"../domain/short-code.ts"</b>;
+<b class="k">import</b> { parseTargetUrl, MAX_URL_LENGTH } <b class="k">from</b> <b class="s">"../domain/target-url.ts"</b>;
+<b class="k">import</b> { CodeCollisionError, <b class="k">type</b> Link, <b class="k">type</b> LinkRepository } <b class="k">from</b> <b class="s">"./link-repository.ts"</b>;
+
+<b class="c">/** La forma del payload: contrato de transporte, no regla de negocio. */</b>
+<b class="k">const</b> createLinkInput = z.object({
+  url: z.string().max(MAX_URL_LENGTH),
+});
+
+<b class="k">const</b> MAX_ATTEMPTS = <b class="n">3</b>;
+
+<b class="k">export async function</b> createLink(payload: <b class="n">unknown</b>, repository: LinkRepository): <b class="n">Promise</b>&lt;Link&gt; {
+  <b class="k">const</b> { url } = createLinkInput.parse(payload);
+  <b class="k">const</b> target = parseTargetUrl(url);
+
+  <b class="k">let</b> lastCollision: CodeCollisionError | <b class="n">undefined</b>;
+  <b class="k">for</b> (<b class="k">let</b> attempt = <b class="n">1</b>; attempt &lt;= MAX_ATTEMPTS; attempt++) {
+    <b class="k">const</b> link: Link = { code: generateShortCode(), url: target };
+    <b class="k">try</b> {
+      <b class="k">await</b> repository.save(link);
+      <b class="k">return</b> link;
+    } <b class="k">catch</b> (error) {
+      <b class="k">if</b> (!(error <b class="k">instanceof</b> CodeCollisionError)) <b class="k">throw</b> error;
+      lastCollision = error;   <b class="c">// colisión: código nuevo, misma URL, otra vez</b>
+    }
+  }
+  <b class="k">throw</b> lastCollision;
+}</code></pre>
+</div>
+
+<p>Lee el bucle despacio, porque es la primera lógica de orquestación real del curso: valida
+una vez, y ante una colisión <strong>regenera solo el código</strong> — la URL ya validada no
+se vuelve a tocar. Solo la colisión se reintenta; cualquier otro error (permisos, red) sube
+sin tocar. Y a la tercera, se rinde y cuenta la verdad. Con 40 bits de aleatoriedad las
+colisiones son estadísticamente anecdóticas — el bucle no está ahí porque vaya a ejecutarse
+mucho, está ahí porque <em>alguien tiene que decidir qué pasa cuando ocurra</em>, y esa
+decisión es exactamente el trabajo de esta capa: ni del dominio (no sabe que se guarda), ni
+del adaptador (no decide políticas), ni del handler (no sabe qué es una colisión).</p>
+
+<p>El handler cambia solo en su papel de <strong>raíz de composición</strong>: es quien
+enchufa el adaptador real al caso de uso —</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/handler.ts</span><span class="tag">la raíz de composición</span></div>
+<pre><code><b class="k">import</b> { z } <b class="k">from</b> <b class="s">"zod"</b>;
+<b class="k">import</b> { DynamoDBClient } <b class="k">from</b> <b class="s">"@aws-sdk/client-dynamodb"</b>;
+<b class="k">import</b> { createLink } <b class="k">from</b> <b class="s">"./application/create-link.ts"</b>;
+<b class="k">import</b> { CodeCollisionError, <b class="k">type</b> Link } <b class="k">from</b> <b class="s">"./application/link-repository.ts"</b>;
+<b class="k">import</b> { DynamoDbLinkRepository } <b class="k">from</b> <b class="s">"./infrastructure/dynamodb-link-repository.ts"</b>;
+<b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"./domain/errors.ts"</b>;
+
+<b class="c">// Raíz de composición: se ejecuta una vez por entorno (arranque en frío);</b>
+<b class="c">// cada invocación reutiliza el cliente y su conexión ya abierta.</b>
+<b class="k">const</b> tableName = process.env.TABLE_NAME;
+<b class="k">if</b> (!tableName) <b class="k">throw new</b> Error(<b class="s">"Missing required environment variable TABLE_NAME"</b>);
+
+<b class="k">const</b> repository = <b class="k">new</b> DynamoDbLinkRepository(<b class="k">new</b> DynamoDBClient({}), tableName);
+
+<b class="k">export const</b> handler = <b class="k">async</b> (event: <b class="n">unknown</b>): <b class="n">Promise</b>&lt;Link&gt; =&gt; {
+  <b class="k">try</b> {
+    <b class="k">const</b> link = <b class="k">await</b> createLink(event, repository);
+    console.log(JSON.stringify({ msg: <b class="s">"link created"</b>, ...link }));
+    <b class="k">return</b> link;
+  } <b class="k">catch</b> (error) {
+    <b class="k">if</b> (error <b class="k">instanceof</b> InvalidTargetUrlError) {
+      console.error(JSON.stringify({ msg: <b class="s">"invalid target url"</b>, reason: error.reason }));
+    } <b class="k">else if</b> (error <b class="k">instanceof</b> z.ZodError) {
+      console.error(JSON.stringify({ msg: <b class="s">"malformed payload"</b>, issues: error.issues }));
+    } <b class="k">else if</b> (error <b class="k">instanceof</b> CodeCollisionError) {
+      console.error(JSON.stringify({ msg: <b class="s">"code collision after retries"</b>, code: error.code }));
+    }
+    <b class="k">throw</b> error;
+  }
+};</code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Esto es la lectura que te mandé: <em>Using global state</em></span>
+  <p>El cliente y el repositorio se crean <strong>fuera</strong> del handler, a nivel de
+  módulo. Es la recomendación literal de la página de buenas prácticas de la lección 06: el
+  código de módulo corre una vez por arranque en frío, y las invocaciones siguientes heredan
+  el cliente con su conexión TLS ya negociada. Dentro del handler, cada invocación pagaría
+  ese apretón de manos. Y <code>process.env</code> aparece aquí y solo aquí: la configuración
+  es cosa de la frontera, las capas de dentro reciben valores, no variables de entorno.</p>
+</div>
+
+<p>Los tests son donde el fake demuestra por qué el puerto vale lo que cuesta. Sustituye
+<code>create-link.test.ts</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/create-link.test.ts</span><span class="tag">reemplaza</span></div>
+<pre><code><b class="k">import</b> { describe, it } <b class="k">from</b> <b class="s">"node:test"</b>;
+<b class="k">import</b> assert <b class="k">from</b> <b class="s">"node:assert/strict"</b>;
+<b class="k">import</b> { z } <b class="k">from</b> <b class="s">"zod"</b>;
+<b class="k">import</b> { createLink } <b class="k">from</b> <b class="s">"./create-link.ts"</b>;
+<b class="k">import</b> { CodeCollisionError, <b class="k">type</b> Link, <b class="k">type</b> LinkRepository } <b class="k">from</b> <b class="s">"./link-repository.ts"</b>;
+<b class="k">import</b> { InvalidTargetUrlError } <b class="k">from</b> <b class="s">"../domain/errors.ts"</b>;
+
+<b class="c">/** Fake en memoria: mismo contrato, cero AWS. `collisions` hace fallar los N primeros saves. */</b>
+<b class="k">class</b> FakeLinkRepository <b class="k">implements</b> LinkRepository {
+  saved: Link[] = [];
+  attempted: Link[] = [];
+  <b class="k">private</b> collisions: <b class="n">number</b>;
+
+  <b class="k">constructor</b>(collisions = <b class="n">0</b>) {
+    <b class="k">this</b>.collisions = collisions;
+  }
+
+  <b class="k">async</b> save(link: Link): <b class="n">Promise</b>&lt;<b class="n">void</b>&gt; {
+    <b class="k">this</b>.attempted.push(link);
+    <b class="k">if</b> (<b class="k">this</b>.collisions &gt; <b class="n">0</b>) {
+      <b class="k">this</b>.collisions--;
+      <b class="k">throw new</b> CodeCollisionError(link.code);
+    }
+    <b class="k">this</b>.saved.push(link);
+  }
+}
+
+describe(<b class="s">"createLink"</b>, () =&gt; {
+  it(<b class="s">"saves the link and returns a 7 characters code"</b>, <b class="k">async</b> () =&gt; {
+    <b class="k">const</b> repository = <b class="k">new</b> FakeLinkRepository();
+    <b class="k">const</b> link = <b class="k">await</b> createLink({ url: <b class="s">"https://www.google.com"</b> }, repository);
+    assert.match(link.code, <b class="s">/^[A-Za-z0-9_-]{7}$/</b>);
+    assert.deepEqual(repository.saved, [link]);
+  });
+
+  <b class="c">// La forma del payload pertenece al caso de uso, no al dominio.</b>
+  <b class="k">for</b> (<b class="k">const</b> bad <b class="k">of</b> [{}, { url: <b class="n">42</b> }, { url: <b class="k">null</b> }, <b class="k">null</b>, <b class="s">"not an object"</b>]) {
+    it(<b class="s">`rechaza el payload ${JSON.stringify(bad)}`</b>, <b class="k">async</b> () =&gt; {
+      <b class="k">await</b> assert.rejects(() =&gt; createLink(bad, <b class="k">new</b> FakeLinkRepository()), z.ZodError);
+    });
+  }
+
+  it(<b class="s">"propagates the domain error without touching the repository"</b>, <b class="k">async</b> () =&gt; {
+    <b class="k">const</b> repository = <b class="k">new</b> FakeLinkRepository();
+    <b class="k">await</b> assert.rejects(() =&gt; createLink({ url: <b class="s">"ftp://a.dev"</b> }, repository), InvalidTargetUrlError);
+    assert.equal(repository.attempted.length, <b class="n">0</b>);
+  });
+
+  it(<b class="s">"retries a collision with a new code and the same url"</b>, <b class="k">async</b> () =&gt; {
+    <b class="k">const</b> repository = <b class="k">new</b> FakeLinkRepository(<b class="n">1</b>);
+    <b class="k">const</b> link = <b class="k">await</b> createLink({ url: <b class="s">"https://www.google.com"</b> }, repository);
+    assert.equal(repository.attempted.length, <b class="n">2</b>);
+    assert.notEqual(repository.attempted[<b class="n">0</b>]!.code, repository.attempted[<b class="n">1</b>]!.code);
+    assert.equal(repository.attempted[<b class="n">0</b>]!.url, repository.attempted[<b class="n">1</b>]!.url);
+    assert.deepEqual(repository.saved, [link]);
+  });
+
+  it(<b class="s">"gives up after three collisions and saves nothing"</b>, <b class="k">async</b> () =&gt; {
+    <b class="k">const</b> repository = <b class="k">new</b> FakeLinkRepository(<b class="n">Infinity</b>);
+    <b class="k">await</b> assert.rejects(
+      () =&gt; createLink({ url: <b class="s">"https://www.google.com"</b> }, repository),
+      CodeCollisionError,
+    );
+    assert.equal(repository.attempted.length, <b class="n">3</b>);
+    assert.equal(repository.saved.length, <b class="n">0</b>);
+  });
+});</code></pre>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Mira lo que acabas de probar sin una sola credencial</span>
+  <p>El reintento regenera el código pero no la URL. Un error de dominio no llega a tocar la
+  persistencia. Tres colisiones seguidas rinden la función con el error honesto. Esa lógica
+  <strong>corre contra AWS en producción y contra veinte líneas de fake en tu portátil</strong>,
+  y es la misma, porque el caso de uso solo conoce el contrato. Esto es lo que compraste ayer
+  con seis líneas de fe.</p>
+</div>
+
+<p>Y una consecuencia que hay que decir en voz alta: <strong>borra
+<code>handler.test.ts</code></strong>. El handler ahora crea un <code>DynamoDBClient</code> e
+importa el adaptador — invocarlo en un test sin AWS o revienta o miente. Aplica el
+diagnóstico de la lección 06 al pie de la letra: si para probar una función necesitas AWS, la
+función sabe demasiado sobre AWS… <em>y el handler es el único fichero cuyo trabajo es
+exactamente ese</em>. Su lógica propia (mapear errores a logs) quedó reducida a lo trivial;
+lo que de verdad hace —hablar con AWS de verdad— se prueba desplegando, en el paso
+siguiente, y con tests de integración en CI cuando llegue el proyecto 07. Un test unitario
+del handler a estas alturas sería teatro.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>rm src/handler.test.ts
+pnpm run typecheck && pnpm run test    <b class="c"># 14 en verde — los mismos 14: 2 del handler fuera, 2 de colisiones dentro</b></code></pre>
+</div>
+</li>
+
+<li>
+<h3>Despliega, y trae la prueba</h3>
+
+<p>El ritual de siempre:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>export AWS_PROFILE=personal
+aws login
+aws sts get-caller-identity          <b class="c"># el Arn debe terminar en ":user/terraform"</b>
+
+cd app
+pnpm run typecheck && pnpm run test && pnpm run build
+cd ..
+
+terraform plan</code></pre>
+</div>
+
+<p><strong>Léelo antes de aplicar.</strong> Debe contar exactamente esta historia: dos
+recursos nuevos (<code>+ aws_dynamodb_table.links</code>,
+<code>+ aws_iam_role_policy.create_link_put</code>) y la función modificada en dos sitios —
+el <code>~ source_code_hash</code> que ya sabes leer, y un bloque <code>environment</code>
+que aparece:</p>
+
+<div class="code">
+  <div class="code-label"><span>terraform plan</span><span class="tag">el fragmento que importa</span></div>
+<pre><code>  <b class="c">~ resource "aws_lambda_function" "create_link" {</b>
+      <b class="c">~ source_code_hash = "s5cg…" -&gt; "…"</b>
+      <b class="c">+ environment {</b>
+          <b class="c">+ variables = {</b>
+              <b class="c">+ "TABLE_NAME" = "url-shortener"</b>
+            <b class="c">}</b>
+        <b class="c">}</b>
+    }</code></pre>
+</div>
+
+<div class="callout tf">
+  <span class="callout-title">Esa línea es la que dibuja el grafo</span>
+  <p><code>TABLE_NAME = aws_dynamodb_table.links.name</code> hace dos trabajos con una
+  piedra. Uno operativo: tu código no lleva el nombre de la tabla grabado — se lo inyecta
+  Terraform, y si mañana la tabla se llama distinto, nadie edita TypeScript. Y uno
+  estructural: <strong>referenciar el atributo crea la arista</strong> tabla → función en el
+  grafo, así que Terraform crea la tabla antes que la función sin que escribas
+  <code>depends_on</code>. La dependencia implícita de la lección 05, ahora cruzando la
+  frontera entre infraestructura y aplicación. Recuerda el criterio: <code>depends_on</code>
+  explícito solo cuando no hay referencia que pueda contar la relación — aquí la hay.</p>
+</div>
+
+<p>Añade el bloque a la función (y su <code>depends_on</code> del arranque en frío, que sí
+sigue siendo explícito porque la política no aparece en ningún argumento de la función), el
+output nuevo, y aplica:</p>
+
+<div class="code">
+  <div class="code-label"><span>main.tf</span><span class="tag">los tres retoques</span></div>
+<pre><code>  <b class="c"># dentro de aws_lambda_function.create_link:</b>
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.links.name
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.create_link,
+    aws_iam_role_policy.create_link_logs,
+    aws_iam_role_policy.create_link_put      <b class="c"># la función no arranca sin su llave</b>
+  ]
+
+<b class="c"># y al final del fichero:</b>
+<b class="k">output</b> <b class="s">"table_name"</b> {
+  description = <b class="s">"links table name"</b>
+  value       = aws_dynamodb_table.links.name
+  type        = <b class="n">string</b>
+}</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>terraform apply
+
+FN=$(terraform output -raw function_name)
+TABLE=$(terraform output -raw table_name)
+
+<b class="c"># 1. Crea un enlace — igual que siempre…</b>
+aws lambda invoke --function-name "$FN" \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"url":"https://developer.hashicorp.com"}' \
+  ok.json && cat ok.json
+
+<b class="c"># 2. …pero hoy el resultado tiene que estar EN la tabla. Ve a buscarlo:</b>
+CODE=$(node -p 'require("./ok.json").code')
+aws dynamodb get-item --table-name "$TABLE" \
+  --key "{\"code\":{\"S\":\"$CODE\"}}"
+
+<b class="c"># 3. La misma URL otra vez: código distinto, segundo ítem — no hay dedupe, y es a propósito</b>
+aws lambda invoke --function-name "$FN" \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"url":"https://developer.hashicorp.com"}' \
+  ok2.json && cat ok2.json
+
+<b class="c"># 4. Y la línea REPORT de hoy, para la colección</b>
+aws logs tail "$(terraform output -raw log_group_name)" --since 5m | grep REPORT</code></pre>
+</div>
+
+<p>El <code>get-item</code> del paso 2 es la verificación de la lección: si devuelve el ítem
+con <code>code</code>, <code>url</code> (con su barra final) y <code>created_at</code>, la
+cadena entera —permiso, variable de entorno, condición, escritura— ha funcionado de verdad.
+Invocar y leer el 200 <em>no</em> lo demostraba: la Lambda de la lección 05 también devolvía
+200, y no guardaba nada.</p>
+
+<p class="small">Si el <code>invoke</code> falla con <code>AccessDenied</code> sobre
+<code>dynamodb:PutItem</code>, mira el ARN de la política del paso 2. Si falla con
+<em>«Missing required environment variable TABLE_NAME»</em>, el bloque
+<code>environment</code> no llegó — ¿aplicaste el plan que lo enseñaba? Y el tercer fallo
+posible es el bueno: no falla nada pero el <code>get-item</code> devuelve vacío — entonces
+estás leyendo otra tabla u otra región, y <code>aws configure list</code> te lo dirá.</p>
+
+<ul class="checklist" data-key="l07-verify">
+  <li><code>pnpm run test</code>: 14 en verde, incluidas las dos de colisiones, sin credenciales.</li>
+  <li>El <code>plan</code> contaba: 2 a crear, 1 a modificar, 0 a destruir.</li>
+  <li>El <code>get-item</code> devuelve tu ítem, con la URL normalizada con barra final.</li>
+  <li>La misma URL dos veces produce dos códigos distintos y dos ítems.</li>
+  <li>El <code>git diff</code> de hoy no toca <code>domain/</code> — compruébalo de verdad.</li>
+  <li>Tienes la línea <code>REPORT</code> de hoy anotada junto a las dos anteriores.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que el enlace <strong>sobrevive a la invocación</strong>: está en la tabla y lo has
+    ido a buscar con su clave, no te lo ha dicho un 200.</li>
+    <li>Que la promesa de las capas era verdad, con el <code>git diff</code> de testigo:
+    entró una base de datos entera y <strong><code>domain/</code> no se enteró</strong>.</li>
+    <li>Que <code>application/</code> se ganó el sitio: el reintento ante colisión vive ahí,
+    probado con un fake — la deuda de la lección 06 queda saldada.</li>
+    <li>Que sabes leer un plan que mezcla creación, modificación y una dependencia implícita
+    nueva a través de una variable de entorno.</li>
+    <li>Que la escritura es <strong>una inserción de verdad</strong>, no un upsert: la
+    condición está en el código y sabes qué corrupción evita.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>El reintento nunca se ha ejecutado contra AWS.</strong> Con 40 bits de
+    aleatoriedad no vas a ver una colisión real ni queriendo; la garantía viene del fake y de
+    que la condición es atómica. Distingue siempre qué probó el test y qué probó el
+    despliegue.</li>
+    <li><strong>Nadie lee todavía.</strong> El acortador guarda pero no redirige:
+    <code>GET /{code}</code> no existe hasta la lección 08, y con él la segunda función, su
+    llave de <code>GetItem</code> y el <code>for_each</code>.</li>
+    <li><strong>La tabla no tiene backup.</strong> PITR está apagado (cuesta por GB-mes) y
+    para enlaces de prueba está bien así — pero decidirlo a sabiendas es distinto de no saber
+    que existe.</li>
+    <li><strong>Los tests siguen corriendo solo cuando te acuerdas.</strong> CI sigue
+    esperando en el proyecto 07.</li>
+  </ul>
+</div>
+
+<p class="small">El proyecto se queda desplegado, como hasta ahora: la tabla en on-demand
+cuesta cero en reposo y los primeros 25 GB de almacenamiento son gratis. El día que quieras
+tirarlo entero: <code>terraform destroy</code>, y los ítems se van con la tabla.</p>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Hoy no has escrito ningún <code>depends_on</code> hacia la tabla y aun
+  así Terraform la crea antes que la función. ¿Qué garantiza ese orden?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="TABLE_NAME = aws_dynamodb_table.links.name es una referencia de atributo, y cada referencia es una arista del grafo: Terraform no puede saber el valor de la variable de entorno sin haber creado antes la tabla. Es la dependencia implícita de la lección 05, cruzando ahora hacia la aplicación.">La referencia en la variable de entorno</button></li>
+    <li><button data-correct="false" data-why="Terraform no ejecuta el fichero de arriba abajo: construye un grafo con todas las declaraciones y paraleliza lo que no depende entre sí. Si el orden del fichero importara, mover un bloque cambiaría el despliegue, y puedes probar que no lo hace.">La posición del recurso en el fichero</button></li>
+    <li><button data-correct="false" data-why="El depends_on de la función apunta a las políticas del rol y al grupo de logs, no a la tabla: puedes releerlo. Existe para relaciones que ninguna referencia cuenta — y tabla y función sí tienen una referencia que las une.">El depends_on que ya lleva la función</button></li>
+    <li><button data-correct="false" data-why="El provider traduce recursos a llamadas de API pero no conoce tu intención: no sabe que esa función leerá esa tabla. Si AWS aceptara crear la función antes, el provider lo haría sin pestañear; el orden lo decide el grafo de Terraform.">El provider, que ya conoce ambos recursos</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Un compañero borra la <code>ConditionExpression</code> «porque las
+  colisiones son casi imposibles y así el código queda más simple». ¿Qué le contestas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="La probabilidad baja reduce la frecuencia del fallo, no su gravedad: cuando ocurra, PutItem devolverá 200 y el enlace de otro usuario apuntará a otra URL, sin error ni log. La condición convierte un fallo silencioso e invisible en uno ruidoso y manejado — eso no es complejidad, es la corrección.">Sin condición la colisión corrompe en silencio</button></li>
+    <li><button data-correct="false" data-why="Es al revés: la condición se evalúa dentro de la propia escritura, en la partición, como parte de la misma operación. No hay una lectura previa que pagar ni un viaje extra de red, así que rendimiento no es un argumento en esta discusión.">La condición hace más lenta cada escritura</button></li>
+    <li><button data-correct="false" data-why="No existe tal permiso separado: PutItem con o sin ConditionExpression es exactamente la misma acción de IAM, y la política del paso 2 no cambia. El coste de la condición no se mide en permisos, y este argumento se desmonta enseñando la política.">Sin la condición IAM exige permisos distintos</button></li>
+    <li><button data-correct="false" data-why="El bucle de reintentos depende de que el adaptador lance CodeCollisionError, y esa señal nace de la ConditionalCheckFailedException que la condición produce. Sin condición no hay error que capturar: el bucle quedaría vivo pero ciego, ejecutándose una sola vez siempre.">El reintento ya cubre ese caso igualmente</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Añades <code>created_at</code> al bloque <code>attribute</code> de la
+  tabla «para documentar el esquema». <code>validate</code> y <code>plan</code> pasan
+  limpios. ¿Qué acabas de sembrar?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="attribute solo declara claves de tabla o de índice. Un atributo declarado que no es clave de nada deja la configuración pidiendo un índice imposible: cada apply lo intenta, no converge, y cada plan vuelve a proponer el mismo cambio — el plan infinito que documenta el propio provider.">Un plan que nunca llega a converger</button></li>
+    <li><button data-correct="false" data-why="No hay coste nuevo: attribute no crea columnas ni reserva nada en DynamoDB, porque los ítems llevan sus atributos consigo y created_at ya se estaba guardando desde el adaptador. El problema es del ciclo de Terraform, no de la factura.">Un coste extra por cada atributo almacenado</button></li>
+    <li><button data-correct="false" data-why="hash_key sí es ForceNew, pero no lo has tocado: sigue siendo code. Añadir entradas al bloque attribute no fuerza el reemplazo de la tabla ni pone en peligro los datos — el síntoma real es más sutil y por eso más difícil de cazar.">La tabla destruida y vuelta a crear</button></li>
+    <li><button data-correct="false" data-why="DynamoDB no valida ítems contra el bloque attribute porque no existe tal esquema: cada ítem lleva los atributos que quiera y el bloque solo enumera claves. Las escrituras seguirían funcionando exactamente igual mientras el plan no converge.">Las escrituras rechazadas por violar el esquema</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">
+  <strong>Best practices for designing and using partition keys effectively</strong></a> —
+  AWS, 10 minutos. Es la página de donde sale el límite de 3 000/1 000 por partición y la
+  discusión de la <em>hot partition</em> con ejemplos de claves buenas y malas. Léela
+  pensando en tu tabla: tu <code>code</code> aleatorio es el ejemplo bueno que la página
+  describe, y sabrás defender por qué en una entrevista.</p>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 08 — la puerta.</strong> API Gateway HTTP delante, y la segunda Lambda:
+  la que redirige. Ahí se resuelve la pregunta abierta de «¿cuántas Lambdas?» con código —
+  <code>for_each</code> sobre un mapa de funciones, cada una con su rol y su única llave
+  (<code>PutItem</code> la que crea, <code>GetItem</code> la que lee), y el 301 con
+  <code>Location</code> que convierte esto en un acortador usable desde un navegador. El
+  proyecto 01 queda entonces completo.</p>
+  <p class="small">Pendientes que arrastramos: el <strong>post-mortem del state</strong> de
+  la lección 03, el <strong>MFA del usuario <code>terraform</code></strong>, ejecutar los
+  tests en CI (proyecto 07) — y la <strong>apuesta del Init Duration</strong>, si aún no me
+  has traído las líneas <code>REPORT</code>. Ninguno bloquea la lección 08.</p>
+  <div class="nav-links">
+    <a href="./0006-el-zip-no-es-tu-repositorio.html">← Lección 06</a>
+    <a href="../reference/aws-dynamodb.html">Referencia: DynamoDB</a>
+    <a href="../reference/typescript-lambda.html">Referencia: TypeScript en Lambda</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Tres cosas: el <code>plan</code> completo (quiero ver cómo
+    lees el bloque <code>environment</code>), el <code>get-item</code> con tu ítem dentro, y
+    la línea <code>REPORT</code> de hoy junto a las dos anteriores — el SDK pesa más que zod
+    y la apuesta sigue viva. Y una pregunta para ti: el fake del test, ¿te parece que prueba
+    de verdad o te huele a trampa? Defiende lo que contestes — esa discusión es la mitad de
+    lo que este patrón enseña.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

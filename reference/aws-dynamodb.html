@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon DynamoDB</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon DynamoDB</h1>
+  <p class="deck">Base de datos clave-valor sin servidores: le das una clave, te devuelve un
+  ítem en pocos milisegundos, da igual que tengas cien filas o cien mil millones. A cambio,
+  renuncias a las preguntas que no pensaste de antemano.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Base de datos NoSQL</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (global con réplicas)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> en on-demand</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí: en <code>PAY_PER_REQUEST</code> una tabla sin tráfico cuesta 0 USD (los primeros 25 GB de almacenamiento son gratis)</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_dynamodb_table</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/01-serverless-api">proyecto 01</a>, y volverá en el 02 y el 03</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Una tabla de DynamoDB es un mapa clave → ítem repartido entre muchas máquinas. Tú eliges
+un atributo como <strong>clave de partición</strong>; DynamoDB le aplica un hash y ese hash
+decide en qué partición física vive el ítem. Por eso leer por clave cuesta lo mismo con
+cualquier volumen: no hay índice que recorrer, hay una función que calcular. No gestionas
+servidores, ni versiones, ni discos: pagas por petición y por gigabyte.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Es un <code>Map&lt;string, objeto&gt;</code> gigante y durable, repartido entre máquinas.
+  Todo lo que en un <code>Map</code> es natural —<code>get</code>, <code>set</code>,
+  <code>delete</code> por clave— aquí es barato y rápido. Y donde la analogía se rompe es
+  exactamente donde DynamoDB duele: <strong>iterar</strong>. Recorrer un <code>Map</code> es
+  gratis; recorrer una tabla (<code>Scan</code>) lee y factura cada byte de cada ítem, en
+  páginas de 1 MB. Si tu pregunta no empieza por «dame la clave…», estás usando el servicio
+  contra su diseño.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Búsquedas por clave a cualquier escala</h3><p>Tu acortador:
+  <code>GET /{code}</code> → un ítem. Sesiones de usuario, carritos, perfiles, tokens. El
+  patrón «tengo un identificador, dame el objeto» es el 100% del caso de uso.</p></div>
+  <div class="ref-card"><h3>Absorber picos sin aprovisionar nada</h3><p>En on-demand, pasar
+  de 10 a 10 000 escrituras por segundo no requiere tocar nada: pagas las que hagas. Una base
+  relacional necesitaría el servidor grande <em>siempre</em> por si llega el pico.</p></div>
+  <div class="ref-card"><h3>Candados e idempotencia</h3><p>Su escritura condicional
+  (<code>attribute_not_exists</code>) convierte «crea solo si no existe» en una operación
+  atómica. Es como Terraform bloqueaba el state durante años — hasta que
+  <code>use_lockfile</code> movió el candado a S3 y este curso pudo saltarse DynamoDB en el
+  proyecto 00.</p></div>
+  <div class="ref-card"><h3>Datos que caducan solos</h3><p>Con TTL marcas un atributo con una
+  fecha y DynamoDB borra el ítem al pasar, sin cobrarte la escritura del borrado. Cachés de
+  respuestas, rate limiting por ventana, sesiones. Lo usarás en el proyecto 03.</p></div>
+  <div class="ref-card"><h3>Disparar procesos al cambiar datos</h3><p>Streams publica cada
+  cambio de la tabla como un evento que una Lambda puede consumir. Es el puente entre «se
+  escribió una fila» y «haz algo con ello», y aparece en el proyecto 02.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Hay dos decisiones independientes: <strong>cómo pagas la capacidad</strong> (el
+<code>billing_mode</code>) y <strong>qué clase de almacenamiento</strong> usa la tabla. Y dos
+extensiones que se contratan aparte.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Variante</th><th>Qué la distingue</th><th>Cuándo</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><code>PAY_PER_REQUEST</code><br>(on-demand)</td><td>Pagas por petición hecha; escala solo, a cero incluido</td><td>Por defecto: tráfico desconocido, a ráfagas, o simplemente bajo</td><td>0,625 USD/millón de escrituras<br>0,125 USD/millón de lecturas</td></tr>
+    <tr><td><code>PROVISIONED</code></td><td>Reservas RCU/WCU por hora, las uses o no; se te acaban y te devuelve <code>Throttling</code></td><td>Tráfico estable y sostenido, medido, meses después</td><td>0,00065 USD/h por WCU<br>0,00013 USD/h por RCU</td></tr>
+    <tr><td><code>STANDARD_INFREQUENT_ACCESS</code><br>(clase de tabla)</td><td>Almacenar cuesta el 60% menos; cada petición, un 25% más</td><td>Tablas grandes que casi nadie lee: histórico, auditoría</td><td>0,10 USD/GB-mes<br>0,78 USD/millón de escrituras</td></tr>
+    <tr><td>Global tables</td><td>Réplicas activas-activas en varias regiones, con resolución de conflictos</td><td>Usuarios en varios continentes, o DR con RPO de segundos</td><td>Escrituras replicadas: 0,625 USD/millón por región extra</td></tr>
+    <tr><td>DAX</td><td>Caché en memoria delante de la tabla, API compatible, microsegundos</td><td>Lecturas masivas del mismo puñado de ítems</td><td>Por nodo y hora, <strong>encendido o no</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Empieza <strong>siempre</strong> en <code>PAY_PER_REQUEST</code>. Pásate a
+  <code>PROVISIONED</code> solo cuando tengas meses de métricas que enseñen un tráfico plano y
+  sostenido: a plena utilización la capacidad reservada sale unas 3-4 veces más barata, pero
+  cada hora que no la usas la pagas igual. Con tráfico a ráfagas o bajo —tu caso en todo este
+  curso— on-demand gana sin hacer cuentas. Ojo: <strong>el default del provider de Terraform
+  es <code>PROVISIONED</code></strong>, el contrario al que quieres.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+<p>El modelo mental mínimo para no cometer errores:</p>
+<ul>
+  <li><strong>El hash de la clave de partición elige la partición física.</strong> Cada
+  partición sirve como máximo <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">3 000
+  unidades de lectura y 1 000 de escritura por segundo</a>. Una clave con pocos valores
+  distintos —el día, el país— concentra el tráfico en una partición y te estrangula aunque la
+  tabla entera vaya sobrada: es la <em>hot partition</em>. Claves con muchos valores
+  uniformemente repartidos (códigos aleatorios, UUIDs) reparten perfecto.</li>
+  <li><strong>Las unidades miden tamaño, no peticiones.</strong> Una escritura de hasta 1 KB
+  = 1 WRU; una lectura fuertemente consistente de hasta 4 KB = 1 RRU, y la eventual, la
+  mitad. Un ítem de 5 KB cuesta 5 WRU por escritura. Las transaccionales, el doble.</li>
+  <li><strong>Leer es eventual por defecto.</strong> Justo después de escribir, una lectura
+  puede devolver el valor viejo; pides consistencia fuerte por operación
+  (<code>ConsistentRead</code>) y pagas el doble por ella.</li>
+  <li><strong>La escritura condicional es la única atómica que te dan gratis.</strong>
+  <code>ConditionExpression</code> evalúa y escribe en una sola operación en la partición.
+  Sin ella, <code>PutItem</code> es un <em>upsert</em>: machaca lo que hubiera.</li>
+  <li><strong><code>Query</code> pregunta, <code>Scan</code> confiesa.</strong> Query usa la
+  clave y lee solo lo que pides; Scan lee la tabla entera y la factura entera, en páginas de
+  <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Constraints.html">1 MB</a>.
+  Un Scan en producción es casi siempre un error de diseño que la factura delata.</li>
+  <li><strong>No hay <em>joins</em>, ni esquema, ni consultas ad hoc.</strong> El «esquema»
+  que declaras son solo las claves; cada ítem lleva los atributos que quiera. Las preguntas
+  que la tabla puede responder se deciden al diseñar las claves, no al escribir la query.</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Escrituras on-demand</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,625 USD / millón de WRU</code></td></tr>
+    <tr><td>Lecturas on-demand</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,125 USD / millón de RRU</code></td></tr>
+    <tr><td>Almacenamiento, primeros 25 GB-mes</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Almacenamiento, a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,25 USD / GB-mes</code></td></tr>
+    <tr><td>Capacidad provisionada (WCU / RCU)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,00065 / 0,00013 USD por unidad-hora</code></td></tr>
+    <tr><td>Backup continuo (PITR)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,20 USD / GB-mes</code></td></tr>
+    <tr><td>Streams</td><td><span class="tag-cost usage">por uso</span></td><td><code>2,5 M lecturas/mes gratis, luego 0,02 USD / 100 000</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios de la región us-east-1, verificados el 2026-08-28 contra la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json">Price
+List API pública</a>. Cámbialos si han pasado meses.</p>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p>Tres cosas. Una tabla <code>PROVISIONED</code> <strong>cobra por hora aunque nadie la
+  toque</strong> — y es el default de Terraform; el free tier de 25 WCU + 25 RCU lo tapa en
+  cuentas pequeñas hasta que un día creas la tabla número N y deja de taparlo. Cada
+  <strong>GSI</strong> duplica el coste de escritura de los atributos que proyecta: escribes
+  una vez, pagas el índice también. Y un <strong>Scan</strong> periódico —un cron «inocente»
+  que recorre la tabla— factura la tabla completa en cada pasada.</p>
+  <p>Tu acortador, para que haya un número delante: un ítem ronda los 100 bytes, así que mil
+  enlaces creados cuestan 0,000625 USD de escritura y un almacenamiento que ni aparece.
+  Dejarla desplegada cuesta exactamente cero.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Tamaño máximo de un ítem (nombres + valores)</td><td><code>400 KB</code></td><td>No — rediseña: el objeto grande a S3, la clave aquí</td></tr>
+    <tr><td>Longitud de la clave de partición</td><td><code>1 – 2048 bytes</code></td><td>No</td></tr>
+    <tr><td>Longitud de la clave de ordenación</td><td><code>1 – 1024 bytes</code></td><td>No</td></tr>
+    <tr><td>Página de resultados de <code>Query</code> / <code>Scan</code></td><td><code>1 MB</code></td><td>No — paginas con <code>LastEvaluatedKey</code></td></tr>
+    <tr><td>Throughput por partición física</td><td><code>3 000 RRU / 1 000 WRU por segundo</code></td><td>No — es diseño: reparte la clave</td></tr>
+    <tr><td>Throughput on-demand por tabla (default)</td><td><code>40 000 RRU / 40 000 WRU por segundo</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>GSIs por tabla</td><td><code>20</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>Tablas por región</td><td><code>2 500</code></td><td>Sí, por ticket</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuentes: <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Constraints.html">restricciones</a>
+y <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html">cuotas</a>,
+consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="callout trap">
+  <span class="callout-title">La prueba del algodón</span>
+  <p>Escribe las cinco preguntas que tu aplicación le hará a los datos. Si alguna no empieza
+  por «dame el ítem con clave…» o «dame los ítems cuya clave empiece por…», DynamoDB la
+  responderá mal, tarde o cara. Las preguntas se diseñan <em>antes</em> que la tabla; en una
+  relacional, el orden es el contrario, y esa es la diferencia entera entre ambas.</p>
+</div>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Accedes por clave conocida, y las consultas se saben de antemano</li>
+    <li>El tráfico es imprevisible o quieres coste cero en reposo</li>
+    <li>Necesitas «crea solo si no existe» atómico sin montar nada</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Haces <em>joins</em>, agregaciones o preguntas que aún no conoces</li>
+    <li>Los analistas quieren SQL sobre los datos en crudo</li>
+    <li>Necesitas transacciones largas entre muchas entidades</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td>RDS / Aurora</td><td>Allí el motor responde cualquier SQL sobre un esquema; aquí solo las consultas que las claves permiten</td><td>Las preguntas cambian más rápido que el diseño de la tabla</td></tr>
+    <tr><td>ElastiCache / Valkey</td><td>Una caché es memoria volátil delante de otra fuente; DynamoDB <em>es</em> la fuente, durable en tres AZs</td><td>Los datos pueden perderse y regenerarse sin drama</td></tr>
+    <tr><td>S3</td><td>Ambos son clave → valor, pero S3 sirve objetos grandes con latencia alta; DynamoDB ítems de hasta 400 KB en milisegundos</td><td>El valor pesa megas y se lee entero de una vez</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>ejemplo mínimo</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_dynamodb_table"</b> <b class="s">"links"</b> {
+  name         = <b class="s">"url-shortener"</b>
+  billing_mode = <b class="s">"PAY_PER_REQUEST"</b>   <b class="c"># el default es PROVISIONED: dilo siempre</b>
+  hash_key     = <b class="s">"code"</b>
+
+  <b class="c"># Solo los atributos que son clave (de la tabla o de un índice).</b>
+  attribute {
+    name = <b class="s">"code"</b>
+    type = <b class="s">"S"</b>              <b class="c"># S string · N number · B binary</b>
+  }
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas</span>
+  <ul>
+    <li><strong><code>attribute</code> no es el esquema, es la lista de claves.</strong>
+    Declarar ahí un atributo normal (la URL, la fecha) provoca <a href="https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table">un
+    plan infinito documentado por el propio provider</a>: cada apply intenta crear un índice
+    que no existe, no lo consigue, y el siguiente plan vuelve a proponerlo.</li>
+    <li><strong><code>hash_key</code> es <em>ForceNew</em>.</strong> Cambiar la clave de
+    partición destruye la tabla y sus datos, y el plan lo dirá con un
+    <code>-/+ (forces replacement)</code>. Las claves se deciden una vez.</li>
+    <li><strong><code>deletion_protection_enabled = true</code> bloquea el
+    <code>terraform destroy</code></strong> hasta que lo pongas a <code>false</code> y
+    apliques. En producción es una virtud; en este curso, donde todo se destruye, un
+    cepo.</li>
+    <li><strong>Si usas <code>PROVISIONED</code></strong>, <code>read_capacity</code> y
+    <code>write_capacity</code> pasan a ser obligatorios — y con autoscaling encima, el
+    provider recomienda <code>ignore_changes</code> sobre ambos para que Terraform no pelee
+    contra el autoscaler en cada plan.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Tabla de auditoría legal: cada evento se escribe una vez, se consulta
+  quizá una vez al año, y hay que retenerlo todo una década. Ya acumula 4 TB. ¿Qué cambias?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Con 4 TB dominando la factura, la clase Standard-IA baja el almacenamiento de 0,25 a 0,10 USD/GB-mes (de ~1 000 a ~400 USD/mes) y encarece un 25% unas peticiones que casi no existen. Es exactamente el caso para el que existe esa clase.">La clase de tabla, a Standard-IA</button></li>
+    <li><button data-correct="false" data-why="Con una consulta al año no hay tráfico que reservar: pagarías capacidad por hora, todas las horas, para atender casi nada. El problema de esta tabla es el almacenamiento, y el billing_mode no toca el precio del gigabyte.">El modo de pago, a provisionado</button></li>
+    <li><button data-correct="false" data-why="DAX es una caché en memoria para lecturas masivas y repetidas, cobrando por nodo y hora esté o no en uso. Con una consulta al año pagarías un clúster encendido una década para acelerar diez lecturas.">Añadir DAX delante de la tabla</button></li>
+    <li><button data-correct="false" data-why="Una réplica global duplica el almacenamiento que ya te duele y además cobra cada escritura replicada en la región extra. Sirve para latencia global o recuperación ante desastres, y este caso no pide ninguna de las dos.">Replicarla entera en una segunda región</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Dos diseños para la tabla de enlaces del acortador: clave de partición
+  <code>code</code> (aleatorio), o clave de partición <code>fecha</code> con
+  <code>code</code> de clave de ordenación «para poder listar por día». ¿Cuál, y por qué?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="La consulta del producto es «dame este código», y un código aleatorio reparte el hash uniformemente entre particiones. Con fecha como partición, todo el tráfico del día cae en la misma partición: 1 000 escrituras por segundo de techo, da igual lo grande que sea la tabla.">Por código: la consulta manda, y reparte</button></li>
+    <li><button data-correct="false" data-why="Listar por día es una consulta de analista, no del producto: la redirección jamás pregunta por fecha. Y concentra cada día entero en una sola partición física, que sirve 1 000 escrituras por segundo como máximo — la hot partition de manual.">Por fecha: así puedo listar por día</button></li>
+    <li><button data-correct="false" data-why="Las dos claves juntas forman la clave primaria, pero la de partición es la que decide la distribución física y la que exige GetItem completo. Con fecha de partición seguirías necesitando saber el día exacto para leer un código.">Las dos igual: la clave es compuesta</button></li>
+    <li><button data-correct="false" data-why="Un GSI no arregla una partición mal elegida: añade otra vista con sus propias particiones y duplica el coste de escritura. Primero se elige la clave que sirve a la consulta principal; los índices son para las consultas secundarias.">Da lo mismo: un índice lo resuelve</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Tu Lambda escribe un enlace cuyo código ya existe, sin
+  <code>ConditionExpression</code>. ¿Qué devuelve DynamoDB?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="PutItem es un upsert: reemplaza el ítem completo y responde 200 como si nada. El enlace del otro usuario apunta ahora a tu URL y nadie se ha enterado. Por eso la escritura condicional no es una optimización, es la corrección del sistema.">Éxito: machaca el ítem sin avisar</button></li>
+    <li><button data-correct="false" data-why="Ese error solo existe cuando una ConditionExpression evalúa a falso — es la señal de que la condición te protegió. Sin condición no hay nada que comprobar, así que ese error es justo lo que pierdes al no ponerla.">Error: lanza ConditionalCheckFailedException y no escribe</button></li>
+    <li><button data-correct="false" data-why="No hay ninguna restricción de unicidad que declarar en DynamoDB: la clave identifica al ítem, y escribir sobre una clave existente lo sustituye. La unicidad se defiende en la escritura, con la condición, o no se defiende.">Error: la clave primaria está duplicada</button></li>
+    <li><button data-correct="false" data-why="Sí hay algo que fusionar en el modelo de DynamoDB —UpdateItem modifica atributos sueltos—, pero PutItem no es esa operación: reemplaza el ítem entero. Confundir ambas es una fuente clásica de atributos desaparecidos.">Éxito: fusiona los atributos del ítem</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">Necesitas la lista de las URLs más visitadas de tu acortador, agregada
+  por dominio, para un informe mensual. ¿Cómo lo haces bien?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Un export a S3 no consume capacidad de la tabla, y sobre esos ficheros Athena hace el SQL con agregaciones que DynamoDB no sabe hacer. Analítica y operación tienen motores distintos a propósito; un informe mensual no justifica torcer el diseño de la tabla.">Exportar a S3 y agregarlo allí fuera</button></li>
+    <li><button data-correct="false" data-why="Un Scan mensual lee y factura la tabla completa en páginas de 1 MB, y la agregación por dominio la harías tú a mano en memoria. Funciona con mil ítems y se convierte en un incidente de coste y throttling con cien millones.">Un Scan mensual que agrupe en memoria</button></li>
+    <li><button data-correct="false" data-why="Un GSI da otra vista clave → ítem, no agregaciones: seguirías sin poder sumar visitas por dominio con una Query. Añadirlo duplicaría el coste de cada escritura para no responder la pregunta que te hacían.">Un GSI con el dominio como clave</button></li>
+    <li><button data-correct="false" data-why="TransactGetItems lee hasta 100 ítems concretos de forma atómica, pagando el doble por lectura. No agrega, no filtra por dominio y no recorre la tabla: es para consistencia entre pocos ítems, no para informes.">Leerla entera usando cien lecturas transaccionales atómicas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/0007-la-memoria-del-acortador.html">Lección 07</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> El hueco deliberado de esta ficha es el <strong>modelado single-table</strong>
+    —meter varias entidades en una tabla jugando con claves compuestas— porque tu acortador no
+    lo necesita. Si quieres verlo, o quieres que diseñemos las claves del proyecto 02 juntos,
+    pídemelo. Y si algo del reparto en particiones no te cuadra, esa duda es de las buenas.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

@@ -224,6 +224,48 @@ rechaza avanzar por sentir que el ejemplo es de juguete — hay que atenderlo, n
 - **Renumeración:** DynamoDB pasa a ser la lección 07 y API Gateway la 08. Anotado en el
   ROADMAP, en la lección 05 (con nota fechada al pie) y en el README del proyecto 01.
 
+## Lección 07 — la memoria del acortador (2026-08-28, LR-0012)
+
+- **La deuda de `application/` queda saldada**: puerto `LinkRepository` + `CodeCollisionError`
+  en `application/` (idioma del contrato), adaptador en `infrastructure/` (único fichero que
+  conoce el SDK), reintento ×3 en el caso de uso, handler como **raíz de composición** —
+  término nuevo, junto a puerto/adaptador. `process.env` solo en el handler.
+- **`handler.test.ts` se borró con argumento**: el handler ahora crea el `DynamoDBClient`; su
+  prueba es el despliegue. Los 14 tests siguen siendo 14 (salen 2, entran 2 de colisiones).
+- **Trampa central AWS**: `PutItem` es upsert — sin `attribute_not_exists(code)` machaca en
+  silencio. Tercera entrega del hilo «fallo silencioso» (ARN sin `:*`, sourcemap, upsert).
+- **Trampa central Terraform**: el bloque `attribute` es la lista de claves, no un esquema —
+  un atributo de más da el *plan infinito* del provider y ni `validate` ni `plan` avisan.
+  Y `billing_mode` por defecto es `PROVISIONED` (cobra por hora): segundo «el default del
+  provider no es tu default», tras `x86_64`.
+- **API nativa (`{S: …}`) y no `lib-dynamodb`**, con fecha de reevaluación: proyecto 02.
+- **Verificación de la lección**: `aws dynamodb get-item` con el código del `ok.json`
+  (`node -p 'require("./ok.json").code'` — sin depender de jq). El 200 no demuestra nada.
+- **Medido**: bundle 835 728 B (SDK ≈ +508 KB), zip 216 388 B (×3,3 sobre lección 06).
+- **La apuesta del Init Duration sigue sin cobrarse** — reclamada en cabecera y cierre de la
+  lección 07. Si tampoco trae los REPORT, en la 08 se pide como primer paso o se retira.
+- **Refactor pedido por él (2026-08-28)**: partir `main.tf` por componentes — `dynamodb.tf`,
+  `create-link.tf` (identidad → logs → llave de datos → artefacto → función, en orden
+  narrativo), `outputs.tf`, `main.tf` solo con locals. Criterio elegido: **por componente, no
+  por tipo de recurso** — todo lo que ES create_link vive junto. Enseñanza asociada: Terraform
+  fusiona todos los `.tf` del directorio; el reparto es para humanos y `terraform plan` da «No
+  changes» como prueba. Preferencia suya a respetar en proyectos futuros.
+- La pregunta incómoda del cierre («¿el fake prueba de verdad?») tiene respuesta preparada en
+  LR-0012: el fake prueba la política de reintento; la atomicidad la garantiza la condición.
+- Precios/límites de DynamoDB verificados 2026-08-28 (Price List API + doc); están en la ficha.
+- **Bug encontrado por él al desplegar (2026-08-28)**: `Dynamic require of "node:https" is not
+  supported` al invocar. El SDK trae CJS; esbuild en ESM deja un stub de `require` que solo
+  falla cuando el bundle se carga como ESM puro — el runtime de Lambda. **Mi prueba de humo
+  mentía**: importaba el bundle desde `node -e` (CJS) y el stub encontraba ese `require`.
+  Arreglo verificado: `--banner:js="import { createRequire } from 'node:module'; const require
+  = createRequire(import.meta.url);"` en el script de build (+93 bytes). Añadido a la lección
+  07 como trampa. **Regla nueva para verificar bundles ESM: la prueba de humo debe ejecutarse
+  desde un `.mjs`, nunca desde `node -e`.**
+- Él también tuvo que añadir `dynamodb:*` a la política `terraform-course` de
+  `00-foundations/iam.tf` para poder aplicar — correcto y en el sitio correcto; la lección 07
+  no lo avisaba. Precedente: cada lección que estrene servicio debe avisar de tocar antes la
+  política del usuario en el proyecto 00.
+
 ## Ideas para futuras lecciones
 
 - El `plan` como herramienta de lectura: enseñarle a leer un diff de 200 líneas.

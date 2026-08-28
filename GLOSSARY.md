@@ -67,6 +67,12 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Parse, don't validate** — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
 - **Tree shaking** — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
 - **Sourcemap** — introducido en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Clave de partición** — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
+- **Hot partition** — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
+- **Escritura condicional** (`ConditionExpression`) — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
+- **Upsert** — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
+- **Puerto y adaptador** — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
+- **Raíz de composición** — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
 - **Layer** (Lambda) — introducida en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
 - **Ejecución duradera** / **Capacity provider** — introducidos en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
 
