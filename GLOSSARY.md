@@ -55,6 +55,13 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Rol** / **Política de confianza** — introducidos en [lección 04](./lessons/0004-deja-de-ser-root.html)
 - **Permissions boundary** — introducido en [lección 04](./lessons/0004-deja-de-ser-root.html)
 - **Credenciales temporales** — introducidas en [lección 04](./lessons/0004-deja-de-ser-root.html)
+- **Rol de ejecución** — introducido en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **Entorno de ejecución** / **Cold start** — introducidos en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **GB-segundo** — introducido en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **Handler** — introducido en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **Invocación síncrona** / **asíncrona** / **event source mapping** — introducidas en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **`local`** — introducido en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
+- **Dependencia explícita** (`depends_on`) — introducida en [lección 05](./lessons/0005-tu-codigo-en-aws.html)
 
 ## AWS
 
@@ -131,6 +138,11 @@ Referencias completas por servicio en [`reference/`](./reference/README.md).
 - **«Root»** significa siempre el usuario raíz de la cuenta AWS, nunca el usuario `root` de
   un sistema Unix ni el módulo raíz de Terraform. Cuando hablemos del segundo diremos
   **módulo raíz**, con las dos palabras.
+- **«Rol de ejecución»** es siempre el rol que asume el servicio Lambda para ejecutar tu
+  función. No confundir con el rol que asume una persona ni con un *instance profile*. La
+  identidad que ejecuta `terraform apply` la llamamos siempre **usuario `terraform`**.
+- **«Build»** es transformar TypeScript en el `.js` empaquetado, y ocurre siempre **fuera**
+  de Terraform. Cuando digamos «desplegar» nos referimos solo al `apply`.
 - **«Perfil»** es un perfil de la AWS CLI en `~/.aws/config`. Desde la lección 04,
   `personal` es la identidad de trabajo (usuario IAM `terraform`) y `personal-root` es la
   vía de escape. No confundir con *instance profile*, que es otra cosa de IAM.

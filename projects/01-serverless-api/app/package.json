@@ -1,0 +1,16 @@
+{
+  "name": "url-shortener",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.23.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "prebuild": "rm -rf dist",
+    "build": "esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --outfile=dist/index.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

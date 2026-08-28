@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 05 · Tu código, ejecutándose en AWS</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 05 · Proyecto <code>01-serverless-api</code></p>
+  <h1>Tu código, ejecutándose en AWS</h1>
+  <p class="deck">Hasta ahora Terraform ha creado <em>cosas de AWS</em>: un presupuesto, un
+  topic, un bucket, un usuario. Hoy despliegas algo que has escrito tú, en TypeScript, y lo
+  ejecutas en la nube. Por el camino aparece la primera identidad que <strong>no es
+  tuya</strong> —un rol que asume un servicio de AWS— y descubres el paso que Terraform se
+  niega a dar por ti.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD — cero invocaciones, cero factura</span>
+    <span><b>Terraform</b> <code>locals</code> · <code>archive_file</code> · <code>source_code_hash</code> · <code>depends_on</code></span>
+    <span><b>AWS</b> Lambda · CloudWatch Logs · rol de ejecución</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+
+<p>Sin abrir nada. Piénsalo, dilo en voz alta, y luego despliega la respuesta. Las tres
+preguntas de hoy no son de repaso: cada una es una pieza que vas a usar en los próximos
+veinte minutos.</p>
+
+<details class="recall">
+  <summary>Un rol IAM y un usuario IAM son las dos identidades que conociste ayer. ¿Cuál es la diferencia que <em>importa</em>?
+    <span class="recall-hint">Piensa en dónde están las credenciales.</span>
+  </summary>
+  <p><strong>Un rol no tiene credenciales propias.</strong> Un usuario es una identidad
+  permanente con contraseña o claves; un rol es una identidad vacía que <em>otro</em> asume, y
+  STS le presta credenciales temporales para hacerlo.</p>
+  <p>De ahí sale lo que le falta a un rol y un usuario no necesita: una <strong>política de
+  confianza</strong> que diga <em>quién</em> puede asumirlo. Hoy escribes tu primera política
+  de confianza, y el que asume el rol no eres tú. Es AWS.</p>
+</details>
+
+<details class="recall">
+  <summary>En la lección 04 tuviste que separar el ARN del bucket del ARN de sus objetos. ¿Por qué no valía uno solo?
+    <span class="recall-hint">Te costó un <code>AccessDenied</code> descubrirlo.</span>
+  </summary>
+  <p>Porque son <strong>recursos distintos para IAM</strong>. <code>arn:aws:s3:::mi-bucket</code>
+  identifica el bucket; <code>arn:aws:s3:::mi-bucket/algo.json</code> identifica un objeto de
+  dentro. Las acciones sobre el contenedor y las acciones sobre el contenido se conceden por
+  separado.</p>
+  <p>Guarda la forma de ese error, porque hoy vuelve <strong>idéntica</strong> con otro
+  servicio: un grupo de logs de CloudWatch y los <em>streams</em> que hay dentro tampoco son el
+  mismo ARN. Y esta vez el síntoma no es un <code>AccessDenied</code> ruidoso, sino un silencio.</p>
+</details>
+
+<details class="recall">
+  <summary>Cada proyecto del curso guarda su state en el mismo bucket pero con una <code>key</code> distinta. ¿Qué se rompería si compartieran <code>key</code>?
+    <span class="recall-hint">No es un problema de permisos.</span>
+  </summary>
+  <p>Que serían <strong>el mismo state</strong>. Terraform borra de la infraestructura todo lo
+  que está en el state y no está en tu código: al aplicar el proyecto 01 sobre el state del 00,
+  el <code>plan</code> propondría destruir el presupuesto, el topic y el bucket, porque no
+  aparecen en los ficheros del proyecto nuevo.</p>
+  <p>La <code>key</code> es la frontera entre proyectos. Hoy estrenas la segunda —y por eso
+  hoy toca ampliar la política del usuario <code>terraform</code>, que ahora mismo solo tiene
+  permiso sobre la del proyecto 00.</p>
+</details>
+
+<h2>Qué construyes hoy, y qué no</h2>
+
+<p>El proyecto 01 es un <strong>acortador de URLs</strong>: le mandas
+<code>https://ejemplo.com/una/ruta/larguísima</code> y te devuelve un código corto;
+después, <code>GET /{código}</code> redirige. Tiene exactamente tres piezas, y se construyen
+en tres sesiones:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Pieza</th><th>Qué hace</th><th>Servicio</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>El cerebro</strong></td><td>Valida la URL y genera el código corto</td><td>Lambda</td><td><strong>Hoy</strong></td></tr>
+    <tr><td>La memoria</td><td>Guarda <code>código → URL</code> y detecta colisiones</td><td>DynamoDB</td><td>Lección 06</td></tr>
+    <tr><td>La puerta</td><td>Convierte todo esto en HTTP público</td><td>API Gateway</td><td>Lección 07</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Por qué el cerebro primero, y no la puerta</span>
+  <p>Porque una Lambda se puede invocar sin HTTP. <code>aws lambda invoke</code> le manda un
+  JSON directamente y te devuelve la respuesta. Eso significa que hoy puedes tener
+  <strong>lógica tuya funcionando en AWS y verificada</strong> sin haber tocado ni una línea de
+  API Gateway.</p>
+  <p>Es también como se depura de verdad: cuando el día de mañana tu API devuelva un
+  <code>502</code>, lo primero que harás es invocar la Lambda a pelo para saber de qué lado
+  está el problema. Aprende a hacerlo hoy, con todo funcionando, y no el día que se rompa.</p>
+</div>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía del servicio</span>
+    <h2>AWS Lambda</h2>
+  </header>
+  <div class="anatomy-body">
+
+    <h3>Qué es</h3>
+    <p>Un servicio que guarda un <strong>paquete de código</strong> y una
+    <strong>configuración</strong> —runtime, handler, memoria, timeout, rol— y, cada vez que
+    alguien la invoca, busca un entorno de ejecución donde correrla. Si no hay ninguno libre,
+    crea uno: descomprime el paquete, arranca Node, ejecuta lo que hay fuera del handler y
+    <em>entonces</em> llama a tu función. Eso es el <em>cold start</em>. Si ya había uno
+    caliente, se lo salta todo.</p>
+    <p>Dos consecuencias que conviene interiorizar hoy: <strong>un entorno atiende una
+    invocación cada vez</strong> (no hay concurrencia dentro de una Lambda; diez peticiones
+    simultáneas son diez entornos), y <strong>el disco no dura</strong>. Todo lo que tenga que
+    sobrevivir a la invocación vive en otro servicio. Por eso mañana aparece DynamoDB.</p>
+
+    <h3>Las decisiones que tomas hoy</h3>
+    <table>
+      <thead><tr><th>Eje</th><th>Opciones</th><th>Qué eliges y por qué</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Paquete</strong></td>
+          <td><code>Zip</code> o imagen de contenedor</td>
+          <td><code>Zip</code>. Tu bundle son 584 bytes; una imagen sería mover un camión para llevar una carta.</td>
+        </tr>
+        <tr>
+          <td><strong>Arquitectura</strong></td>
+          <td><code>arm64</code> o <code>x86_64</code></td>
+          <td><code>arm64</code>. JavaScript no tiene binarios nativos que te aten, y Graviton cuesta <strong>exactamente un 20% menos</strong> por GB-segundo. El provider usa <code>x86_64</code> por defecto: hay que pedirlo.</td>
+        </tr>
+        <tr>
+          <td><strong>Invocación</strong></td>
+          <td>Síncrona, asíncrona o <em>event source mapping</em></td>
+          <td>Síncrona. Esperas la respuesta. Si falla, el error te llega a ti y Lambda <strong>no reintenta</strong>.</td>
+        </tr>
+        <tr>
+          <td><strong>Concurrencia</strong></td>
+          <td>Bajo demanda, reservada o aprovisionada</td>
+          <td>Bajo demanda. Es la única de las tres que cuesta cero en reposo.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Cuánto cuesta</h3>
+    <table class="cost-table">
+      <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+      <tbody>
+        <tr><td>Función desplegada, sin invocar</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+        <tr><td>Peticiones</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,20 USD</code> por millón</td></tr>
+        <tr><td>Duración <code>arm64</code></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0000133334 USD</code> / GB-segundo</td></tr>
+        <tr><td>Capa gratuita mensual</td><td><span class="tag-cost free">gratis</span></td><td>1 M peticiones + 400.000 GB-s</td></tr>
+        <tr><td>Ingesta de logs en CloudWatch</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD</code> / GB</td></tr>
+      </tbody>
+    </table>
+    <p class="cost-stamp">Precios de <strong>us-east-1</strong>, verificados el
+    <strong>2026-08-24</strong> contra la Price List API pública y la
+    <a href="https://aws.amazon.com/lambda/pricing/">página de precios de Lambda</a>.
+    Tus veinte invocaciones de hoy, a 128 MB y unos 30 ms, son <strong>0,000000075 GB-segundos
+    en total</strong>. No es una forma de hablar: es literalmente indistinguible de cero.</p>
+
+    <p><a href="../reference/aws-lambda.html"><b>Ficha completa de Lambda</b></a> — los cuatro
+    ejes de decisión con sus tablas, cómo funciona por dentro, los once límites que se chocan de
+    verdad, por qué los logs cuestan más que el cómputo, cuándo elegir Fargate o Step Functions
+    en su lugar, y las cuatro trampas del provider.</p>
+  </div>
+</section>
+
+<h2>Lo único que Terraform se niega a hacer</h2>
+
+<p>Terraform no compila tu código. No ejecuta <code>tsc</code>, no llama a <code>esbuild</code>,
+no sabe qué es TypeScript. Lo único que sabe hacer es <strong>comprimir un directorio que ya
+existe</strong> y subir el <code>.zip</code>.</p>
+
+<div class="callout tf">
+  <span class="callout-title">El orden es siempre build → plan → apply</span>
+  <p>El <code>data "archive_file"</code> <strong>se resuelve durante el <code>plan</code></strong>,
+  no durante el <code>apply</code>. Si el directorio con el JavaScript compilado no existe
+  todavía, el <code>plan</code> falla antes de empezar y el mensaje no menciona a esbuild por
+  ningún lado.</p>
+  <p>Esto no es una carencia: es la frontera. Construir artefactos es trabajo del pipeline de
+  build; Terraform gestiona infraestructura. Cuando veas tutoriales que meten el
+  <code>pnpm run build</code> dentro de Terraform con un <code>provisioner</code> o un
+  <code>null_resource</code>, están cruzando esa frontera. Se puede, y en el proyecto 03
+  hablaremos de por qué casi siempre es mala idea.</p>
+</div>
+
+<ol class="steps">
+
+<li>
+<h3>Comprueba quién eres, y amplía lo que puedes hacer</h3>
+
+<p>Como cada día. Y esta vez con una diferencia: desde ayer <code>personal</code> ya no es root.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">siempre lo primero</span></div>
+<pre><code>export AWS_PROFILE=personal
+aws login
+aws sts get-caller-identity
+<b class="c"># El Arn debe terminar en ":user/terraform". Si pone ":root", para.</b></code></pre>
+</div>
+
+<p>Tu usuario <code>terraform</code> hoy no puede hacer dos cosas que necesita: tocar Lambda y
+CloudWatch Logs, y escribir un state que no sea el del proyecto 00. Y —como descubriste al
+final de la lección 04— <strong>arreglarlo no requiere volver a root</strong>: tienes
+<code>iam:*</code>, así que modificar tu propia política es una acción que ya puedes hacer.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/00-foundations/iam.tf</span><span class="tag">hcl · modifica el data existente</span></div>
+<pre><code>data <b class="s">"aws_iam_policy_document"</b> <b class="s">"terraform_course"</b> {
+  statement {
+    sid = <b class="s">"CourseServices"</b>
+    actions = [
+      <b class="s">"budgets:*"</b>,
+      <b class="s">"sns:*"</b>,
+      <b class="s">"iam:*"</b>,
+      <b class="s">"lambda:*"</b>,   <b class="c"># nuevo</b>
+      <b class="s">"logs:*"</b>,     <b class="c"># nuevo</b>
+      <b class="s">"sts:GetCallerIdentity"</b>
+    ]
+    resources = [<b class="s">"*"</b>]
+  }
+
+  statement {
+    sid       = <b class="s">"StateBucket"</b>
+    actions   = [<b class="s">"s3:*"</b>]
+    resources = [aws_s3_bucket.state.arn]
+  }
+
+  <b class="c"># Antes: ".../00-foundations/terraform.tfstate"</b>
+  <b class="c"># Ahora: cualquier proyecto del curso.</b>
+  statement {
+    sid       = <b class="s">"StateObject"</b>
+    actions   = [<b class="s">"s3:GetObject"</b>, <b class="s">"s3:PutObject"</b>]
+    resources = [<b class="s">"${aws_s3_bucket.state.arn}/*/terraform.tfstate"</b>]
+  }
+
+  statement {
+    sid       = <b class="s">"StateLockObject"</b>
+    actions   = [<b class="s">"s3:GetObject"</b>, <b class="s">"s3:PutObject"</b>, <b class="s">"s3:DeleteObject"</b>]
+    resources = [<b class="s">"${aws_s3_bucket.state.arn}/*/terraform.tfstate.tflock"</b>]
+  }
+}</code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">El <code>*</code> de IAM no es el <code>*</code> de tu shell</span>
+  <p>En una <em>glob</em> de shell, <code>*/fichero</code> baja exactamente un nivel. En un ARN
+  de IAM, <code>*</code> significa <em>«cualquier secuencia de cero o más caracteres»</em>, y eso
+  <strong>incluye las barras</strong>. Por eso ese patrón cubre
+  <code>00-foundations/terraform.tfstate</code>, <code>01-serverless-api/terraform.tfstate</code>
+  y también <code>a/b/c/terraform.tfstate</code>.</p>
+  <p>Lo que <em>no</em> cubre es <code>terraform.tfstate</code> en la raíz del bucket, porque el
+  patrón exige la barra. Y sigue sin cubrir cualquier otro nombre de objeto: no has abierto el
+  bucket, has abierto una forma concreta de clave.</p>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde projects/00-foundations</span></div>
+<pre><code>terraform plan    <b class="c"># 1 recurso a modificar: aws_iam_policy.terraform_course</b>
+terraform apply</code></pre>
+</div>
+
+<p class="small">Espera diez segundos antes de seguir. Las políticas de IAM se propagan con
+consistencia eventual, y un <code>plan</code> lanzado un segundo después puede ver todavía la
+política vieja. Ya te pasó ayer.</p>
+</li>
+
+<li>
+<h3>El esqueleto del proyecto 01</h3>
+
+<p>Mismo patrón que el proyecto 00, con dos diferencias: una <code>key</code> nueva y un
+<strong>segundo provider</strong>.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/versions.tf</span><span class="tag">hcl</span></div>
+<pre><code>terraform {
+  required_version = <b class="s">">= 1.9"</b>
+
+  required_providers {
+    aws = {
+      source  = <b class="s">"hashicorp/aws"</b>
+      version = <b class="s">"~> 6.0"</b>
+    }
+    <b class="c"># archive no habla con AWS: comprime ficheros de tu disco.</b>
+    <b class="c"># Es un provider "local", igual que random o null.</b>
+    archive = {
+      source  = <b class="s">"hashicorp/archive"</b>
+      version = <b class="s">"~> 2.7"</b>
+    }
+  }
+}
+
+provider <b class="s">"aws"</b> {
+  region = <b class="s">"us-east-1"</b>
+
+  default_tags {
+    tags = {
+      Project   = <b class="s">"terraform-course"</b>
+      Stack     = <b class="s">"01-serverless-api"</b>
+      ManagedBy = <b class="s">"terraform"</b>
+    }
+  }
+}</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/backend.tf</span><span class="tag">hcl</span></div>
+<pre><code>terraform {
+  backend <b class="s">"s3"</b> {
+    bucket = <b class="s">"tf-state-learning-course-terraform"</b>
+    key    = <b class="s">"01-serverless-api/terraform.tfstate"</b>   <b class="c"># la frontera</b>
+    region = <b class="s">"us-east-1"</b>
+
+    encrypt      = true
+    use_lockfile = true
+  }
+}</code></pre>
+</div>
+
+<p>Y el <code>local</code>, que es nuevo. Un <code>local</code> es un valor con nombre calculado
+una vez y reutilizado: ni entra por fuera como una <code>variable</code> ni sale como un
+<code>output</code>. Aquí evita repetir el nombre en cinco sitios — y dentro de un momento vas a
+ver que además <strong>rompe un ciclo</strong>.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/main.tf</span><span class="tag">hcl</span></div>
+<pre><code>locals {
+  name          = <b class="s">"url-shortener"</b>
+  function_name = <b class="s">"${local.name}-create-link"</b>
+}</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde projects/01-serverless-api</span></div>
+<pre><code>terraform init
+<b class="c"># Descarga dos providers: aws y archive.</b></code></pre>
+</div>
+</li>
+
+<li>
+<h3>El código: lo que el acortador hace de verdad</h3>
+
+<p>Un acortador serio tiene que hacer dos cosas antes de guardar nada: <strong>rechazar lo que
+no es una URL usable</strong> y <strong>generar un código que no se pueda adivinar</strong>. Eso
+es lo que escribes hoy.</p>
+
+<p>El proyecto usa <strong>pnpm</strong>, y el gestor se fija en el propio
+<code>package.json</code> con el campo <code>packageManager</code>: corepack lee ese campo y
+usa exactamente esa versión, la tengas instalada o no. Es la misma idea que
+<code>required_version</code> en Terraform — la herramienta se declara, no se supone.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/app/package.json</span><span class="tag">json</span></div>
+<pre><code>{
+  <b class="s">"name"</b>: <b class="s">"url-shortener"</b>,
+  <b class="s">"private"</b>: true,
+  <b class="s">"type"</b>: <b class="s">"module"</b>,
+  <b class="s">"packageManager"</b>: <b class="s">"pnpm@11.23.0"</b>,
+  <b class="s">"scripts"</b>: {
+    <b class="s">"typecheck"</b>: <b class="s">"tsc --noEmit"</b>,
+    <b class="s">"prebuild"</b>: <b class="s">"rm -rf dist"</b>,
+    <b class="s">"build"</b>: <b class="s">"esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --outfile=dist/index.mjs"</b>
+  },
+  <b class="s">"devDependencies"</b>: {
+    <b class="s">"@types/node"</b>: <b class="s">"^24.13.3"</b>,
+    <b class="s">"esbuild"</b>: <b class="s">"^0.28.2"</b>,
+    <b class="s">"typescript"</b>: <b class="s">"^7.0.2"</b>
+  }
+}</code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Los tipos son del runtime, no de tu portátil</span>
+  <p><code>@types/node</code> va en <strong>24</strong>, no en la última versión. Al instalarlo,
+  pnpm te avisará de que existe la 26 — ignóralo a propósito. Esos tipos describen las APIs
+  disponibles <em>donde el código se ejecuta</em>, y ahí Node es la 24 porque el runtime es
+  <code>nodejs24.x</code>. Con los tipos de la 26 podrías usar una API que en Lambda no existe,
+  y <code>tsc</code> te diría que todo está bien.</p>
+  <p>Y sí: mantener <code>nodejs24.x</code> es lo correcto. <code>nodejs26.x</code> existe en
+  Lambda pero está en <strong>vista previa pública</strong> —sin SLA ni soporte técnico, y con
+  cambios incompatibles todavía posibles—, porque Lambda solo publica un runtime estable cuando
+  la versión entra en <em>LTS activo</em>. La 24 tiene soporte hasta el 30 de abril de 2028.</p>
+</div>
+
+<p>El <code>tsconfig.json</code> no se escribe a mano: lo genera el compilador, y el que trae
+TypeScript 7 ya viene con lo estricto activado.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde app/</span></div>
+<pre><code>pnpm add -D typescript esbuild @types/node@24
+pnpm exec tsc --init</code></pre>
+</div>
+
+<p>Genera un fichero de 44 líneas, casi todo comentarios explicando cada opción — merece la
+pena leerlo una vez. De lo que deja activo solo hay que <strong>tocar tres cosas</strong>:</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/app/tsconfig.json</span><span class="tag">json · tras <code>tsc --init</code></span></div>
+<pre><code>{
+  <b class="s">"compilerOptions"</b>: {
+    <b class="c">// --- lo que genera tsc --init, sin tocar ---</b>
+    <b class="s">"module"</b>: <b class="s">"nodenext"</b>,
+    <b class="s">"target"</b>: <b class="s">"esnext"</b>,
+    <b class="s">"strict"</b>: true,
+    <b class="s">"verbatimModuleSyntax"</b>: true,
+    <b class="s">"isolatedModules"</b>: true,
+    <b class="s">"noUncheckedIndexedAccess"</b>: true,
+    <b class="s">"exactOptionalPropertyTypes"</b>: true,
+    <b class="s">"noUncheckedSideEffectImports"</b>: true,
+    <b class="s">"moduleDetection"</b>: <b class="s">"force"</b>,
+    <b class="s">"skipLibCheck"</b>: true,
+    <b class="s">"sourceMap"</b>: true,
+
+    <b class="c">// --- 1. los tipos de Node, que viene con [] ---</b>
+    <b class="s">"types"</b>: [<b class="s">"node"</b>],
+
+    <b class="c">// --- 2. quien emite es esbuild, no tsc ---</b>
+    <b class="c">//     (sustituye a declaration y declarationMap)</b>
+    <b class="s">"noEmit"</b>: true
+  },
+
+  <b class="c">// --- 3. y que solo mire src/ ---</b>
+  <b class="s">"include"</b>: [<b class="s">"src"</b>]
+}</code></pre>
+</div>
+<p class="small">La cuarta cosa es borrar <code>"jsx": "react-jsx"</code>, que sobra en un
+proyecto sin React.</p>
+
+<div class="callout trap">
+  <span class="callout-title">esbuild borra los tipos, no los comprueba</span>
+  <p><code>esbuild</code> es un transpilador, no un compilador de TypeScript. Tacha las
+  anotaciones de tipo y emite JavaScript en milisegundos — y por eso <strong>construye
+  igual de contento un fichero lleno de errores de tipo</strong>. Es la razón de que
+  <code>typecheck</code> sea un script aparte: <code>tsc --noEmit</code> comprueba,
+  <code>esbuild</code> empaqueta. Dos herramientas, dos trabajos.</p>
+  <p>Ese reparto es también lo que hace irrelevante que TypeScript 7 sea el compilador nativo
+  reescrito en Go: es entre 8 y 10 veces más rápido comprobando, pero <em>emitir</em> ya no era
+  suyo. Lo que sí te da es que <code>tsc --init</code> genere de fábrica un
+  <code>tsconfig</code> con <code>strict</code>, <code>verbatimModuleSyntax</code> e
+  <code>isolatedModules</code> activados.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Por qué <code>.mjs</code>, y por qué aquí no es opcional</span>
+  <p>El <code>tsc --init</code> de TypeScript 7 pone <code>module: "nodenext"</code> y
+  <code>verbatimModuleSyntax: true</code>. Con esa combinación, escribir <code>import</code> en
+  un paquete declarado como <code>"type": "commonjs"</code> <strong>es un error de
+  compilación</strong>. O escribes <code>import x = require(...)</code>, o el paquete es ESM. Y
+  como Lambda además <a href="https://docs.aws.amazon.com/lambda/latest/dg/nodejs-handler.html">recomienda
+  ES modules</a> por el <em>top-level await</em>, la elección se cae sola: <code>"type":
+  "module"</code> y <code>--format=esm</code>.</p>
+  <p><strong>Y ahora el detalle que rompe despliegues.</strong> Node decide si un
+  <code>.js</code> es CommonJS o ESM leyendo el <code>type</code> del <code>package.json</code>
+  más cercano. Pero el <code>.zip</code> que subes a Lambda contiene <strong>solo el contenido
+  de <code>dist/</code></strong>: ahí dentro no hay ningún <code>package.json</code>. Un
+  <code>dist/index.js</code> con <code>import</code> dentro se ejecutaría como CommonJS y
+  reventaría en la primera invocación con <em>«Cannot use import statement outside a
+  module»</em>.</p>
+  <p>La extensión <code>.mjs</code> no depende de ningún <code>package.json</code>: siempre es
+  ESM. Por eso el <code>outfile</code> es <code>dist/index.mjs</code>. El <code>handler</code>
+  de Lambda sigue siendo <code>index.handler</code> — AWS resuelve tanto
+  <code>index.js</code> como <code>index.mjs</code>.</p>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/app/src/index.ts</span><span class="tag">typescript</span></div>
+<pre><code>import { randomBytes } from <b class="s">"node:crypto"</b>;
+
+<b class="c">/** 5 bytes = 40 bits = 7 caracteres en base64url, sin relleno. */</b>
+const CODE_BYTES = 5;
+
+export interface CreateLinkEvent {
+  url?: string;
+}
+
+export interface CreateLinkResult {
+  code: string;
+  url: string;
+}
+
+function generateCode(): string {
+  return randomBytes(CODE_BYTES).toString(<b class="s">"base64url"</b>);
+}
+
+function parseTargetUrl(raw: string | undefined): URL {
+  if (typeof raw !== <b class="s">"string"</b> || raw.trim() === <b class="s">""</b>) {
+    throw new Error(<b class="s">"El evento no trae el campo 'url'"</b>);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(<b class="s">`'${raw}' no es una URL absoluta`</b>);
+  }
+
+  <b class="c">// Sin esto, un javascript: o un file: acabaría siendo un enlace</b>
+  <b class="c">// que tu dominio le sirve a un tercero. Es una decisión de</b>
+  <b class="c">// seguridad, no de validación.</b>
+  if (parsed.protocol !== <b class="s">"http:"</b> && parsed.protocol !== <b class="s">"https:"</b>) {
+    throw new Error(<b class="s">`Protocolo no admitido: '${parsed.protocol}'`</b>);
+  }
+
+  return parsed;
+}
+
+export const handler = async (event: CreateLinkEvent): Promise&lt;CreateLinkResult&gt; =&gt; {
+  const target = parseTargetUrl(event.url);
+  const code = generateCode();
+
+  <b class="c">// JSON en una línea: CloudWatch Logs Insights sabe consultarlo.</b>
+  console.log(JSON.stringify({ msg: <b class="s">"link creado"</b>, code, target: target.href }));
+
+  return { code, url: target.href };
+};</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Por qué 5 bytes y no «siete caracteres al azar»</span>
+  <p>La tentación es coger un alfabeto bonito —sin ceros ni oes, para que no se confundan al
+  dictarlo— y hacer <code>alfabeto[byte % alfabeto.length]</code>. Si ese alfabeto tiene 56
+  letras, el resultado está <strong>sesgado</strong>: 256 no es múltiplo de 56, así que las
+  primeras 32 letras salen un 25% más a menudo que el resto. Para un acortador da igual; para un
+  token de sesión es un agujero, y el hábito se pega.</p>
+  <p><code>base64url</code> tiene exactamente <strong>64</strong> símbolos, y 256 sí es múltiplo
+  de 64. Cada byte se convierte en caracteres sin sesgo, y 5 bytes dan 7 caracteres exactos sin
+  relleno. El espacio es 64⁷ ≈ <strong>4,4 billones</strong> de códigos.</p>
+  <p>Lo cual no significa que no haya colisiones: por la paradoja del cumpleaños, con unos
+  <strong>2,5 millones</strong> de enlaces ya tienes un 50% de probabilidad de que dos coincidan.
+  Generar al azar y rezar no es una estrategia. Mañana, con DynamoDB, la colisión se resuelve
+  donde se tiene que resolver: con una <em>escritura condicional</em> que falla si la clave ya
+  existe.</p>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde app/</span></div>
+<pre><code>pnpm install
+<b class="c"># ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: esbuild@0.28.2</b>
+<b class="c"># Esto NO es un fallo. Lee el aviso de abajo.</b></code></pre>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">pnpm acaba de negarse a ejecutar código de un tercero</span>
+  <p>Cuando instalas una dependencia, npm ejecuta sus scripts <code>postinstall</code> sin
+  preguntarte. Es código arbitrario de un paquete que no has leído, corriendo con tu usuario y
+  tu acceso a <code>~/.aws</code>. Es el vector de los ataques a la cadena de suministro de npm
+  de los últimos años.</p>
+  <p><strong>pnpm los bloquea por defecto</strong> y te obliga a aprobarlos uno a uno. esbuild
+  necesita el suyo de verdad —descarga el binario nativo de tu plataforma—, así que lo apruebas
+  <em>de forma declarativa</em>, en un fichero que se versiona y se revisa en un pull request:</p>
+
+  <div class="code">
+    <div class="code-label"><span>projects/01-serverless-api/app/pnpm-workspace.yaml</span><span class="tag">yaml</span></div>
+<pre><code>allowBuilds:
+  esbuild: true</code></pre>
+  </div>
+
+  <p>Si ejecutas <code>pnpm approve-builds</code>, la CLI escribe este mismo fichero por ti.
+  <strong>Ojo con el nombre de la clave</strong>: casi todo lo que encuentres por internet dirá
+  <code>onlyBuiltDependencies</code> dentro del <code>package.json</code>. En pnpm 11 la clave
+  es <code>allowBuilds</code> y vive en <code>pnpm-workspace.yaml</code>, incluso sin
+  workspaces. Es la misma clase de desfase que el <code>use_lockfile</code> frente a la tabla
+  de DynamoDB del backend S3.</p>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde app/</span></div>
+<pre><code>pnpm install       <b class="c"># ahora sí, sin avisos</b>
+pnpm run typecheck
+pnpm run build
+
+ls -la dist
+<b class="c"># index.mjs (~584 B) e index.mjs.map</b>
+
+<b class="c"># Pruébalo en local antes de subir nada a ninguna nube.</b>
+node --input-type=module -e <b class="s">"import {handler} from './dist/index.mjs'; console.log(await handler({url:'https://aws.amazon.com'}))"</b></code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Qué se versiona y qué no</span>
+  <p><strong>Sí van a git:</strong> <code>pnpm-lock.yaml</code> y
+  <code>pnpm-workspace.yaml</code>. El lockfile es el equivalente exacto de
+  <code>.terraform.lock.hcl</code>: fija las versiones resueltas para que tu portátil y CI
+  construyan lo mismo. Un build sin lockfile es un <code>apply</code> sin state.</p>
+  <p><strong>No van a git:</strong> <code>app/node_modules/</code>, <code>app/dist/</code> y
+  <code>build/</code>. Son artefactos; se reconstruyen con un comando.</p>
+  <p>Y una ventaja concreta de pnpm aquí: su <code>node_modules</code> es un árbol de enlaces
+  simbólicos a un almacén global, sin duplicar paquetes ni permitir importar lo que no
+  declaraste. Normalmente eso da guerra con herramientas que asumen el aplanado de npm — pero
+  <strong>a ti te da igual</strong>, porque lo que se despliega es el bundle de esbuild, un
+  único fichero autocontenido. <code>node_modules</code> nunca sale de tu máquina.</p>
+</div>
+</li>
+
+<li>
+<h3>El paquete, y el hash que hace que se despliegue</h3>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/main.tf (continúa)</span><span class="tag">hcl</span></div>
+<pre><code>data <b class="s">"archive_file"</b> <b class="s">"create_link"</b> {
+  type        = <b class="s">"zip"</b>
+  source_dir  = <b class="s">"${path.module}/app/dist"</b>
+  output_path = <b class="s">"${path.module}/build/create-link.zip"</b>
+}</code></pre>
+</div>
+
+<p><code>path.module</code> es el directorio donde vive este <code>.tf</code>. Sin él, las rutas
+serían relativas a donde ejecutaste <code>terraform</code>, que no tiene por qué ser el mismo
+sitio. Es la diferencia entre un módulo que funciona y uno que funciona <em>en tu portátil</em>.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Sin <code>source_code_hash</code>, tu código nuevo no llega nunca</span>
+  <p><code>filename</code> es <strong>una ruta</strong>: <code>build/create-link.zip</code>.
+  Cambias el TypeScript, reconstruyes, ejecutas <code>plan</code>... y Terraform dice
+  <em>«No changes»</em>, porque la ruta no ha cambiado. El código que corre en AWS sigue siendo
+  el de ayer y no hay ningún error que te avise.</p>
+  <p><code>source_code_hash</code> arregla justo eso: le das el SHA-256 del contenido del
+  <code>.zip</code>, y como el contenido sí cambia, el <code>plan</code> lo detecta. Es un
+  argumento que parece redundante y es obligatorio en la práctica.</p>
+</div>
+</li>
+
+<li>
+<h3>Una identidad que no es tuya</h3>
+
+<p>Aquí está el concepto nuevo del día. Tu Lambda va a escribir en CloudWatch Logs, y eso es
+una llamada a la API de AWS. Toda llamada a la API la hace <em>alguien</em>. ¿Quién?</p>
+
+<p>No tú: cuando la función se ejecute, tú no estarás delante. Necesita <strong>su propia
+identidad</strong>, y como no puedes darle unas claves —acabarían dentro del <code>.zip</code>,
+en tu repositorio público— lo que le das es un <strong>rol</strong>: una identidad sin
+credenciales que el servicio Lambda asume en el momento de ejecutar, recibiendo credenciales
+temporales de STS.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/main.tf (continúa)</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># --- La política de CONFIANZA: quién puede asumir este rol -------</b>
+<b class="c">#     No dice qué puede hacer. Dice quién puede ser.</b>
+data <b class="s">"aws_iam_policy_document"</b> <b class="s">"lambda_assume_role"</b> {
+  statement {
+    sid     = <b class="s">"LambdaServiceCanAssume"</b>
+    actions = [<b class="s">"sts:AssumeRole"</b>]
+
+    principals {
+      type        = <b class="s">"Service"</b>
+      identifiers = [<b class="s">"lambda.amazonaws.com"</b>]
+    }
+  }
+}
+
+resource <b class="s">"aws_iam_role"</b> <b class="s">"create_link"</b> {
+  name               = local.function_name
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Un servicio como <em>principal</em>: la pieza que faltaba</span>
+  <p>Hasta ahora los <em>principals</em> de tus políticas eran humanos o cuentas. Aquí el
+  principal es <code>lambda.amazonaws.com</code>: <strong>el servicio Lambda de AWS</strong>. Lo
+  que dice esa política de confianza, en español, es «AWS Lambda puede presentarse como este
+  rol».</p>
+  <p>Y esto responde a la pregunta que hiciste ayer sobre <code>sts:AssumeRole</code> sin que
+  haga falta una lección entera: <strong>asumir un rol es exactamente esto</strong>. Un principal
+  —una persona, un servicio, otra cuenta, un pipeline de GitHub— pide credenciales temporales
+  para actuar como el rol, y STS se las da si la política de confianza le nombra. Lo que cambia
+  entre casos es <em>quién</em> aparece en el bloque <code>principals</code>. Nada más.</p>
+  <p>Es también el <strong>nivel 2</strong> de la tabla de arranque privilegiado de la lección
+  04. En el proyecto 07 el principal será GitHub Actions vía OIDC, y la forma será esta misma.</p>
+</div>
+
+<p>La confianza dice quién puede ser el rol. Falta decir <strong>qué puede hacer</strong>, y
+para eso hace falta primero el sitio donde va a escribir.</p>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/main.tf (continúa)</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># --- El grupo de logs, declarado ANTES de que Lambda lo cree -----</b>
+resource <b class="s">"aws_cloudwatch_log_group"</b> <b class="s">"create_link"</b> {
+  name              = <b class="s">"/aws/lambda/${local.function_name}"</b>
+  retention_in_days = 7
+}
+
+<b class="c"># --- La política de IDENTIDAD: qué puede hacer una vez asumido ---</b>
+data <b class="s">"aws_iam_policy_document"</b> <b class="s">"create_link_logs"</b> {
+  statement {
+    sid     = <b class="s">"WriteOwnLogs"</b>
+    actions = [<b class="s">"logs:CreateLogStream"</b>, <b class="s">"logs:PutLogEvents"</b>]
+
+    <b class="c"># El :* del final NO sobra. Lee la trampa de abajo.</b>
+    resources = [<b class="s">"${aws_cloudwatch_log_group.create_link.arn}:*"</b>]
+  }
+}
+
+resource <b class="s">"aws_iam_role_policy"</b> <b class="s">"create_link_logs"</b> {
+  name   = <b class="s">"write-own-logs"</b>
+  role   = aws_iam_role.create_link.id
+  policy = data.aws_iam_policy_document.create_link_logs.json
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Otra vez el ARN del contenedor contra el del contenido</span>
+  <p>El ARN de un grupo de logs, tal y como lo devuelve la API de AWS, termina en
+  <code>:*</code> — el sufijo significa «todos los <em>streams</em> de dentro». <strong>El
+  provider de Terraform lo quita a propósito</strong>, y lo dice en su documentación: «cualquier
+  sufijo <code>:*</code> añadido por la API se elimina para mayor compatibilidad con otros
+  servicios de AWS que no lo aceptan».</p>
+  <p>Pero <code>logs:PutLogEvents</code> no actúa sobre el grupo: actúa sobre un stream de
+  dentro. Si escribes <code>resources = [aws_cloudwatch_log_group.create_link.arn]</code> a
+  secas, la política aplica sin quejarse, la Lambda se despliega, se invoca, devuelve la
+  respuesta correcta... y no escribe ni una línea. <strong>Es exactamente la misma forma del
+  error de ayer con el bucket y sus objetos</strong>, pero esta vez el síntoma es silencio en
+  vez de un <code>AccessDenied</code>.</p>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Fíjate en lo que NO le has dado: <code>logs:CreateLogGroup</code></span>
+  <p>La documentación de AWS dice que el rol de ejecución necesita tres permisos:
+  <code>CreateLogGroup</code>, <code>CreateLogStream</code> y <code>PutLogEvents</code>. Y la
+  política gestionada <code>AWSLambdaBasicExecutionRole</code> —la que adjunta todo el mundo—
+  concede los tres.</p>
+  <p>Tú solo has dado dos, y sobre <strong>un</strong> grupo concreto. Puedes permitírtelo
+  porque el grupo lo creas tú con Terraform: la función no necesita crear nada. Esa política
+  gestionada, en cambio, deja a tu función escribir en cualquier grupo de logs de la cuenta.
+  Esto es privilegio mínimo de verdad, y cabe en seis líneas.</p>
+</div>
+</li>
+
+<li>
+<h3>La función</h3>
+
+<div class="code">
+  <div class="code-label"><span>projects/01-serverless-api/main.tf (continúa)</span><span class="tag">hcl</span></div>
+<pre><code>resource <b class="s">"aws_lambda_function"</b> <b class="s">"create_link"</b> {
+  function_name = local.function_name
+  role          = aws_iam_role.create_link.arn
+
+  runtime       = <b class="s">"nodejs24.x"</b>
+  handler       = <b class="s">"index.handler"</b>   <b class="c"># fichero.export, sin extensión</b>
+  architectures = [<b class="s">"arm64"</b>]        <b class="c"># 20% más barato. No es el defecto.</b>
+
+  filename         = data.archive_file.create_link.output_path
+  source_code_hash = data.archive_file.create_link.output_base64sha256
+
+  memory_size = 128   <b class="c"># el mínimo</b>
+  timeout     = 5     <b class="c"># el defecto es 3 s; el máximo, 900</b>
+
+  <b class="c"># Terraform no ve ninguna relación entre la función y estas dos</b>
+  <b class="c"># cosas. Hay que decírselo a mano. Lee la trampa de abajo.</b>
+  depends_on = [
+    aws_cloudwatch_log_group.create_link,
+    aws_iam_role_policy.create_link_logs,
+  ]
+}
+
+output <b class="s">"function_name"</b> {
+  description = <b class="s">"Nombre de la funcion que crea enlaces"</b>
+  value       = aws_lambda_function.create_link.function_name
+  type        = string
+}
+
+output <b class="s">"log_group_name"</b> {
+  description = <b class="s">"Grupo de logs donde escribe la funcion"</b>
+  value       = aws_cloudwatch_log_group.create_link.name
+  type        = string
+}</code></pre>
+</div>
+
+<div class="callout tf">
+  <span class="callout-title">El único <code>depends_on</code> que se justifica: el que no se puede deducir</span>
+  <p>Terraform ordena los recursos solos siguiendo las <strong>referencias</strong>. La función
+  referencia <code>aws_iam_role.create_link.arn</code>, así que el rol va antes. Automático.</p>
+  <p>Pero la función <strong>no referencia el grupo de logs por ningún lado</strong>: la unión
+  entre ambos es que los nombres coinciden por convención de AWS
+  (<code>/aws/lambda/&lt;nombre&gt;</code>), y una convención no es un grafo. Si Terraform crea
+  la función primero y algo la invoca antes de que exista el grupo, Lambda lo crea ella misma
+  — y a partir de ahí hay dos dueños para el mismo recurso, con un
+  <code>ResourceAlreadyExistsException</code> esperándote en el siguiente <code>apply</code>.
+  Lo mismo con la política: una función sin permisos que ya se ha ejecutado es una invocación
+  sin logs.</p>
+  <p><strong>La regla:</strong> <code>depends_on</code> solo para dependencias reales que
+  ninguna referencia expresa. Si puedes sustituirlo por una referencia, la referencia es
+  siempre mejor — se documenta sola y no se queda obsoleta.</p>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">Y ese <code>local</code> del principio ahora tiene sentido</span>
+  <p>El grupo de logs necesita saber el nombre de la función para componer su propio nombre. Si
+  lo hubieras escrito como <code>"/aws/lambda/${aws_lambda_function.create_link.function_name}"</code>,
+  tendrías el grupo dependiendo de la función <em>y</em> la función dependiendo del grupo:
+  <strong>un ciclo</strong>, y Terraform se niega a aplicar.</p>
+  <p>El <code>local</code> lo rompe porque no es un recurso: es un valor conocido antes de hablar
+  con AWS. Los dos lo leen, ninguno depende del otro. Guárdate el patrón — reaparece cada vez
+  que dos recursos comparten un nombre.</p>
+</div>
+</li>
+
+<li>
+<h3>Aplica</h3>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">desde projects/01-serverless-api</span></div>
+<pre><code>terraform fmt
+terraform validate
+terraform plan
+
+<b class="c"># 4 recursos a crear: el rol, su política, el grupo de logs</b>
+<b class="c"># y la función. El data de archive_file ya está resuelto: si el</b>
+<b class="c"># plan se queja aquí, es que te falta ejecutar pnpm run build.</b>
+
+terraform apply</code></pre>
+</div>
+</li>
+
+<li>
+<h3>Invócala. Y luego rómpela a propósito</h3>
+
+<p>Un <code>apply</code> verde dice que los cuatro recursos existen. No dice que tu código
+funcione, ni que el rol tenga los permisos correctos. Eso lo dicen estos dos comandos.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">la prueba de verdad</span></div>
+<pre><code>FN=$(terraform output -raw function_name)
+
+<b class="c"># El caso bueno</b>
+aws lambda invoke \
+  --function-name "$FN" \
+  --cli-binary-format raw-in-base64-out \
+  --payload <b class="s">'{"url":"https://developer.hashicorp.com/terraform"}'</b> \
+  respuesta.json
+
+cat respuesta.json
+<b class="c"># {"code":"ZtNCVIM","url":"https://developer.hashicorp.com/terraform"}</b>
+
+<b class="c"># El caso malo: esto TIENE que fallar</b>
+aws lambda invoke \
+  --function-name "$FN" \
+  --cli-binary-format raw-in-base64-out \
+  --payload <b class="s">'{"url":"javascript:alert(1)"}'</b> \
+  error.json
+
+cat error.json
+<b class="c"># {"errorType":"Error","errorMessage":"Protocolo no admitido: 'javascript:'", ...}</b></code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Dos detalles del comando que no son evidentes</span>
+  <p><strong><code>--cli-binary-format raw-in-base64-out</code> es obligatorio</strong> en la
+  CLI v2. El <code>--payload</code> es un <em>blob</em> binario para la API, y la v2 espera los
+  blobs en base64 por defecto. Sin esa bandera, tu JSON se interpreta como base64 y falla con un
+  error que no menciona nada de esto. Se puede hacer permanente con
+  <code>aws configure set cli-binary-format raw-in-base64-out</code>.</p>
+  <p><strong>El segundo <code>invoke</code> devuelve <code>StatusCode: 200</code> aunque tu
+  función haya lanzado una excepción.</strong> El 200 significa «Lambda ejecutó tu función», no
+  «tu función salió bien». Lo que distingue un caso del otro es el campo
+  <code>FunctionError: "Unhandled"</code> en la salida del comando, y el contenido del fichero.
+  Confundir esos dos niveles es una fuente clásica de monitorización que no detecta nada.</p>
+</div>
+</li>
+
+<li>
+<h3>Lee los logs, que es donde vive la verdad</h3>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">la segunda prueba</span></div>
+<pre><code>aws logs tail "$(terraform output -raw log_group_name)" --since 10m
+
+<b class="c"># INIT_START Runtime Version: nodejs:24...</b>
+<b class="c"># START RequestId: ... Version: $LATEST</b>
+<b class="c"># {"msg":"link creado","code":"ZtNCVIM","target":"https://..."}</b>
+<b class="c"># END RequestId: ...</b>
+<b class="c"># REPORT RequestId: ... Duration: 12.34 ms  Billed Duration: 13 ms</b>
+<b class="c">#        Memory Size: 128 MB  Max Memory Used: 67 MB  Init Duration: 143.21 ms</b></code></pre>
+</div>
+
+<p>Esa línea <code>REPORT</code> es tu factura y tu perfilador en una sola línea. Léela entera:</p>
+
+<ul>
+  <li><b>Init Duration</b> — el cold start. Solo aparece cuando Lambda tuvo que crear un
+  entorno nuevo. Invoca dos veces seguidas y verás que en la segunda desaparece: el entorno se
+  reutilizó.</li>
+  <li><b>Billed Duration</b> — lo que pagas, redondeado al milisegundo hacia arriba.
+  <strong>El <em>init</em> de un cold start no se factura</strong> en las funciones normales.</li>
+  <li><b>Max Memory Used</b> — 67 MB de los 128 configurados. Es el dato con el que se ajusta la
+  memoria: si estuviera pegado al techo, la función estaría estrangulada y probablemente saldría
+  más barato subirla.</li>
+</ul>
+
+<p class="small">Si <code>aws logs tail</code> no devuelve nada, espera y repite: la
+documentación de AWS avisa de que los logs pueden tardar <strong>entre 5 y 10 minutos</strong>
+en aparecer. Si a los diez minutos sigue vacío pero el <code>invoke</code> devolvió la
+respuesta correcta, no es un retraso: revisa el <code>:*</code> del ARN.</p>
+
+<ul class="checklist" data-key="l05-verify">
+  <li>El <code>invoke</code> bueno devuelve un código de 7 caracteres.</li>
+  <li>El <code>invoke</code> malo devuelve <code>FunctionError: "Unhandled"</code>.</li>
+  <li><code>aws logs tail</code> muestra tu línea JSON de <code>link creado</code>.</li>
+  <li>La segunda invocación seguida ya no tiene <code>Init Duration</code>.</li>
+  <li><code>aws logs describe-log-groups --log-group-name-prefix /aws/lambda/url-shortener</code>
+  devuelve <code>retentionInDays: 7</code>, no un grupo sin retención.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que sabes empaquetar y desplegar código propio con Terraform, sabiendo <strong>dónde
+    acaba Terraform y empieza tu build</strong>.</li>
+    <li>Que una identidad de servicio es un rol con una política de confianza, y que
+    <code>sts:AssumeRole</code> es el mecanismo, no un truco de Lambda.</li>
+    <li>Que puedes escribir privilegio mínimo real —dos acciones sobre un ARN— en vez de
+    adjuntar la política gestionada que usa todo el mundo.</li>
+    <li>Que sabes verificar una Lambda por los dos lados: la respuesta y los logs.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>No has probado el comportamiento bajo concurrencia.</strong> Todo lo de hoy
+    fueron invocaciones de una en una. Los problemas de Lambda aparecen cuando hay cien a la vez.</li>
+    <li><strong>No has probado que el código nuevo se despliegue.</strong> El
+    <code>source_code_hash</code> está ahí por fe. Cámbiale el texto de un
+    <code>console.log</code>, reconstruye y aplica: si el <code>plan</code> ve el cambio, ya lo
+    has probado. Si dice «No changes», te falta el <code>build</code>.</li>
+    <li><strong>Nada de esto es accesible desde internet.</strong> Solo se invoca con
+    credenciales de AWS. Eso es una propiedad de hoy, no una carencia — la puerta pública llega
+    en la lección 07, y llega con autorización.</li>
+    <li><strong>No hay tests.</strong> Probaste el caso bueno y uno malo a mano. Cuando lleguemos
+    al proyecto 07 y a CI, esto tiene que ser un fichero de tests, no un comando que recuerdas.</li>
+  </ul>
+</div>
+
+<h2>Coste, y qué queda encendido</h2>
+
+<p><strong>Hoy no destruyes nada, y es deliberado.</strong> Lo digo explícitamente porque la
+regla del curso es la contraria: cada lección termina con un <code>destroy</code> verificado.
+Aquí se rompe la regla porque el proyecto 01 se construye en tres sesiones y todo lo que has
+desplegado cuesta <strong>exactamente cero mientras no se invoque</strong>: una función Lambda
+en reposo no factura, un rol de IAM no factura nunca, y un grupo de logs con unos kilobytes está
+muy por debajo de los 5 GB gratuitos.</p>
+
+<p>Lo único que crecería sería el almacenamiento de logs, y por eso lleva
+<code>retention_in_days = 7</code>. Si aun así prefieres dejar la cuenta a cero cada noche, el
+<code>destroy</code> de este proyecto es limpio y no toca nada del proyecto 00:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">opcional</span></div>
+<pre><code>terraform destroy   <b class="c"># y mañana: pnpm run build && terraform apply</b></code></pre>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Cambias el TypeScript, ejecutas <code>pnpm run build</code>, y
+  <code>terraform plan</code> dice «No changes». ¿Qué falta en tu <code>aws_lambda_function</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="filename es una ruta, y una ruta no cambia aunque cambie el contenido del fichero. source_code_hash le da a Terraform el SHA-256 del zip, que sí cambia, y por eso detecta el despliegue pendiente.">El argumento <code>source_code_hash</code></button></li>
+    <li><button data-correct="false" data-why="depends_on ordena la creación de recursos entre sí; no tiene nada que ver con detectar que el contenido de un fichero local ha cambiado. Terraform aplicaría en el mismo orden y seguiría sin ver diferencias.">El argumento <code>depends_on</code> completo</button></li>
+    <li><button data-correct="false" data-why="El source_dir del archive_file apunta a dist, que es justo lo que acabas de reconstruir. Si estuviera mal, el plan fallaría por directorio inexistente en vez de decir que no hay cambios.">El argumento <code>source_dir</code> correcto</button></li>
+    <li><button data-correct="false" data-why="publish crea una versión inmutable numerada de la función, algo útil para despliegues canarios. No influye en si Terraform detecta o no que el paquete local es distinto.">El argumento <code>publish</code> a cierto</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Tu compañero adjunta <code>AWSLambdaBasicExecutionRole</code> al rol de su
+  Lambda y dice que es lo estándar. ¿Qué le concede de más frente a tu política?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="La política gestionada concede CreateLogGroup, CreateLogStream y PutLogEvents sobre cualquier recurso de logs de la cuenta. La tuya da dos acciones sobre un único ARN, porque el grupo ya lo creas tú con Terraform.">Escribir en cualquier grupo de logs</button></li>
+    <li><button data-correct="false" data-why="Ninguna política de ejecución de Lambda concede permisos sobre S3. Si su función necesitara tocar un bucket, tendría que añadir esas acciones explícitamente, igual que tú.">Escribir objetos en cualquier bucket</button></li>
+    <li><button data-correct="false" data-why="Ni la política gestionada ni la tuya conceden nada de IAM. Un rol de ejecución que pudiera crear roles sería una escalada de privilegios evidente y AWS no la reparte por defecto.">Crear roles nuevos en la cuenta</button></li>
+    <li><button data-correct="false" data-why="Invocar otras funciones requiere lambda:InvokeFunction, que no está en esa política gestionada. Encadenar Lambdas exige concederlo a mano y casi siempre indica que falta una máquina de estados.">Invocar cualquier función de Lambda</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Quitas el <code>depends_on</code>, aplicas en una cuenta limpia, y algo
+  invoca la función en el mismo segundo en que se crea. ¿Qué es lo peor que puede pasar?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Lambda crea el grupo de logs por su cuenta si no existe. Ese grupo no está en el state, así que el siguiente apply intentará crearlo y chocará con un ResourceAlreadyExistsException sobre un recurso que Terraform no controla.">Lambda crea el grupo y aparecen dos dueños</button></li>
+    <li><button data-correct="false" data-why="El apply no falla: sin referencias entre ambos, Terraform considera que puede crearlos en cualquier orden y los dos se crean correctamente. El problema aparece después, no durante.">Terraform detecta un ciclo y no aplica</button></li>
+    <li><button data-correct="false" data-why="La función se despliega perfectamente: el paquete, el handler y el runtime no dependen del grupo de logs para nada. Lo que se pierde es el rastro de esa primera invocación, no la función.">La función no llega a desplegarse nunca</button></li>
+    <li><button data-correct="false" data-why="La retención solo se aplica al grupo que declara Terraform. El que crea Lambda por su cuenta nace sin retención, es decir, guardando logs para siempre — que es otra parte del mismo problema.">El grupo hereda los siete días igual</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="source">
+  <span class="callout-title">Lectura recomendada</span>
+  <p><a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html">
+  <strong>Understanding the Lambda execution environment lifecycle</strong></a> — AWS, unos 10
+  minutos. Las tres fases (<em>Init</em>, <em>Invoke</em>, <em>Shutdown</em>) y qué sobrevive
+  entre invocaciones. Es el documento que convierte «a veces mi Lambda va lenta» en algo que
+  puedes razonar, y del que salen todas las buenas prácticas de rendimiento serverless.</p>
+  <p>Después, cuando tengas veinte minutos sueltos,
+  <a href="https://docs.aws.amazon.com/lambda/latest/dg/nodejs-handler.html">Define Lambda
+  function handler in Node.js</a> — en particular la sección <em>Using global state</em>, que
+  explica con más cuidado por qué inicializar un cliente del SDK fuera del handler es una
+  optimización enorme y guardar datos de usuario ahí es una fuga de información.</p>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 06 — la memoria.</strong> DynamoDB entra en escena, y con ella la primera
+  decisión de diseño de datos del curso: cuál es la clave de partición de una tabla de enlaces y
+  por qué no puede ser lo que parece. Ahí resolvemos de verdad el problema de las colisiones que
+  hoy hemos dejado abierto, con una <em>escritura condicional</em>, y la política del rol de
+  ejecución crece con dos acciones más — otra vez sobre un ARN concreto, no sobre
+  <code>"*"</code>.</p>
+  <p class="small">Dos cosas que anoté y siguen pendientes: el <strong>post-mortem del
+  state</strong> que te prometí en la lección 03 —partiendo de tu propio desastre real de la
+  noche de la migración— y el <strong>MFA del usuario <code>terraform</code></strong>, que no se
+  puede crear desde Terraform porque hay que escanear un QR. Ninguna de las dos bloquea el
+  proyecto 01: dime cuándo quieres meterlas.</p>
+  <div class="nav-links">
+    <a href="./0004-deja-de-ser-root.html">← Lección 04</a>
+    <a href="../reference/aws-lambda.html">Referencia: Lambda</a>
+    <a href="../reference/aws-iam.html">Referencia: IAM</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Cuatro cosas: el <code>plan</code> del proyecto 01 antes de
+    aplicar, el <code>cat respuesta.json</code> del caso bueno, la salida completa del
+    <code>invoke</code> que falla —quiero ver el <code>FunctionError</code> junto al
+    <code>StatusCode: 200</code>— y la línea <code>REPORT</code> de tus logs con tu
+    <code>Max Memory Used</code> real. Si algo te ha dado <code>AccessDenied</code>, pégalo
+    entero: el mensaje dice qué acción y sobre qué ARN, y eso lo resolvemos en dos minutos.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

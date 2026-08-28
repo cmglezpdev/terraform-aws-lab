@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · AWS Lambda</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>AWS Lambda</h1>
+  <p class="deck">Ejecuta una función tuya cuando llega un evento, y te cobra por
+  milisegundo de ejecución. No hay servidor que arrancar, ni que parchear, ni que apagar —
+  y esa última parte es lo que lo hace barato: <strong>en reposo no cobra nada</strong>.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Cómputo sin servidor</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><strong>Sí.</strong> Cero peticiones = cero factura. La excepción es la <em>concurrencia aprovisionada</em>, que sí cobra por hora.</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_lambda_function</code></dd></div>
+    <div><dt>Aparece en</dt><dd>proyectos 01, 02, 03</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+
+<p>Un servicio que guarda un <strong>paquete de código</strong> y una <strong>configuración</strong>
+(runtime, handler, memoria, timeout, rol) y, cada vez que alguien lo invoca, busca un entorno
+de ejecución donde correrlo. Si no hay ninguno libre, crea uno: descomprime tu paquete,
+arranca el runtime, ejecuta el código de inicialización y <em>entonces</em> llama a tu handler.
+Eso es el <em>cold start</em>. Si ya hay uno libre de una invocación anterior, se lo salta todo
+y llama al handler directamente.</p>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Lambda es un <strong>taxi</strong>, no un coche de empresa. No pagas por tenerlo aparcado;
+  pagas la carrera, redondeada al milisegundo. Cuando nadie viaja, no hay factura.</p>
+  <p><strong>Y dónde se rompe:</strong> el taxi tarda en llegar. Ese retraso —el cold start—
+  no existe en un servidor que ya está encendido. Además el taxi te echa a los 15 minutos,
+  no puede guardar nada tuyo entre carreras, y si pides cien taxis a la vez puede que la
+  central te diga que no hay.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+
+<div class="ref-grid">
+  <div class="ref-card">
+    <h3>El backend de una API con tráfico irregular</h3>
+    <p>Una API que recibe 40 peticiones por la mañana y 3 por la noche. En EC2 pagas las 24 h
+    por la capacidad del pico. En Lambda pagas 43 invocaciones.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Reaccionar a algo que pasó en otro servicio</h3>
+    <p>Alguien sube un CSV a S3 y hay que procesarlo. S3 emite el evento, Lambda lo recoge.
+    No hay proceso vigilando el bucket, porque no hace falta que lo haya. Es el proyecto 02.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Pegamento entre servicios AWS</h3>
+    <p>Transformar el mensaje que sale de una cola antes de meterlo en una base de datos,
+    o enriquecer un evento antes de reenviarlo. Trabajo corto, sin estado, disparado por otro.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Tareas programadas sin una máquina encendida</h3>
+    <p>Un informe diario a las 6:00. Un <code>cron</code> necesita un servidor vivo las otras
+    23 h 59 min. EventBridge Scheduler más Lambda no necesita ninguno.</p>
+  </div>
+  <div class="ref-card">
+    <h3>Automatizar la propia cuenta AWS</h3>
+    <p>Etiquetar recursos huérfanos, apagar entornos de <code>dev</code> por la noche, responder
+    a un hallazgo de seguridad. Operaciones puntuales, disparadas por eventos de la cuenta.</p>
+  </div>
+</div>
+
+<h2>Los tipos que existen</h2>
+
+<p>«Lambda» no es una sola cosa. Hay cuatro ejes de decisión, y cada uno cambia el coste, la
+latencia o lo que puedes desplegar. Confundirlos es de donde salen la mayoría de los sustos.</p>
+
+<h3>1. Cómo empaquetas el código</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué lo distingue</th><th>Cuándo</th><th>Límite de tamaño</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>Zip</code></td>
+      <td>Un <code>.zip</code> con tu código. Lambda pone el runtime.</td>
+      <td><strong>Por defecto.</strong> Node, Python, Java, Go.</td>
+      <td>50 MB comprimido por la API · 250 MB descomprimido</td>
+    </tr>
+    <tr>
+      <td><code>Image</code></td>
+      <td>Una imagen de contenedor en ECR. Tú pones el runtime.</td>
+      <td>Dependencias nativas pesadas, o reutilizar tu build de Docker.</td>
+      <td>10 GB sin comprimir</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>2. Sobre qué CPU corre</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Arquitectura</th><th>Qué lo distingue</th><th>Cuándo</th><th>Precio por GB-segundo</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>arm64</code></td>
+      <td>Graviton. <strong>Exactamente un 20% más barato</strong> por GB-segundo.</td>
+      <td>Siempre que tu código sea puro JS, Python o Java.</td>
+      <td><code>0,0000133334 USD</code></td>
+    </tr>
+    <tr>
+      <td><code>x86_64</code></td>
+      <td>El valor por defecto del provider.</td>
+      <td>Solo si arrastras un binario nativo compilado para x86.</td>
+      <td><code>0,0000166667 USD</code></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>3. Cómo la invocan</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Modelo</th><th>Qué lo distingue</th><th>Quién lo usa</th><th>Qué pasa si falla</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Síncrono</strong><br><code>RequestResponse</code></td>
+      <td>Quien llama espera la respuesta.</td>
+      <td>API Gateway, Function URL, <code>aws lambda invoke</code>.</td>
+      <td><strong>Nada.</strong> El error viaja al que llamó; Lambda no reintenta.</td>
+    </tr>
+    <tr>
+      <td><strong>Asíncrono</strong><br><code>Event</code></td>
+      <td>Lambda encola el evento y responde <code>202</code> al instante.</td>
+      <td>S3, SNS, EventBridge.</td>
+      <td>Lambda <strong>reintenta dos veces</strong>. Si se agotan, el evento se pierde salvo que haya destino de fallo o DLQ.</td>
+    </tr>
+    <tr>
+      <td><strong>Event source mapping</strong></td>
+      <td>Lambda <em>hace polling</em> del origen y te entrega lotes.</td>
+      <td>SQS, Kinesis, DynamoDB Streams.</td>
+      <td>Lo decide el origen: visibility timeout y redrive policy de la cola.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>4. Cuánta concurrencia le reservas</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Modo</th><th>Qué lo distingue</th><th>Cuándo</th><th>Coste en reposo</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Bajo demanda</strong></td>
+      <td>Comparte el pozo de 1.000 de la cuenta.</td>
+      <td>Por defecto. Todo el curso.</td>
+      <td><span class="tag-cost free">0,00 USD</span></td>
+    </tr>
+    <tr>
+      <td><strong>Reservada</strong></td>
+      <td>Aparta un trozo del pozo para esta función. También es un <em>techo</em>.</td>
+      <td>Para que una función no se coma la cuota de las demás. A <code>0</code> la apaga.</td>
+      <td><span class="tag-cost free">0,00 USD</span></td>
+    </tr>
+    <tr>
+      <td><strong>Aprovisionada</strong></td>
+      <td>Mantiene entornos ya inicializados. Mata el cold start.</td>
+      <td>APIs con requisitos duros de latencia p99.</td>
+      <td><span class="tag-cost hour">por hora</span> ≈ <code>0,0019 USD/h</code> a 128 MB</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Zip + arm64 + bajo demanda</strong> hasta que tengas una razón medida para
+  cambiarlo. Los otros tres modos existen para resolver problemas que tú todavía no tienes,
+  y dos de ellos cuestan dinero mientras no pasa nada.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<p>El modelo mental mínimo son cuatro hechos. Casi todos los errores raros de Lambda salen de
+olvidar uno de ellos.</p>
+
+<p><strong>1. El entorno de ejecución se reutiliza, pero no puedes contar con ello.</strong>
+Lo que declares <em>fuera</em> del handler (un cliente del SDK, una conexión) sobrevive entre
+invocaciones que caigan en el mismo entorno. Eso es una optimización enorme —inicializar un
+cliente del SDK cuesta más que la invocación entera— y a la vez una trampa: si guardas datos
+de un usuario en una variable global, <strong>la siguiente invocación puede verlos</strong>.
+Reutiliza conexiones; nunca reutilices estado.</p>
+
+<p><strong>2. Un entorno atiende una invocación cada vez.</strong> No hay concurrencia dentro
+de una Lambda. Diez peticiones simultáneas son diez entornos, y por tanto diez inicializaciones
+si no había ninguno caliente. Escala hasta 1.000 entornos nuevos cada 10 segundos por función.</p>
+
+<p><strong>3. La memoria es el mando de la CPU.</strong> Lambda asigna potencia de CPU
+proporcional a la memoria configurada; a <strong>1.769 MB una función tiene el equivalente a
+una vCPU</strong>. Subir la memoria a veces <em>abarata</em> la función: si duplicando la memoria
+tarda menos de la mitad, el GB-segundo total baja. No es intuitivo y hay que medirlo.</p>
+
+<p><strong>4. El disco es mentira.</strong> Tienes <code>/tmp</code>, entre 512 MB y 10.240 MB,
+y desaparece con el entorno. Todo lo que tenga que durar más que una invocación vive en otro
+sitio: S3, DynamoDB, RDS.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Los logs no son «de Lambda»</span>
+  <p>Lambda no guarda logs. Los <em>escribe</em> en CloudWatch Logs, en un grupo llamado
+  <code>/aws/lambda/&lt;nombre-función&gt;</code>, <strong>y solo si el rol de ejecución tiene
+  permiso</strong>. Una función sin <code>logs:PutLogEvents</code> funciona perfectamente y es
+  completamente muda: no verás ni un error. Es la causa número uno de «mi Lambda no hace nada
+  y no sé por qué».</p>
+  <p>Ese grupo lo crea Lambda solo la primera vez, y entonces <strong>no pertenece a
+  Terraform</strong>: sobrevive a tu <code>destroy</code> y sigue acumulando coste de
+  almacenamiento. Decláralo tú.</p>
+</div>
+
+<h2>Cuánto cuesta</h2>
+
+<p>Dos conceptos, y los dos son cero si nadie invoca la función: <strong>peticiones</strong> y
+<strong>duración</strong>. La duración se mide en GB-segundo — memoria configurada multiplicada
+por milisegundos ejecutados— y se redondea al milisegundo.</p>
+
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Función desplegada, sin invocar</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Peticiones (arm64 y x86, mismo precio)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,20 USD</code> por millón</td></tr>
+    <tr><td>Duración <code>arm64</code>, primeros 7.500 M GB-s/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0000133334 USD</code> / GB-s</td></tr>
+    <tr><td>Duración <code>x86_64</code>, primeros 6.000 M GB-s/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0000166667 USD</code> / GB-s</td></tr>
+    <tr><td>Capa gratuita mensual</td><td><span class="tag-cost free">gratis</span></td><td>1 M peticiones + 400.000 GB-s</td></tr>
+    <tr><td>Concurrencia aprovisionada <code>arm64</code></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,0000033334 USD</code> / GB-s aunque no se invoque</td></tr>
+    <tr><td>Logs: ingesta en CloudWatch, clase Standard</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD</code> / GB</td></tr>
+    <tr><td>Logs: almacenamiento</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,03 USD</code> / GB-mes</td></tr>
+    <tr><td>Logs: capa gratuita mensual</td><td><span class="tag-cost free">gratis</span></td><td>5 GB entre ingesta, archivo y consultas</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="cost-stamp">Precios de <strong>us-east-1</strong>, verificados el <strong>2026-08-24</strong>
+contra la Price List API pública —
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/us-east-1/index.json"><code>AWSLambda</code></a>
+y <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/current/us-east-1/index.json"><code>AmazonCloudWatch</code></a>—
+y contra <a href="https://aws.amazon.com/lambda/pricing/">AWS Lambda Pricing</a> para la capa
+gratuita. Cámbialos si han pasado meses.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p><strong>Los logs cuestan más que el cómputo.</strong> Es lo normal, no la excepción. Una
+  función que hace <code>console.log</code> de un evento entero de API Gateway escribe unos
+  4 KB por invocación: a un millón de invocaciones son 4 GB, o sea <strong>2 USD de logs frente
+  a 0,20 USD de peticiones</strong>. Pon <code>retention_in_days</code> siempre; el valor por
+  defecto es «para siempre».</p>
+  <p><strong>El timeout es tu único freno.</strong> Si una función se cuelga esperando a algo
+  que nunca responde, pagas hasta los 900 segundos. Con un bucle de reintentos detrás, eso se
+  multiplica. Pon el timeout en lo que <em>debería</em> tardar más un margen, no en el máximo.</p>
+  <p><strong>La concurrencia aprovisionada se olvida encendida.</strong> Es el único parámetro
+  de Lambda que factura sin tráfico: a 128 MB son unos <code>0,0019 USD/h</code>, ~1,37 USD al
+  mes por función. Ridículo con una; no tanto con cuarenta y un entorno de <code>dev</code>.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Duración de una invocación</td><td><code>900 s</code> (15 min)</td><td><strong>No</strong></td></tr>
+    <tr><td>Memoria</td><td><code>128 MB</code> – <code>10.240 MB</code>, de 1 en 1 MB</td><td>No (1.769 MB = 1 vCPU)</td></tr>
+    <tr><td>Paquete <code>.zip</code> subido por la API</td><td><code>50 MB</code> comprimido</td><td>No — usa S3 para más</td></tr>
+    <tr><td>Paquete descomprimido, con capas incluidas</td><td><code>250 MB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Payload síncrono, petición y respuesta</td><td><code>6 MB</code> cada uno</td><td><strong>No</strong></td></tr>
+    <tr><td>Payload asíncrono</td><td><code>1 MB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Variables de entorno, todas juntas</td><td><code>4 KB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Capas por función</td><td><code>5</code></td><td><strong>No</strong></td></tr>
+    <tr><td><code>/tmp</code></td><td><code>512 MB</code> – <code>10.240 MB</code></td><td>Se configura por función</td></tr>
+    <tr><td>Ejecuciones concurrentes por cuenta y región</td><td><code>1.000</code></td><td>Sí, hasta decenas de miles</td></tr>
+    <tr><td>Velocidad de escalado por función</td><td><code>1.000</code> entornos cada 10 s</td><td>No</td></tr>
+    <tr><td>Almacenamiento total de paquetes <code>.zip</code></td><td><code>300 GB</code> descomprimido</td><td>No — usa código autogestionado en S3</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Tu cuenta empieza con menos de 1.000</span>
+  <p>La documentación avisa de que <em>«las cuentas nuevas de AWS tienen cuotas reducidas de
+  concurrencia y memoria»</em>, y que AWS las sube sola según el uso. Si haces una prueba de
+  carga y te salen <code>TooManyRequestsException</code> mucho antes de 1.000, no es un bug:
+  mira tu cuota real en la consola de Service Quotas antes de abrir un ticket.</p>
+</div>
+
+<h3>Runtimes de Node.js</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Nombre</th><th>Identificador</th><th>Fin de soporte previsto</th><th>Estado</th></tr></thead>
+  <tbody>
+    <tr><td>Node.js 26</td><td><code>nodejs26.x</code></td><td>Sin fecha</td><td><strong>Vista previa pública</strong> — no para producción</td></tr>
+    <tr><td>Node.js 24</td><td><code>nodejs24.x</code></td><td>30 abr 2028</td><td>El que usa este curso</td></tr>
+    <tr><td>Node.js 22</td><td><code>nodejs22.x</code></td><td>30 abr 2027</td><td>Soportado</td></tr>
+    <tr><td>Node.js 20</td><td><code>nodejs20.x</code></td><td>Deprecado el 30 abr 2026</td><td>Ya no se crean funciones nuevas desde 1 feb 2027</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="small">Lambda solo publica un runtime cuando la versión del lenguaje entra en
+<strong>LTS activo</strong>, y avisa por correo con al menos 180 días de antelación antes de
+deprecar uno. Fuente:
+<a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html">Lambda runtimes</a>,
+consultado el 2026-08-24. <strong>SnapStart no está disponible para Node.js</strong> — solo
+Java 11+, Python 3.12+ y .NET 8+.</p>
+
+<h2>Cuándo NO usarlo</h2>
+
+<div class="verdict">
+  <div class="yes">
+    <h3>Úsalo si</h3>
+    <ul>
+      <li>El trabajo dura menos de 15 minutos y cabe en memoria.</li>
+      <li>El tráfico es irregular, o hay largos ratos sin nada.</li>
+      <li>No necesitas guardar estado entre ejecuciones.</li>
+      <li>Reaccionas a un evento de otro servicio AWS.</li>
+      <li>Quieres pagar cero cuando no pasa nada.</li>
+    </ul>
+  </div>
+  <div class="no">
+    <h3>No lo uses si</h3>
+    <ul>
+      <li>El proceso dura horas, o es un demonio que no termina.</li>
+      <li>El tráfico es alto y constante — ahí EC2 o Fargate salen más baratos.</li>
+      <li>Necesitas latencia p99 predecible sin pagar concurrencia aprovisionada.</li>
+      <li>Mantienes conexiones largas: WebSockets, pools contra una base de datos.</li>
+      <li>Arrastras binarios o modelos que no caben en 250 MB.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>AWS Fargate</strong> (ECS)</td>
+      <td>Fargate corre contenedores que <em>siguen vivos</em> y cobra por vCPU y GB mientras existan. Lambda muere al terminar.</td>
+      <td>El proceso es largo, constante, o mantiene conexiones abiertas.</td>
+    </tr>
+    <tr>
+      <td><strong>Amazon EC2</strong></td>
+      <td>EC2 te da la máquina entera y la responsabilidad entera: parches, escalado, disponibilidad.</td>
+      <td>Necesitas control del sistema operativo, o el uso es tan constante que la instancia reservada gana.</td>
+    </tr>
+    <tr>
+      <td><strong>AWS Step Functions</strong></td>
+      <td>Step Functions <em>orquesta</em>: espera, reintenta, ramifica, mantiene el estado del flujo. Lambda solo ejecuta un paso.</td>
+      <td>Encadenas varios pasos con esperas o reintentos. Encadenar Lambdas a mano es una máquina de estados mal hecha.</td>
+    </tr>
+    <tr>
+      <td><strong>Amazon SQS</strong></td>
+      <td>SQS <em>guarda</em> mensajes; Lambda los <em>procesa</em>. No compiten, se combinan.</td>
+      <td>Nunca es «uno u otro»: SQS delante de Lambda es el patrón del proyecto 02.</td>
+    </tr>
+    <tr>
+      <td><strong>Lambda@Edge / CloudFront Functions</strong></td>
+      <td>Corren en el borde, tienen otros límites mucho más duros y otro precio.</td>
+      <td>Manipulas cabeceras o rediriges en el CDN. Proyecto 05.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+
+<p>Una Lambda que funcione son <strong>cuatro recursos</strong>, no uno. Escribir solo
+<code>aws_lambda_function</code> es el error clásico: despliega, se invoca, y es muda.</p>
+
+<div class="code">
+  <div class="code-label"><span>lo mínimo que funciona de verdad</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># 1. El paquete. Terraform NO compila tu código: solo comprime lo ya construido.</b>
+data "archive_file" "app" {
+  type        = "zip"
+  source_dir  = "${path.module}/app/dist"
+  output_path = "${path.module}/build/app.zip"
+}
+
+<b class="c"># 2. El grupo de logs, declarado ANTES de que Lambda lo cree por su cuenta.</b>
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/aws/lambda/mi-funcion"
+  retention_in_days = 7
+}
+
+<b class="c"># 3. El rol de ejecución: política de CONFIANZA (quién puede asumirlo)</b>
+<b class="c">#    más política de IDENTIDAD (qué puede hacer una vez asumido).</b>
+data "aws_iam_policy_document" "assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "app" {
+  name               = "mi-funcion"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
+}
+
+data "aws_iam_policy_document" "logs" {
+  statement {
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    <b class="c"># El :* del final NO es decorativo. Ver la trampa de abajo.</b>
+    resources = ["${aws_cloudwatch_log_group.app.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "logs" {
+  name   = "write-own-logs"
+  role   = aws_iam_role.app.id
+  policy = data.aws_iam_policy_document.logs.json
+}
+
+<b class="c"># 4. Y la función.</b>
+resource "aws_lambda_function" "app" {
+  function_name = "mi-funcion"
+  role          = aws_iam_role.app.arn
+
+  runtime       = "nodejs24.x"
+  handler       = "index.handler"
+  architectures = ["arm64"]
+
+  filename         = data.archive_file.app.output_path
+  source_code_hash = data.archive_file.app.output_base64sha256
+
+  memory_size = 128
+  timeout     = 5
+
+  depends_on = [
+    aws_cloudwatch_log_group.app,
+    aws_iam_role_policy.logs,
+  ]
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Cuatro trampas del provider</span>
+  <p><strong>1. <code>aws_cloudwatch_log_group.arn</code> viene sin el <code>:*</code>.</strong>
+  La API de AWS devuelve el ARN con un sufijo <code>:*</code> que significa «todos los streams
+  de dentro», y el provider <em>lo quita a propósito</em> por compatibilidad con otros
+  servicios. Pero <code>logs:PutLogEvents</code> actúa sobre los streams, no sobre el grupo. Si
+  escribes <code>resources = [aws_cloudwatch_log_group.app.arn]</code> sin el sufijo, la política
+  aplica y la función es muda.</p>
+
+  <p><strong>2. Sin <code>source_code_hash</code>, cambiar el código no despliega nada.</strong>
+  Terraform compara el valor de <code>filename</code>, que es una ruta y no cambia nunca. El
+  <code>plan</code> te dirá «No changes» con el código nuevo en el disco.</p>
+
+  <p><strong>3. Sin <code>depends_on</code> del grupo de logs, hay carrera.</strong> Terraform
+  no ve ninguna dependencia entre la función y su grupo de logs: los nombres coinciden por
+  convención, no por referencia. Si la función arranca y se invoca antes de que exista el
+  grupo, Lambda lo crea ella —y a partir de ahí hay dos dueños para el mismo recurso.</p>
+
+  <p><strong>4. El <code>data "archive_file"</code> se resuelve en el <code>plan</code>.</strong>
+  Si <code>app/dist</code> no existe todavía, el <code>plan</code> falla antes de empezar. El
+  build va siempre antes que Terraform, nunca dentro.</p>
+</div>
+
+<h2>Por qué son cuatro recursos y no uno</h2>
+
+<p>Si has creado Lambdas por la consola, esto parece complicado de más. No lo es:
+<strong>en la consola existían los cuatro igual</strong>. Lo que cambia es que ahora los ves.
+Este es el grafo entero.</p>
+
+<figure>
+<svg viewBox="0 0 660 400" width="660" role="img" aria-labelledby="graph-title" style="max-width:100%;height:auto;font-family: ui-sans-serif, system-ui, sans-serif;">
+  <title id="graph-title">Grafo de dependencias de una Lambda: la función referencia el zip y el rol; la política referencia el rol y el grupo de logs; y de la función al grupo de logs no hay ninguna referencia, solo un depends_on manual</title>
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-soft)"/>
+    </marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--danger)"/>
+    </marker>
+  </defs>
+
+  <!-- la función -->
+  <rect x="235" y="16" width="200" height="62" rx="6" fill="var(--aws-bg)" stroke="var(--aws)" stroke-width="1.5"/>
+  <text x="335" y="42" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">aws_lambda_function</text>
+  <text x="335" y="61" text-anchor="middle" font-size="11" fill="var(--ink-soft)">el código y su configuración</text>
+
+  <!-- el zip -->
+  <rect x="15" y="140" width="180" height="58" rx="6" fill="var(--tf-bg)" stroke="var(--tf)" stroke-width="1.5"/>
+  <text x="105" y="164" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">data.archive_file</text>
+  <text x="105" y="182" text-anchor="middle" font-size="11" fill="var(--ink-soft)">el .zip · no toca AWS</text>
+
+  <!-- el rol -->
+  <rect x="465" y="140" width="180" height="58" rx="6" fill="var(--aws-bg)" stroke="var(--aws)" stroke-width="1.5"/>
+  <text x="555" y="160" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">aws_iam_role</text>
+  <text x="555" y="177" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">+ assume_role_policy</text>
+  <text x="555" y="191" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">quién puede SER el rol</text>
+
+  <!-- la política de identidad -->
+  <rect x="465" y="255" width="180" height="58" rx="6" fill="var(--aws-bg)" stroke="var(--aws)" stroke-width="1.5"/>
+  <text x="555" y="279" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">aws_iam_role_policy</text>
+  <text x="555" y="297" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">qué puede HACER el rol</text>
+
+  <!-- el grupo de logs -->
+  <rect x="235" y="320" width="200" height="58" rx="6" fill="var(--aws-bg)" stroke="var(--aws)" stroke-width="1.5"/>
+  <text x="335" y="344" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">aws_cloudwatch_log_group</text>
+  <text x="335" y="362" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">dónde escribe</text>
+
+  <!-- aristas reales -->
+  <line x1="280" y1="78" x2="145" y2="138" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="185" y="100" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">filename =</text>
+
+  <line x1="392" y1="78" x2="522" y2="138" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="487" y="100" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">role =</text>
+
+  <line x1="555" y1="255" x2="555" y2="200" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="563" y="232" font-size="10.5" fill="var(--ink-soft)">role =</text>
+
+  <line x1="497" y1="311" x2="440" y2="341" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="487" y="335" font-size="10.5" fill="var(--ink-soft)">resources =</text>
+
+  <!-- aristas que NO existen solas -->
+  <line x1="335" y1="80" x2="335" y2="318" stroke="var(--danger)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+  <path d="M 362 78 Q 432 175 466 262" fill="none" stroke="var(--danger)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+  <rect x="256" y="182" width="158" height="34" rx="4" fill="var(--bg)" stroke="var(--danger)" stroke-width="1"/>
+  <text x="335" y="196" text-anchor="middle" font-size="11" font-weight="600" fill="var(--danger)">depends_on</text>
+  <text x="335" y="210" text-anchor="middle" font-size="10" fill="var(--danger)">no hay referencia: la pones tú</text>
+</svg>
+<figcaption class="small">Líneas continuas: aristas que Terraform deduce solo, porque hay una
+<strong>referencia</strong> escrita en el código. Líneas discontinuas: aristas que existen en
+la realidad pero no en el código, y por eso hay que declararlas a mano.</figcaption>
+</figure>
+
+<h3>Las dos políticas que se llaman igual y no se parecen en nada</h3>
+
+<p>Aquí está el nudo que confunde a todo el mundo. Un rol tiene <strong>dos</strong> políticas,
+y la palabra «policy» es lo único que comparten.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Dónde vive</th><th>Qué contesta</th><th>Mira hacia</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Política de confianza</strong><br><code>assume_role_policy</code></td>
+      <td><strong>Dentro</strong> del <code>aws_iam_role</code>, como argumento obligatorio</td>
+      <td>¿Quién puede <strong>SER</strong> este rol?</td>
+      <td>Afuera: al que lo usa (<code>lambda.amazonaws.com</code>)</td>
+    </tr>
+    <tr>
+      <td><strong>Política de identidad</strong><br><code>aws_iam_role_policy</code></td>
+      <td><strong>Colgada</strong> del rol, como recurso aparte</td>
+      <td>¿Qué puede <strong>HACER</strong> este rol?</td>
+      <td>Adentro: a los recursos (<code>logs:PutLogEvents</code>)</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">El rol es un uniforme con tarjeta de acceso</span>
+  <p>La <strong>política de confianza</strong> dice quién puede ponerse el uniforme. Por eso su
+  única acción es <code>sts:AssumeRole</code>: ponerse el uniforme <em>es</em> asumir el rol.</p>
+  <p>La <strong>política de identidad</strong> dice qué puertas abre la tarjeta.</p>
+  <p>Un uniforme que nadie puede ponerse no sirve para nada. Un uniforme que no abre ninguna
+  puerta es perfectamente legal — y es exactamente lo que tienes si creas el rol y te olvidas
+  de la política. Son las dos mitades, y por eso son dos bloques distintos.</p>
+</div>
+
+<h3>Qué es obligatorio y qué no</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Recurso</th><th>¿Obligatorio?</th><th>Qué pasa si falta</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>aws_lambda_function</code></td>
+      <td>—</td><td>—</td>
+    </tr>
+    <tr>
+      <td><code>aws_iam_role</code> con su <code>assume_role_policy</code></td>
+      <td><strong>Sí, siempre</strong></td>
+      <td>El <code>apply</code> falla. <code>role</code> es un argumento <em>requerido</em> del recurso y de la API <code>CreateFunction</code>. No existe una Lambda sin rol.</td>
+    </tr>
+    <tr>
+      <td><code>aws_iam_role_policy</code> con los permisos de logs</td>
+      <td><strong>No</strong></td>
+      <td>La función se despliega, se invoca, devuelve la respuesta correcta — <strong>y es muda</strong>. Ni un log.</td>
+    </tr>
+    <tr>
+      <td><code>aws_cloudwatch_log_group</code></td>
+      <td><strong>No</strong></td>
+      <td>Lambda lo crea sola en la primera invocación. Nace fuera de Terraform, <strong>sin retención</strong>, y sobrevive a tu <code>destroy</code>.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">«¿Y si no quiero que escriba en CloudWatch?»</span>
+  <p><strong>No hay interruptor de apagado: la ausencia del permiso <em>es</em> el
+  interruptor.</strong> Borra el <code>aws_iam_role_policy</code> y la función sigue
+  ejecutándose igual, sin dejar rastro. La documentación lo dice de pasada y es literal: Lambda
+  captura los logs <em>«siempre que el rol de ejecución tenga los permisos necesarios»</em>.</p>
+  <p>El rol, en cambio, no es negociable. Aunque no le des ni un permiso, la función necesita
+  <em>una identidad con la que presentarse</em> ante la API de AWS, y un rol vacío es una
+  identidad válida. Es la misma razón por la que un proceso de Unix corre siempre como algún
+  usuario, aunque ese usuario no pueda hacer nada.</p>
+  <p>Si lo que quieres es mandar los logs <em>a otro sitio</em>, existe el bloque
+  <code>logging_config</code> con su argumento <code>log_group</code>: puedes apuntar varias
+  funciones al mismo grupo. Lo que no puedes es que el nombre empiece por <code>aws/</code> —
+  si lo haces, Lambda no consigue crear el grupo y tus logs no llegan a ninguna parte.</p>
+</div>
+
+<h3>Por qué hace falta el <code>depends_on</code></h3>
+
+<p>Terraform construye el grafo <strong>solo con las referencias que tú escribes</strong>. Estas
+son todas las que hay en el ejemplo de arriba:</p>
+
+<div class="code">
+  <div class="code-label"><span>las flechas que Terraform ve</span><span class="tag">y la que no</span></div>
+<pre><code>aws_lambda_function
+  ├─ role     = aws_iam_role.app.arn              <b class="c">→ flecha REAL al rol</b>
+  └─ filename = data.archive_file.app.output_path <b class="c">→ flecha REAL al zip</b>
+
+aws_cloudwatch_log_group
+  └─ name = "/aws/lambda/mi-funcion"              <b class="c">→ una cadena. NINGUNA flecha.</b>
+
+aws_iam_role_policy
+  ├─ role   = aws_iam_role.app.id                 <b class="c">→ flecha al ROL</b>
+  └─ policy = data...(que lee el log group)       <b class="c">→ flecha al LOG GROUP</b>
+
+<b class="c"># De la función al grupo de logs no sale NADA.</b>
+<b class="c"># Lo único que los une es que los nombres coinciden</b>
+<b class="c"># por convención de AWS. Y una convención no es una referencia.</b></code></pre>
+</div>
+
+<p>Sin ese <code>depends_on</code>, Terraform es libre de crear la función <em>antes</em> —o en
+paralelo— que el grupo de logs y que la política. Si algo la invoca en ese hueco, Lambda crea
+el grupo por su cuenta y a partir de ahí hay dos dueños para el mismo recurso.</p>
+
+<div class="callout tf">
+  <span class="callout-title">La regla, en una frase</span>
+  <p><code>depends_on</code> solo para dependencias <strong>reales que ninguna referencia
+  expresa</strong>. Si puedes sustituirlo por una referencia, la referencia siempre gana: se
+  documenta sola y no se queda obsoleta. Un <code>depends_on</code> puesto «por si acaso»
+  serializa el grafo y hace los <code>apply</code> más lentos sin ganar nada.</p>
+</div>
+
+<h3>Lo que la consola hacía por ti, y no te enseñaba</h3>
+
+<p>Cuando creas una Lambda con clics, la consola ejecuta las mismas llamadas a la API. Crea un
+rol llamado <code>&lt;tu-función&gt;-role-a1b2c3</code>, le engancha la política gestionada
+<code>AWSLambdaBasicExecutionRole</code>, y deja que Lambda cree el grupo de logs en la primera
+invocación. Tú viste un formulario.</p>
+
+<div class="callout trap">
+  <span class="callout-title">La consola te modifica el rol sin decírtelo</span>
+  <p>No es una interpretación: está escrito en la documentación de AWS. Al configurar el grupo
+  de logs desde la consola, <em>«Lambda añade este permiso al rol... Cuando Lambda añade este
+  permiso, le da a la función permiso para enviar logs a <strong>cualquier</strong> log group de
+  CloudWatch»</em>. Hay una casilla, <strong>«Add required permissions»</strong>, que puedes
+  desmarcar para que deje de hacerlo — y prácticamente nadie sabe que existe.</p>
+  <p>Con la AWS CLI <strong>no</strong> lo hace: ahí el permiso te toca a ti. La comodidad de la
+  consola es exactamente la que produce el privilegio de más.</p>
+  <p>Y el otro regalo: cada Lambda que borraste desde la consola dejó su
+  <code>/aws/lambda/&lt;nombre&gt;</code> detrás, sin retención, guardando logs para siempre.
+  Compruébalo — <code>aws logs describe-log-groups --query 'logGroups[?!retentionInDays]'</code>
+  es una lista que sorprende.</p>
+</div>
+
+<p><strong>Para diseccionar una Lambda que ya existe</strong> —tuya, de la consola, o de un
+compañero— y ver los cuatro recursos con tus ojos, la receta completa con comandos está en
+<a href="./terraform-cli.html#autopsia">la chuleta del CLI, «Cuando no sabes qué recursos hacen
+falta»</a>. Es la mejor forma de aprender un servicio nuevo de AWS: constrúyelo con clics una
+vez, y luego pide que te escriban el código.</p>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Tu función tarda 400 ms con 512 MB. Subes la memoria a 1.024 MB y ahora
+  tarda 180 ms. ¿Qué le ha pasado al coste de duración por invocación?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="0,5 GB × 0,4 s = 0,2 GB-s. 1 GB × 0,18 s = 0,18 GB-s. Doblar la memoria dobla el precio por segundo, pero si el tiempo baja a menos de la mitad el producto baja. Por eso la memoria hay que medirla, no adivinarla.">Ha bajado, aunque parezca imposible</button></li>
+    <li><button data-correct="false" data-why="Solo subiría si el tiempo hubiera bajado menos de la mitad. Aquí ha bajado a menos del 45%, así que el producto memoria × tiempo es menor que antes.">Ha subido, porque pagas memoria</button></li>
+    <li><button data-correct="false" data-why="No es igual: el precio se calcula sobre GB-segundo, y los dos factores han cambiado en direcciones opuestas con magnitudes distintas. 0,2 GB-s frente a 0,18 GB-s.">Se queda igual, se compensa</button></li>
+    <li><button data-correct="false" data-why="La memoria sí influye en la factura: es uno de los dos factores del GB-segundo. Lo que no es lineal es la relación entre memoria y tiempo de ejecución.">No cambia, solo cuentan peticiones</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Un servicio interno recibe 2.000 peticiones por segundo, todo el día, todos
+  los días, y cada una tarda 50 ms. ¿Lambda o Fargate?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Con carga constante y alta, el pago por uso deja de ser una ventaja: nunca hay ratos a cero que compensen. Contenedores siempre encendidos con la capacidad justa salen bastante más baratos, y además no hay cold starts.">Fargate: la carga es constante</button></li>
+    <li><button data-correct="false" data-why="Lambda gana cuando hay valles. Aquí no los hay: pagarías 5.184 millones de invocaciones al mes sin ningún periodo a cero que justifique el sobreprecio del modelo por uso.">Lambda: el trabajo es corto</button></li>
+    <li><button data-correct="false" data-why="Sí hay criterio, y es el perfil de tráfico, no el gusto. Constante y alto favorece a los contenedores; irregular o con valles favorece a Lambda.">Da igual: cuestan lo mismo</button></li>
+    <li><button data-correct="false" data-why="La concurrencia aprovisionada arregla el cold start pero empeora el problema económico: añade un coste por hora encima del coste por uso que ya estabas pagando.">Lambda con concurrencia aprovisionada</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Despliegas una Lambda, la invocas, y devuelve <code>200</code> con la
+  respuesta correcta. Pero en CloudWatch no hay ningún grupo de logs suyo. ¿Qué pasa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Escribir logs es una acción de la función contra la API de CloudWatch Logs, y como cualquier otra necesita permiso en el rol de ejecución. Sin él, la función corre perfectamente y no deja rastro. Es el fallo más común y el más desconcertante.">Al rol le falta permiso de logs</button></li>
+    <li><button data-correct="false" data-why="Los logs pueden tardar entre 5 y 10 minutos en aparecer, pero eso retrasa los eventos dentro del grupo. El grupo en sí se crearía igual en la primera invocación si hubiera permiso.">Los logs tardan, hay que esperar</button></li>
+    <li><button data-correct="false" data-why="El runtime de Node manda console.log a stdout y el runtime de Lambda lo recoge siempre. El problema no está en tu código sino en lo que el rol tiene permitido hacer.">El código no escribe ningún log</button></li>
+    <li><button data-correct="false" data-why="Una función que devuelve la respuesta correcta se está ejecutando, así que ni el handler ni el runtime están mal configurados. El fallo está después de ejecutar, al intentar escribir.">El handler apunta a otro fichero</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">Subes un objeto a S3 y eso invoca tu Lambda, que lanza una excepción. Sin
+  DLQ ni destino de fallo configurado, ¿qué le pasa a ese evento?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="S3 invoca de forma asíncrona: Lambda encola el evento y reintenta la función dos veces. Agotados los reintentos, sin DLQ ni destino de fallo, el evento se descarta y no queda constancia salvo en las métricas de error.">Se reintenta dos veces y desaparece</button></li>
+    <li><button data-correct="false" data-why="Eso es el comportamiento síncrono. En asíncrono quien invoca ya recibió su 202 hace rato y no hay nadie a quien devolverle el error: por eso Lambda reintenta por su cuenta.">Se devuelve el error a quien invocó</button></li>
+    <li><button data-correct="false" data-why="Lambda no vuelve a poner nada en S3 ni reprocesa el objeto por su cuenta. El objeto sigue ahí sin procesar, y tú no te enteras si no miras las métricas.">Se vuelve a subir el objeto solo</button></li>
+    <li><button data-correct="false" data-why="Los reintentos asíncronos existen precisamente para los errores de la función. Sin ellos, cualquier fallo transitorio de red perdería eventos, que es justo lo que Lambda intenta evitar.">Se descarta sin ningún reintento</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/0005-tu-codigo-en-aws.html">Lección 05</a>
+    <a href="./aws-iam.html">Referencia: IAM</a>
+    <a href="./terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="https://docs.aws.amazon.com/lambda/latest/dg/welcome.html">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> Tres cosas de esta ficha se quedan a medias a propósito y las puedo
+    desarrollar cuando quieras: <strong>cómo elegir la memoria midiendo</strong> en vez de
+    adivinando (AWS Lambda Power Tuning), <strong>las capas</strong> (<code>layers</code>) y por
+    qué casi nunca las necesitas si empaquetas con un bundler, y <strong>versions y aliases</strong>,
+    que es como se hace un despliegue canario de una Lambda. Ninguna es necesaria para el
+    proyecto 01.
+  </div>
+</div>
+
+</main>
+
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

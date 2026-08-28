@@ -412,6 +412,159 @@ terraform validate</code></pre>
 
 </div>
 
+<h2 id="autopsia">Cuando no sabes qué recursos hacen falta</h2>
+
+<p>El problema anterior era «no sé qué valores acepta este argumento». Este es peor: <strong>no
+sé cuántos recursos necesito ni cómo se enganchan</strong>. Pasa con cada servicio nuevo de AWS,
+y es exactamente lo que la consola te escondía — porque la consola crea recursos que nunca te
+enseña.</p>
+
+<p>La técnica: <strong>constrúyelo con clics una vez, y luego pide que te escriban el
+código.</strong> Es un bucle de retroalimentación que puedes cerrar solo, sin tutoriales.</p>
+
+<h3>Paso 1 — Interroga a AWS con la CLI</h3>
+
+<p>Antes de Terraform. Empiezas por la cosa que sabes que existe y vas tirando del hilo. Con
+una Lambda creada a mano en la consola:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">tirar del hilo</span></div>
+<pre><code>FN=mi-funcion-de-prueba
+
+<b class="c"># 1. Toda la configuración de la función. Léela entera:</b>
+<b class="c">#    Role, Runtime, Handler, MemorySize, Timeout, Architectures,</b>
+<b class="c">#    CodeSha256, LoggingConfig...</b>
+aws lambda get-function-configuration --function-name "$FN"
+
+<b class="c"># 2. ¿Qué rol le puso la consola? Nunca lo elegiste tú.</b>
+ROLE=$(aws lambda get-function-configuration --function-name "$FN" \
+        --query Role --output text)
+ROLE=${ROLE##*/}
+echo "$ROLE"    <b class="c"># p.ej. mi-funcion-de-prueba-role-a1b2c3d4</b>
+
+<b class="c"># 3. La política de CONFIANZA: quién puede SER ese rol.</b>
+<b class="c">#    Aquí verás lambda.amazonaws.com y sts:AssumeRole.</b>
+aws iam get-role --role-name "$ROLE" --query AssumeRolePolicyDocument
+
+<b class="c"># 4. Las políticas de IDENTIDAD: qué puede HACER. Son dos listas</b>
+<b class="c">#    distintas y hay que mirar las dos.</b>
+aws iam list-attached-role-policies --role-name "$ROLE"   <b class="c"># gestionadas</b>
+aws iam list-role-policies          --role-name "$ROLE"   <b class="c"># inline</b>
+
+<b class="c"># 5. El contenido de la gestionada que la consola engancha sola.</b>
+<b class="c">#    Fíjate en el Resource: es "*".</b>
+P=arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+aws iam get-policy-version --policy-arn "$P" \
+  --version-id "$(aws iam get-policy --policy-arn "$P" \
+                   --query Policy.DefaultVersionId --output text)" \
+  --query 'PolicyVersion.Document'
+
+<b class="c"># 6. El grupo de logs que nadie declaró. Mira si sale</b>
+<b class="c">#    retentionInDays: si no aparece, es "no expira nunca".</b>
+aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/$FN"
+
+<b class="c"># Y la lista completa de huérfanos de tu cuenta:</b>
+aws logs describe-log-groups \
+  --query 'logGroups[?!retentionInDays].[logGroupName,storedBytes]' \
+  --output table</code></pre>
+</div>
+
+<h3>Paso 2 — Que Terraform te escriba el HCL</h3>
+
+<p>Con los nombres que acabas de descubrir, un directorio de usar y tirar, un bloque
+<code>import</code> por recurso, y <strong>ningún fichero de recurso</strong>. Disponible desde
+Terraform 1.5.</p>
+
+<p class="small">Sigue marcado como <strong>experimental</strong>: <code>terraform plan -help</code>
+lo lista como <em>«(Experimental) If import blocks are present in configuration…»</em>, también
+en 1.15.8. En la práctica significa que el <em>formato</em> del fichero generado puede cambiar
+entre versiones menores — que da igual, porque lo que haces con él es leerlo, no versionarlo.</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">directorio desechable</span></div>
+<pre><code>mkdir -p /tmp/autopsia &amp;&amp; cd /tmp/autopsia
+
+cat &gt; versions.tf &lt;&lt;'EOF'
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~&gt; 6.0" }
+  }
+}
+provider "aws" { region = "us-east-1" }
+EOF
+
+cat &gt; imports.tf &lt;&lt;EOF
+import {
+  to = aws_lambda_function.probe
+  id = "$FN"
+}
+
+import {
+  to = aws_iam_role.probe
+  id = "$ROLE"
+}
+
+import {
+  to = aws_cloudwatch_log_group.probe
+  id = "/aws/lambda/$FN"
+}
+EOF
+
+terraform init
+terraform plan -generate-config-out=descubierto.tf
+
+cat descubierto.tf   <b class="c"># ← aquí está todo lo que la consola hizo por ti</b></code></pre>
+</div>
+
+<div class="callout tf">
+  <span class="callout-title">Cómo se escribe el <code>id</code> de cada recurso</span>
+  <p>No es adivinable: cada recurso define el suyo, y está al final de su página de
+  documentación, en la sección <em>Import</em>. Los del ejemplo:</p>
+  <table>
+    <thead><tr><th>Recurso</th><th><code>id</code> de import</th></tr></thead>
+    <tbody>
+      <tr><td><code>aws_lambda_function</code></td><td>el <code>function_name</code></td></tr>
+      <tr><td><code>aws_iam_role</code></td><td>el <code>name</code> del rol</td></tr>
+      <tr><td><code>aws_cloudwatch_log_group</code></td><td>el <code>name</code>, con sus barras</td></tr>
+      <tr><td><code>aws_iam_role_policy</code></td><td><code>nombre_del_rol:nombre_de_la_politica</code></td></tr>
+    </tbody>
+  </table>
+  <p>Para verlo de cualquier otro recurso, usa la doc en crudo de la sección anterior y busca
+  «<code>terraform import</code>» al final.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Tres cosas que hay que tener claras antes de ejecutarlo</span>
+  <p><strong>1. <code>plan</code> no toca nada.</strong> Es de solo lectura: consulta la API y
+  escribe un fichero en tu disco. Lo que <em>sí</em> importaría los recursos a este state es un
+  <code>apply</code>, y en un directorio de autopsia <strong>no lo ejecutes nunca</strong>: un
+  <code>destroy</code> posterior te borraría la Lambda de verdad. Mira, copia lo que te sirva, y
+  <code>rm -rf /tmp/autopsia</code>.</p>
+  <p><strong>2. El código generado es un borrador, no un ejemplo a seguir.</strong> Trae todos
+  los atributos que devuelve la API, incluidos los que tienen valor por defecto y los de solo
+  lectura. HashiCorp lo dice: es <em>«la mejor conjetura de Terraform»</em>, y con esquemas
+  complejos puede generar argumentos mutuamente excluyentes que hay que borrar a mano. Sirve
+  para <strong>leer</strong>, no para copiar y pegar.</p>
+  <p><strong>3. Los nombres de recurso son tuyos.</strong> <code>aws_iam_role.probe</code> es
+  una etiqueta que eliges tú; el <code>id</code> es lo que identifica la cosa en AWS. No los
+  confundas.</p>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Qué buscar en <code>descubierto.tf</code></span>
+  <p>No lo leas entero. Busca estas cuatro cosas, que son las que la consola no te enseñó:</p>
+  <ul>
+    <li>El <code>assume_role_policy</code> del rol, con <code>lambda.amazonaws.com</code>
+    dentro. Esa es la política de confianza que nunca escribiste.</li>
+    <li>Si el <code>aws_cloudwatch_log_group</code> tiene <code>retention_in_days</code>. No lo
+    tendrá.</li>
+    <li>El <code>architectures</code>: será <code>["x86_64"]</code>, porque es el defecto y
+    nadie te preguntó.</li>
+    <li>El <code>timeout</code>: será <code>3</code>, el defecto, casi nunca lo que querías.</li>
+  </ul>
+  <p>Repite este ejercicio con el primer servicio de AWS que no entiendas. Funciona con todos.</p>
+</div>
+
 <h2>Cuando algo va mal</h2>
 
 <div class="ref-grid">

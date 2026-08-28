@@ -58,6 +58,8 @@ data "aws_iam_policy_document" "terraform_course" {
       "budgets:*",
       "sns:*",
       "iam:*",
+      "lambda:*",
+      "logs:*",
       "sts:GetCallerIdentity"
     ]
     resources = ["*"]
@@ -72,19 +74,19 @@ data "aws_iam_policy_document" "terraform_course" {
   statement {
     sid       = "StateObject"
     actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.state.arn}/00-foundations/terraform.tfstate"]
+    resources = ["${aws_s3_bucket.state.arn}/*/terraform.tfstate"]
   }
 
   statement {
     sid       = "StateLockObject"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.state.arn}/00-foundations/terraform.tfstate.tflock"]
+    resources = ["${aws_s3_bucket.state.arn}/*/terraform.tfstate.tflock"]
   }
 }
 
 resource "aws_iam_policy" "terraform_course" {
   name        = "terraform-course"
-  description = "Policy for the terraform course in 00-foundations"
+  description = "Policy for the terraform course"
   policy      = data.aws_iam_policy_document.terraform_course.json
 }
 

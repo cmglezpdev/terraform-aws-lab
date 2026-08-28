@@ -34,6 +34,31 @@
   Úsalos para: los proyectos 04 y 06. Y **léelos por dentro** — son el mejor ejemplo de
   Terraform avanzado que vas a encontrar gratis.
 
+### AWS — Lambda y serverless
+
+- [AWS Lambda Developer Guide](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)
+  La guía canónica. Tres páginas concretas valen más que el resto juntas:
+  [execution environment lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html)
+  (las fases Init/Invoke/Shutdown, de donde sale todo el rendimiento serverless),
+  [Node.js handler](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-handler.html)
+  (CommonJS vs ESM, estado global, buenas prácticas) y
+  [Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).
+  Úsala para: los proyectos 01, 02 y 03.
+- [Deploy transpiled TypeScript code in Lambda with .zip file archives](https://docs.aws.amazon.com/lambda/latest/dg/typescript-package.html)
+  La receta oficial de AWS con `esbuild`, sin SAM ni CDK de por medio. Es la base del build
+  del proyecto 01. Úsala para: comprobar que tu `package.json` no se ha quedado atrás.
+- [Lambda runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html)
+  La tabla de identificadores y fechas de deprecación. **Consúltala antes de empezar
+  cualquier proyecto nuevo**: un runtime deprecado sigue funcionando pero deja de recibir
+  parches, y AWS acaba bloqueando las actualizaciones de la función.
+- [AWS Price List API (bulk)](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/price-changes.html)
+  Los precios reales en JSON, sin credenciales:
+  `https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/<Servicio>/current/<región>/index.json`.
+  Úsala para: cualquier cifra de coste. Es la única fuente que no envejece en un blog.
+- [esbuild](https://esbuild.github.io/getting-started/)
+  El bundler del curso. Recuerda que **transpila pero no comprueba tipos**: `tsc --noEmit`
+  es un paso aparte y obligatorio.
+
 ### AWS
 
 - [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)
