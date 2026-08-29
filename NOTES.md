@@ -266,6 +266,46 @@ rechaza avanzar por sentir que el ejemplo es de juguete — hay que atenderlo, n
   no lo avisaba. Precedente: cada lección que estrene servicio debe avisar de tocar antes la
   política del usuario en el proyecto 00.
 
+## Lección 08 — la puerta pública (2026-08-28, LR-0013)
+
+- **Publicada sin sesión de por medio**: diseñada y verificada el mismo día que la 07 quedó
+  registrada. Alcance decidido: **solo la puerta** (`POST /links` público). La segunda Lambda,
+  el 301 y el `for_each` prometidos en la 07 pasan a la **lección 09** — el corte está
+  declarado dentro de la lección con su porqué (LR-0005).
+- **La apuesta del Init Duration: RESUELTA el 2026-08-29 — sostenida.** Él trajo las líneas:
+  antes 145,09 y 91,08 ms (bundle pequeño), después 172,83 ms → 27,74 ms < 100. No hay
+  `zod/mini`. **Asterisco anotado en la lección**: la varianza intra-artefacto (91→145;
+  173→332) supera el umbral — el criterio comparaba muestras sueltas; «un Init no es una
+  medición, es una muestra» queda como frase reutilizable. **Dos hallazgos de sus líneas**:
+  (1) `Billed = Duration + Init` en las cuatro — el init de runtimes gestionados se cobra
+  desde agosto de 2025 (blog «standardizes billing for init phase»; casi todo internet dice
+  lo viejo, mismo patrón que `use_lockfile`); (2) las `INIT_REPORT Status: error` de su log
+  son la autopsia del bug del `Dynamic require`, con el *suppressed init* (`Phase: invoke`)
+  incluido — INIT_REPORT solo se emite cuando el init falla. Pendiente de confirmar: si el
+  REPORT de 332,03 ms / 913,59 ms es el primer `curl` por la puerta (credenciales + TLS con
+  DynamoDB en la primera invocación real).
+- **Terceras entregas de dos hilos**: `payload_format_version = "1.0"` por defecto en el
+  provider (vs 2.0 de la consola) → «el default del provider no es tu default» nº 3;
+  `aws_lambda_permission` ausente → 500 con logs vacíos → «fallo silencioso» nº 4, con la
+  heurística *log vacío = el problema está antes de la función*.
+- **El mapa IAM queda cerrado y hay que reutilizarlo así**: identidad (políticas del rol),
+  confianza (`assume_role_policy`), **recurso** (`aws_lambda_permission`, leída con
+  `aws lambda get-policy`). La «política de recurso» de SNS (lección 02) es la misma clase —
+  religada en el glosario.
+- **El handler = raíz de composición + adaptador de protocolo.** Errores esperados se
+  traducen (400), imprevistos se relanzan (500 de verdad). Solo `handler.ts` cambió; 14/14
+  tests intactos. Bundle 836 125 B (+397 B). Humo verificado desde `.mjs` (regla LR-0012).
+- **`integration_method = "POST"` ≠ el método del cliente** — el `GET /{code}` de la 09
+  también se integra con POST. La quiz 1 de la lección lo prepara.
+- La lección abre recordando ampliar la política del proyecto 00 con `apigateway:*`
+  (precedente LR-0012, cumplido por primera vez). Las acciones IAM de API Gateway son verbos
+  HTTP (`apigateway:POST`), no nombres de operación.
+- **Pendiente al cerrar la 09**: borrar `ok.json`/`malo.json` viejos si ya no pintan nada, y
+  decidir si `smoke.mjs` se queda como script de repo o sigue siendo efímero.
+- CORS queda sin configurar a propósito (el `curl` no lo dispara); `cors_configuration` está
+  en la ficha para cuando haya frontend. La API queda **abierta a sabiendas** — la pieza que
+  falta se llama authorizer y llega en el proyecto 03.
+
 ## Ideas para futuras lecciones
 
 - El `plan` como herramienta de lectura: enseñarle a leer un diff de 200 líneas.

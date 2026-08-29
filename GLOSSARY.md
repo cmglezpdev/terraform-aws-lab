@@ -75,6 +75,13 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Raíz de composición** — introducido en [lección 07](./lessons/0007-la-memoria-del-acortador.html)
 - **Layer** (Lambda) — introducida en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
 - **Ejecución duradera** / **Capacity provider** — introducidos en [lección 06](./lessons/0006-el-zip-no-es-tu-repositorio.html)
+- **Route key** — introducido en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **Integración** (`AWS_PROXY`) — introducida en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **Stage** / **auto_deploy** — introducidos en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **Payload format 2.0** / **el sobre** — introducidos en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **Política basada en recursos** — introducida en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html) como «política de recurso»; nombrada como tercera clase y leída con `get-policy` en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **Adaptador de protocolo** — introducido en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **Throttling** — introducido en [lección 08](./lessons/0008-la-puerta-publica.html)
 
 ## AWS
 

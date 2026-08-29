@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon API Gateway</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon API Gateway</h1>
+  <p class="deck">El recepcionista de tu API: recibe HTTPS de internet, decide qué ruta va a
+  qué backend, rechaza a quien no debe pasar, y cobra por petición. Tu Lambda no tiene puerto
+  ni servidor — sin una puerta delante, nadie puede llamarla desde fuera.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Red / fachada de APIs</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — una HTTP API en reposo cuesta 0,00 USD</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_apigatewayv2_api</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/01-serverless-api">proyecto 01</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un servicio gestionado que se planta entre internet y tu backend: termina el TLS, lee el
+método y la ruta de cada petición (<code>POST /links</code>), y la entrega al destino que
+tenga configurado — una Lambda, otro servicio de AWS o cualquier URL. No ejecuta tu código:
+<strong>enruta, filtra y traduce</strong>. Existe porque una Lambda no es un servidor: no
+escucha en ningún puerto, solo responde a invocaciones — y la única forma legal de invocarla
+desde fuera de AWS es que un servicio con permiso lo haga por ti.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>El recepcionista de un edificio de oficinas: tú no entras a la planta 7 — le dices a
+  quién buscas, él comprueba la lista, llama arriba y te hace pasar o no. Las oficinas ni
+  siquiera tienen puerta a la calle. Donde se rompe: un recepcionista cobra sueldo fijo
+  esté el edificio vacío o lleno; una HTTP API cobra <em>por visita</em> — cero visitas,
+  cero coste. Esa diferencia es exactamente la que hay con un ALB, que sí cobra por hora.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Dar URL pública a una Lambda</h3><p>Tu caso: el acortador tiene
+  cerebro y memoria, pero nadie de fuera puede llamarlo. La puerta convierte
+  <code>POST /links</code> en una invocación con permiso.</p></div>
+  <div class="ref-card"><h3>Autenticación sin escribirla</h3><p>Un authorizer JWT valida los
+  tokens de Cognito o de cualquier OIDC <em>antes</em> de que tu función se ejecute (y
+  pague). El 401 lo pone la puerta, no tu código.</p></div>
+  <div class="ref-card"><h3>Proteger el backend del pico</h3><p>Throttling: si alguien te
+  hace 50 000 peticiones por segundo, la puerta devuelve 429 y tu base de datos ni se
+  entera. Configurable por ruta y por stage.</p></div>
+  <div class="ref-card"><h3>Una fachada estable</h3><p>El cliente ve <code>/v1/links</code>
+  para siempre; detrás puedes cambiar la Lambda por un contenedor o partir una función en
+  tres sin que ningún consumidor cambie una línea.</p></div>
+  <div class="ref-card"><h3>WebSockets sin servidor</h3><p>La variante WebSocket mantiene
+  las conexiones abiertas por ti y las traduce a invocaciones — chats y dashboards en vivo
+  sin un solo proceso persistente tuyo.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Hay tres productos bajo el mismo nombre, y dos de ellos hacen casi lo mismo. La razón es
+histórica: REST API (2015) acumuló funcionalidad y precio; HTTP API (2019) es la reescritura
+barata y rápida con solo lo que casi todo el mundo usa. En el provider de Terraform la
+frontera es visible: REST API son los recursos <code>aws_api_gateway_*</code> (v1), HTTP y
+WebSocket son <code>aws_apigatewayv2_*</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué lo distingue</th><th>Cuándo</th><th>Coste por millón</th></tr></thead>
+  <tbody>
+    <tr><td><code>HTTP API</code></td><td>Mínimo y rápido: proxy a Lambda/HTTP, authorizer
+    JWT nativo, CORS, dominios propios. Sin caché, sin API keys, sin WAF.</td>
+    <td>El punto de partida. APIs serverless normales — este curso.</td><td>1,00 USD</td></tr>
+    <tr><td><code>REST API</code></td><td>Todo lo demás: API keys y usage plans, caché,
+    WAF, validación de request, transformación de body, canary, X-Ray, endpoints privados.</td>
+    <td>Cuando necesites una de esas piezas — y solo entonces.</td><td>3,50 USD</td></tr>
+    <tr><td><code>WebSocket API</code></td><td>Conexiones persistentes bidireccionales
+    traducidas a invocaciones (<code>$connect</code>, <code>$disconnect</code>, mensajes).</td>
+    <td>Tiempo real: chat, notificaciones push, dashboards.</td><td>1,00 USD + 0,25 USD por
+    millón de minutos de conexión</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Empieza siempre por HTTP API. Pásate a REST API solo cuando puedas nombrar la
+  funcionalidad concreta que te falta — API keys para vender la API, WAF por exigencia de
+  seguridad, caché de respuestas, canary — y acepta que pagas 3,5× por petición por ella. La
+  <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html">tabla
+  oficial de diferencias</a> es la fuente; si tu requisito no está en la columna que le falta
+  a HTTP API, no hay debate.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+<p>Cuatro piezas que se declaran por separado, y una petición las atraviesa en orden:</p>
+<ul>
+  <li><strong>API</strong> — el contenedor. Al crearla, AWS le asigna una URL regional del
+  tipo <code>https://{id}.execute-api.us-east-1.amazonaws.com</code>, con TLS incluido.</li>
+  <li><strong>Ruta</strong> — un <em>route key</em>: método + camino, como
+  <code>POST /links</code> o <code>GET /{code}</code>. Las llaves <code>{}</code> capturan
+  parámetros; <code>$default</code> atrapa lo que ninguna ruta reclama.</li>
+  <li><strong>Integración</strong> — a dónde va la petición. Para Lambda es
+  <code>AWS_PROXY</code>: la puerta empaqueta la petición HTTP en un evento JSON, invoca, y
+  desempaqueta la respuesta. El contrato de ese evento es el <em>payload format</em>: la
+  versión <code>2.0</code> entrega el sobre con <code>rawPath</code>,
+  <code>requestContext.http.method</code>, <code>pathParameters</code> — y el
+  <strong><code>body</code> como string sin parsear</strong>. A la vuelta, si tu función
+  devuelve JSON sin <code>statusCode</code>, la puerta infiere un 200; si devuelve
+  <code>{statusCode, headers, body}</code>, obedece.</li>
+  <li><strong>Stage</strong> — la publicación. Una configuración de rutas no atiende tráfico
+  hasta que se despliega a un stage; el stage <code>$default</code> con
+  <code>auto_deploy</code> publica cada cambio solo y desaparece de la URL.</li>
+</ul>
+<p>Garantías que importan: es <strong>síncrono</strong> (el cliente espera la respuesta
+entera), el timeout de integración es <strong>30 segundos y no se puede subir</strong> — da
+igual que tu Lambda admita 15 minutos, la puerta corta antes — y el throttling por defecto es
+el de la cuenta: 10 000 peticiones/segundo con ráfagas de 5 000. Y una asimetría de permisos
+que hay que saberse: tu rol IAM dice lo que tu función <em>puede hacer</em>; quién puede
+<em>invocarla</em> se decide en una política pegada a la propia función (<em>resource-based
+policy</em>), que es donde API Gateway pide paso.</p>
+
+<h2>Cuánto cuesta</h2>
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>HTTP API — primeros 300 M de peticiones/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>1,00 USD / millón</code></td></tr>
+    <tr><td>HTTP API — a partir de 300 M</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,90 USD / millón</code></td></tr>
+    <tr><td>REST API — primeros 333 M de peticiones/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>3,50 USD / millón</code></td></tr>
+    <tr><td>WebSocket — mensajes / minutos de conexión</td><td><span class="tag-cost usage">por uso</span></td><td><code>1,00 / 0,25 USD por millón</code></td></tr>
+    <tr><td>API en reposo (cualquier tipo salvo caché de REST)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Free tier — 1 M de peticiones HTTP API al mes</td><td><span class="tag-cost free">12 meses</span></td><td><code>0,00 USD</code></td></tr>
+  </tbody>
+</table>
+<p class="cost-stamp">Precios de us-east-1, verificados el 2026-08-28 contra la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonApiGateway/current/us-east-1/index.json">Price
+List API</a> y la <a href="https://aws.amazon.com/api-gateway/pricing/">página de precios</a>.
+Cámbialos si han pasado meses.</p>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p>Dos cosas. Una: el free tier de API Gateway <strong>caduca a los 12 meses</strong> de
+  crear la cuenta — no es como el de Lambda o DynamoDB, que son para siempre; a tu escala da
+  igual (mil peticiones son 0,001 USD), pero conviene saber qué columna del free tier estás
+  mirando. Dos: las peticiones se miden <strong>en incrementos de 512 KB</strong> — una
+  respuesta de 4,5 MB se factura como 9 peticiones. Con JSONs pequeños no lo notarás nunca;
+  sirviendo ficheros, sí.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite (HTTP API)</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Timeout de integración</td><td><code>30 s</code></td><td><strong>No</strong> — tareas más largas van por ejecución asíncrona, no por la puerta</td></tr>
+    <tr><td>Payload por petición</td><td><code>10 MB</code></td><td>No</td></tr>
+    <tr><td>Throttling de la cuenta, por región</td><td><code>10 000 req/s</code> (ráfaga 5 000)</td><td>Sí, por Service Quotas (la ráfaga, no)</td></tr>
+    <tr><td>Rutas por API</td><td><code>300</code></td><td>Sí, por Service Quotas</td></tr>
+    <tr><td>Stages por API</td><td><code>10</code></td><td>Sí, por Service Quotas</td></tr>
+    <tr><td>Línea de petición + cabeceras</td><td><code>10 240 B</code></td><td>No</td></tr>
+    <tr><td>Authorizers por API</td><td><code>10</code></td><td>Sí, por ticket de soporte</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html">cuotas
+de HTTP APIs</a> y <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html">cuotas de cuenta</a>,
+consultadas el 2026-08-28.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>El backend es Lambda y la API es pública o multi-cliente.</li>
+    <li>Quieres auth, throttling o CORS sin escribirlos tú.</li>
+    <li>El tráfico es variable o bajo: pagar por petición gana.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Solo tú (o un webhook) llamas a una única función — una Lambda Function URL es
+    gratis y son tres líneas.</li>
+    <li>El tráfico es masivo y sostenido: a decenas de millones de peticiones al día, un ALB
+    por horas sale más barato que pagar cada petición.</li>
+    <li>La respuesta tarda más de 30 segundos sí o sí.</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Lambda Function URL</strong></td><td>URL HTTPS directa a <em>una</em>
+    función: gratis, sin rutas, sin throttling propio, auth solo IAM o ninguna.</td>
+    <td>Un solo endpoint interno, un webhook, o el streaming de respuesta del proyecto 03.</td></tr>
+    <tr><td><strong>ALB</strong></td><td>Balanceador de capa 7: cobra ~0,023 USD/h exista o
+    no tráfico, pero no cobra por petición pequeña. Sin transformación de eventos, sin usage
+    plans.</td><td>Tráfico alto y constante, o backends en contenedores/EC2 — proyecto 04.</td></tr>
+    <tr><td><strong>REST API</strong> (el hermano caro)</td><td>Mismo servicio, más
+    funcionalidad, 3,5× el precio y sin <code>auto_deploy</code>.</td><td>API keys, WAF,
+    caché, canary o endpoints privados — nómbralo antes de pagarlo.</td></tr>
+    <tr><td><strong>CloudFront</strong></td><td>CDN: cachea contenido en el borde, no enruta
+    a Lambdas por método y camino.</td><td>Estáticos y caché global — proyecto 05. Se pueden
+    combinar: CloudFront delante de la API.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>ejemplo mínimo — HTTP API delante de una Lambda</span><span class="tag">hcl</span></div>
+<pre><code>resource "aws_apigatewayv2_api" "api" {
+  name          = "mi-api"
+  protocol_type = "HTTP"          # o "WEBSOCKET"; REST API es otro recurso (v1)
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = "$default"        # sin sufijo en la URL
+  auto_deploy = true              # sin esto, los cambios de rutas NO se publican
+}
+
+resource "aws_apigatewayv2_integration" "fn" {
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.fn.invoke_arn
+  integration_method     = "POST" # hacia la Lambda siempre es POST
+  payload_format_version = "2.0"  # el default del provider es "1.0"
+}
+
+resource "aws_apigatewayv2_route" "fn" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /links"       # método + espacio + camino, literal
+  target    = "integrations/${aws_apigatewayv2_integration.fn.id}"
+}
+
+# Sin esto: 500 en el navegador y ni rastro en los logs de la función.
+resource "aws_lambda_permission" "api" {
+  statement_id  = "AllowInvokeFromHttpApi"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.fn.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas</span>
+  <ul>
+    <li><strong><code>payload_format_version</code> por defecto es <code>"1.0"</code></strong>
+    en el provider; la consola crea integraciones con 2.0. Si tu handler espera el sobre 2.0
+    y no lo fijas, recibirá el formato viejo — y fallará en el primer campo que no exista.
+    Tercer caso de «el default del provider no es tu default», tras <code>x86_64</code> y
+    <code>PROVISIONED</code>.</li>
+    <li><strong>Olvidar <code>aws_lambda_permission</code></strong> produce un 500 con
+    <code>{"message":"Internal Server Error"}</code> y — aquí la trampa — <strong>cero líneas
+    en los logs de la Lambda</strong>, porque la Lambda nunca llegó a invocarse. El error
+    solo vive en los access logs del stage, si los activaste.</li>
+    <li><strong><code>execution_arn</code> ≠ <code>api_endpoint</code></strong>: el primero
+    es el ARN para permisos (<code>arn:aws:execute-api:…</code>), el segundo la URL pública.
+    En <code>source_arn</code> va el primero, con <code>/*/*</code> (stage y ruta).</li>
+    <li><strong>El <code>route_key</code> es literal</strong>: <code>"POST /links"</code> con
+    un espacio exacto. <code>"POST/links"</code> o una barra final de más crean una ruta que
+    jamás casará, y nadie te avisa: las peticiones caen en el 404 <code>Not Found</code> de
+    la API.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Acabas de aplicar la puerta, haces el <code>curl</code> y recibes
+  <code>{"message":"Internal Server Error"}</code>. Abres los logs de la función:
+  vacíos, ni siquiera un <code>START</code>. ¿Cuál es el sospechoso número uno?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="Si el rol de ejecución estuviera mal, la función se invocaría y fallaría DENTRO — y habría líneas START y ERROR en el log. Logs vacíos = la función nunca corrió.">El rol de ejecución de la función</button></li>
+    <li><button data-correct="true" data-why="Exacto. Sin resource-based policy, API Gateway no tiene permiso para invocar y devuelve 500 sin que la Lambda llegue a enterarse. Por eso el log está vacío: no es que fallara, es que nunca corrió.">El permiso de invocación de la función</button></li>
+    <li><button data-correct="false" data-why="Un handler roto también dejaría rastro: el runtime arranca, loguea START y el error. El log completamente vacío descarta todo lo que ocurre dentro de la función.">El código del handler de la función</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Te piden vender el acceso a tu API con claves por cliente y límites de
+  peticiones distintos para cada uno. Estás en HTTP API. ¿Qué haces?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="Puedes escribirlo (un authorizer Lambda + contadores en DynamoDB), pero estarías reimplementando usage plans a mano: más código tuyo que mantener para algo que el otro producto trae de serie.">Implementar las claves en un authorizer propio</button></li>
+    <li><button data-correct="true" data-why="API keys y usage plans (límites por cliente) son exactamente la funcionalidad que HTTP API no tiene y REST API sí. Es el caso de libro para pagar el 3,5×: puedes nombrar la pieza concreta que necesitas.">Migrar a REST API por usage plans</button></li>
+    <li><button data-correct="false" data-why="El throttling de HTTP API es por ruta o por stage, no por cliente: no distingue quién llama. Para límites POR CLIENTE necesitas usage plans, y eso vive en REST API.">Configurar el throttling por stage del API</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Un servicio interno recibe 40 millones de peticiones al día, planas y
+  predecibles, desde otros sistemas tuyos. ¿Qué puerta le pones, pensando en coste?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="40 M/día ≈ 1 200 M/mes ≈ más de 1 100 USD/mes solo en peticiones de HTTP API. Pagar por petición gana con tráfico bajo o variable; con volumen alto y plano, pierde.">HTTP API, porque solo cobra por peticiones</button></li>
+    <li><button data-correct="true" data-why="Un ALB cobra por hora (~17 USD/mes) más LCUs por tráfico: a este volumen queda muy por debajo de los ~1 100 USD/mes de API Gateway. El crossover del coste fijo es justo lo que hay que saber ver.">Un ALB, porque su coste fijo compensa</button></li>
+    <li><button data-correct="false" data-why="Una Function URL evita el coste de la puerta, pero es por función, sin throttling ni enrutado — y este escenario es de servicio con varios endpoints, no de una función suelta.">Function URLs, porque no cobran las peticiones</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">Tu handler lee <code>event.rawPath</code> y devuelve
+  <code>{statusCode: 201}</code>. En Terraform declaras la integración sin
+  <code>payload_format_version</code>. ¿Qué pasa en producción?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="La consola usa 2.0 por defecto, pero Terraform no pasa por la consola: el provider manda su propio default, que es 1.0. Justo por eso es una trampa: dos herramientas, dos defaults.">Funciona, porque el formato moderno es el default</button></li>
+    <li><button data-correct="true" data-why="El provider fija 1.0 si no dices nada, y en 1.0 el evento no trae rawPath (trae path y httpMethod). Tu handler leerá undefined donde esperaba la ruta: el contrato del evento cambió por un default.">Falla, porque el evento llega en formato viejo</button></li>
+    <li><button data-correct="false" data-why="validate comprueba sintaxis y tipos del HCL, no la compatibilidad entre el formato del evento y lo que tu código espera. Esa frontera no la ve ninguna herramienta de Terraform.">Avisa, porque validate detecta ese contrato de evento</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../lessons/0008-la-puerta-publica.html">Lección 08 — la puerta pública</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html">Doc oficial de HTTP APIs</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> Quedan fuera a propósito: los authorizers JWT y Lambda (llegan con el
+    proyecto 03), los dominios propios con ACM (proyecto 05) y las integraciones directas con
+    servicios AWS sin Lambda en medio — que una ruta escriba en SQS o en DynamoDB ella sola.
+    Si alguna te pica ya, pídemela y la abrimos sobre tu acortador.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

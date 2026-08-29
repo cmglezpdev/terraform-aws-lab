@@ -52,7 +52,11 @@ pago por uso y con tu volumen es prácticamente cero.
 | 05 | [Tu código, ejecutándose en AWS](./lessons/0005-tu-codigo-en-aws.html) | 01 | [Lambda](./reference/aws-lambda.html), CloudWatch Logs |
 | 06 | [El zip no es tu repositorio](./lessons/0006-el-zip-no-es-tu-repositorio.html) | 01 | [Lambda](./reference/aws-lambda.html#capacidades-2026) · [TypeScript en Lambda](./reference/typescript-lambda.html) |
 | 07 | [La memoria del acortador](./lessons/0007-la-memoria-del-acortador.html) | 01 | [DynamoDB](./reference/aws-dynamodb.html) |
-| 08 | _La puerta pública_ (pendiente) | 01 | API Gateway HTTP |
+| 08 | [La puerta pública](./lessons/0008-la-puerta-publica.html) | 01 | [API Gateway](./reference/aws-apigateway.html) |
+| 09 | _La segunda función_ (pendiente) | 01 | — (`for_each`, `GET /{code}`, 301) |
 
 La lección 06 se insertó el 2026-08-25, a petición suya, entre el cerebro y la memoria: capas,
 una dependencia real (`zod`) y tests. La memoria y la puerta corren un número cada una.
+La lección 08 se partió el 2026-08-28: la puerta y el cambio de protocolo del handler llenan
+la sesión, así que la segunda Lambda y el `for_each` prometidos pasan a la 09 — la propia
+lección lo dice. El proyecto 01 se completa con la 09.

@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 08 · La puerta pública</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 08 · Proyecto <code>01-serverless-api</code></p>
+  <h1>La puerta pública</h1>
+  <p class="deck">Tu acortador tiene cerebro y memoria, pero vive encerrado: solo tú puedes
+  invocarlo, con credenciales de AWS en la mano. Hoy le ponemos puerta a la calle — API
+  Gateway HTTP — y al hacerlo descubrimos dos cosas: que el evento que recibe tu handler
+  cambia de forma cuando cambia quien llama, y que existe una tercera clase de política IAM
+  que llevábamos sin nombrar desde la lección 05.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD — free tier 1 M req/mes; después, 1 USD por millón</span>
+    <span><b>Terraform</b> <code>aws_apigatewayv2_*</code> · <code>aws_lambda_permission</code></span>
+    <span><b>Node</b> el handler aprende a hablar HTTP</span>
+  </div>
+</header>
+
+<main>
+
+<div class="callout why">
+  <span class="callout-title">Hoy se cobra la apuesta — es el paso 0, no una nota al pie</span>
+  <p>Llevo dos lecciones pidiéndote las líneas <code>REPORT</code> y tengo una sola: la de la
+  lección 07 (<code>Init Duration: 172.83 ms</code>, con el SDK dentro — la vi en tu
+  <code>logtrail.txt</code>). La del «antes» sigue en CloudWatch, pero el grupo de logs
+  retiene <strong>7 días</strong>: las líneas de la lección 05 se borran alrededor del
+  <strong>31 de agosto</strong>. O la apuesta se resuelve hoy, o caduca sola. Así que el
+  primer comando de la lección va a eso.</p>
+</div>
+
+<h2>Primero, recupera</h2>
+<p>Tres cierres antes de abrir nada. De memoria primero; desplegar después.</p>
+
+<details class="recall">
+  <summary>La lección 05 te enseñó que un rol tiene <em>dos</em> políticas. ¿Cuáles, y hacia
+  dónde mira cada una?</summary>
+  <p>La del uniforme: <code>assume_role_policy</code> dice <strong>quién puede
+  ponérselo</strong> (mira hacia afuera — <code>lambda.amazonaws.com</code> en
+  <code>principals</code>), y las <code>aws_iam_role_policy</code> dicen <strong>qué puertas
+  abre</strong> (miran hacia adentro — <code>logs:PutLogEvents</code>,
+  <code>dynamodb:PutItem</code>). Guárdala fresca: hoy aparece una <em>tercera</em> clase de
+  política que no vive en ningún rol.</p>
+</details>
+
+<details class="recall">
+  <summary>¿Por qué la verificación de la lección 07 fue un <code>get-item</code> y no el 200
+  de la invocación?</summary>
+  <p>Porque la Lambda de la lección 05 también devolvía 200 y no guardaba nada. La respuesta
+  te dice que el código terminó; solo ir a buscar <strong>el efecto</strong> — el ítem, con
+  su clave — demuestra que pasó lo que crees. Hoy la regla se aplica dos veces: al
+  <code>curl</code> y a lo que hay detrás.</p>
+</details>
+
+<details class="recall">
+  <summary>«El default del provider no es tu default.» ¿Cuáles conoces ya?</summary>
+  <p>Dos: <code>aws_lambda_function</code> despliega en <code>x86_64</code> (20% más caro que
+  <code>arm64</code>) y <code>aws_dynamodb_table</code> factura en <code>PROVISIONED</code>
+  (por hora, esté o no en uso) si no dices nada. Hoy cae el tercero, y es más silencioso que
+  los otros dos: no encarece — <em>cambia el contrato de tu evento</em>.</p>
+</details>
+
+<div class="callout tf">
+  <span class="callout-title">Antes de tocar nada: amplía la política del proyecto 00</span>
+  <p>La lección 07 no te avisó de esto y tuviste que descubrirlo con un
+  <code>AccessDenied</code> — no se repite. Hoy estrenamos servicio, así que el usuario
+  <code>terraform</code> necesita su permiso <em>antes</em> del primer <code>plan</code>. En
+  <code>00-foundations/iam.tf</code>, añade una línea a la lista de <code>CourseServices</code>:</p>
+  <div class="code">
+    <div class="code-label"><span>00-foundations/iam.tf</span><span class="tag">una línea</span></div>
+<pre><code>  statement {
+    sid = "CourseServices"
+    actions = [
+      "budgets:*",
+      "sns:*",
+      "iam:*",
+      "lambda:*",
+      "dynamodb:*",
+<b>      "apigateway:*",</b>
+      "logs:*",
+      "sts:GetCallerIdentity"
+    ]
+    resources = ["*"]
+  }</code></pre>
+  </div>
+  <p>Y desde <code>00-foundations/</code>: <code>terraform apply</code>. Dato curioso para la
+  entrevista: las acciones de API Gateway no se llaman <code>CreateApi</code> ni
+  <code>DeleteRoute</code> — el espacio de nombres <code>apigateway:</code> usa verbos HTTP
+  (<code>apigateway:POST</code>, <code>apigateway:PATCH</code>…) contra ARNs que son rutas.
+  Con el comodín no lo notas, pero si algún día afinas esta política, ahí está la
+  sorpresa.</p>
+</div>
+
+<h2>Paso 0 — cobra la apuesta</h2>
+
+<ol class="steps">
+
+<li>
+<p>La predicción de la lección 06, por escrito: <em>multiplicar el zip por 134 (y luego por
+216, con el SDK) apenas movería el <code>Init Duration</code></em>. Pesca todas las líneas
+que quedan en el grupo:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>aws logs filter-log-events \
+  --log-group-name /aws/lambda/url-shortener-create-link \
+  --filter-pattern '"Init Duration"' \
+  --query 'events[].message' --output text</code></pre>
+</div>
+<p>Cada línea es un arranque en frío. Las más viejas (24–25 de agosto) corresponden al bundle
+de 584 B de la lección 05; la de 216 388 B ya la tenemos: <strong>172,83 ms</strong>. El
+criterio, fijado antes de mirar: si la diferencia entre el «antes» más viejo y el «después»
+es <strong>menor de 100 ms, la predicción se sostiene</strong>; si es mayor, perdí, y el
+trato era pasarnos a <code>zod/mini</code> — lo haremos en la lección 09. Si el comando ya no
+devuelve ninguna línea vieja, la apuesta <strong>se retira sin resolverse</strong> y lo
+apunto así: prometer y no medir a tiempo también es un resultado, y es culpa del que apostó,
+no del que retiene logs 7 días.</p>
+<p class="small"><b>Resuelta el 2026-08-29, con las líneas delante:</b> antes 145,09 ms (y
+91,08), después 172,83 ms — 27,74 ms de diferencia, la predicción <b>se sostiene</b> y
+<code>zod/mini</code> no hace falta. Con asterisco: la varianza entre arranques del mismo
+artefacto (91→145 el pequeño, 173→332 el grande) supera el umbral de 100 ms — el criterio
+comparaba muestras sueltas de una métrica ruidosa; un Init no es una medición, es una
+muestra. Bonus que salió de las mismas líneas: <code>Billed = Duration + Init</code> en las
+cuatro — el init <a
+href="https://aws.amazon.com/blogs/compute/aws-lambda-standardizes-billing-for-init-phase/">se
+cobra desde agosto de 2025</a>, diga lo que diga el tutorial que tengas delante.</p>
+<div class="callout aws">
+  <span class="callout-title">Por qué el zip casi no toca el Init</span>
+  <p>El <code>Init Duration</code> mide arrancar Node, cargar tu módulo y ejecutar el código
+  de nivel superior (tu <code>new DynamoDBClient()</code>, por ejemplo). Descargar y
+  descomprimir el zip ocurre <em>antes</em>, en una fase que el REPORT no desglosa y que con
+  200 KB es despreciable. Lo que sí mueve el Init es el <em>trabajo de importación</em>:
+  cuánto JavaScript hay que parsear y ejecutar al cargar. Por eso pasar de 584 B a 836 KB se
+  nota en decenas de milisegundos, no en segundos — y por eso la palanca real, si un día te
+  duele, es importar menos, no comprimir más.</p>
+</div>
+</li>
+
+</ol>
+
+<h2>Por qué hace falta una puerta</h2>
+
+<p>Tu función no es un servidor. No escucha en el puerto 443, no tiene proceso esperando, no
+tiene siquiera una IP. Es código dormido que AWS ejecuta cuando alguien con permiso dice
+<code>lambda:InvokeFunction</code> — y ese «alguien» has sido siempre tú, autenticado con
+<code>aws login</code>. Un navegador cualquiera no puede firmar esa llamada. Falta una pieza
+que viva en internet, escuche HTTPS de cualquiera, y traduzca cada petición a una invocación
+firmada. Esa pieza es API Gateway, y de paso te regala lo que un servidor tuyo te costaría
+mantener: TLS, throttling y — cuando toque — autenticación.</p>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía de un servicio</span>
+    <h2>Amazon API Gateway</h2>
+  </header>
+  <div class="anatomy-body">
+    <h3>Qué es</h3>
+    <p>El recepcionista de tu API: termina el TLS, lee método y ruta
+    (<code>POST /links</code>), y entrega la petición al backend configurado — empaquetada
+    como evento JSON si el backend es una Lambda. No ejecuta tu código: <strong>enruta,
+    filtra y traduce</strong>. Síncrono, con un corte que manda más que tu timeout: la
+    integración espera <strong>30 segundos como máximo</strong>, y no es ajustable.</p>
+
+    <h3>Los tipos que existen</h3>
+    <p>Tres productos bajo un nombre. <strong>HTTP API</strong> (2019): lo esencial — proxy a
+    Lambda, authorizer JWT, CORS — a 1 USD el millón; el punto de partida y tu caso.
+    <strong>REST API</strong> (2015): API keys, usage plans, caché, WAF, canary… a 3,50 USD
+    el millón — se elige cuando puedes <em>nombrar</em> la pieza que te falta.
+    <strong>WebSocket API</strong>: conexiones persistentes para tiempo real. En Terraform la
+    frontera se ve en el nombre del recurso: <code>aws_apigatewayv2_*</code> para HTTP y
+    WebSocket, <code>aws_api_gateway_*</code> (v1) para REST.</p>
+
+    <h3>Cuánto cuesta</h3>
+    <p><strong>1,00 USD por millón de peticiones</strong> (0,90 a partir de 300 M/mes),
+    medidas en incrementos de 512 KB. En reposo, cero: la puerta puede quedarse desplegada.
+    El free tier — 1 M de peticiones/mes — <strong>caduca a los 12 meses de la cuenta</strong>,
+    a diferencia del de Lambda o DynamoDB. Tus pruebas de hoy: menos de una milésima de
+    céntimo. Verificado el 2026-08-28 contra la Price List API.</p>
+
+    <p class="small">La comparativa completa HTTP/REST, los límites (10 MB de payload, 300
+    rutas), cuándo un ALB gana por coste y las cuatro trampas de Terraform:
+    <a href="../reference/aws-apigateway.html">ficha completa de API Gateway</a>.</p>
+  </div>
+</section>
+
+<h2>El evento cambia de forma</h2>
+
+<p>Hasta hoy invocabas la función a pelo, y el evento <em>era</em> tu payload:
+<code>{"url": "…"}</code>. Con la puerta en medio, quien invoca es API Gateway, y lo que
+entrega es otra cosa: un <strong>sobre HTTP</strong> — el <em>payload format 2.0</em> — con
+la ruta, el método, las cabeceras… y tu JSON dentro, en <code>body</code>,
+<strong>como string sin parsear</strong>:</p>
+
+<div class="code">
+  <div class="code-label"><span>lo que recibe ahora tu handler</span><span class="tag">recortado</span></div>
+<pre><code>{
+  "version": "2.0",
+  "routeKey": "POST /links",
+  "rawPath": "/links",
+  "headers": { "content-type": "application/json" },
+  "requestContext": { "http": { "method": "POST", "sourceIp": "83.44…" } },
+  "body": "{\"url\": \"https://developer.hashicorp.com/\"}",
+  "isBase64Encoded": false
+}</code></pre>
+</div>
+
+<p>¿Y quién debe saberlo? Piensa en la frase de AWS de la lección 06 — <em>si para probar una
+función necesitas AWS, la función sabe demasiado sobre AWS</em>. El sobre 2.0 es puro
+protocolo de invocación: ni <code>domain/</code> ni <code>application/</code> tienen por qué
+enterarse de que ahora hay HTTP delante. El único fichero cuyo trabajo es hablar con el
+mundo exterior es el handler — la <strong>raíz de composición</strong> se gana hoy un segundo
+apellido: <strong>adaptador de protocolo</strong>. Abre el sobre, y traduce lo que salga —
+valor o error — a lo que HTTP espera:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/handler.ts</span><span class="tag">reemplaza entero</span></div>
+<pre><code>import { z } from "zod";
+import { createLink } from "./application/create-link.ts";
+import { InvalidTargetUrlError } from "./domain/errors.ts";
+import { CodeCollisionError } from "./application/link-repository.ts";
+import { DynamoDbLinkRepository } from "./infrastructure/dynamodb-link-repository.ts";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+
+// El evento ya no es el payload desnudo: es el sobre HTTP del formato 2.0
+// de API Gateway, y el body viaja dentro como string sin parsear.
+interface HttpEvent {
+  body?: string;
+}
+
+interface HttpResponse {
+  statusCode: number;
+  headers: { "content-type": "application/json" };
+  body: string;
+}
+
+const tableName = process.env.TABLE_NAME;
+if (!tableName) throw new Error("Missing required environment variable TABLE_NAME");
+
+const repository = new DynamoDbLinkRepository(new DynamoDBClient({}), tableName);
+
+const json = (statusCode: number, body: unknown): HttpResponse =&gt; ({
+  statusCode,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+export const handler = async (event: HttpEvent): Promise&lt;HttpResponse&gt; =&gt; {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(event.body ?? "");
+  } catch {
+    return json(400, { error: "body must be valid JSON" });
+  }
+
+  try {
+    const link = await createLink(payload, repository);
+    console.log(JSON.stringify({ msg: "link created", ...link }));
+    return json(201, link);
+  } catch (error) {
+    if (error instanceof InvalidTargetUrlError) {
+      console.error(JSON.stringify({ msg: "invalid target url", reason: error.reason }));
+      return json(400, { error: error.reason });
+    }
+    if (error instanceof z.ZodError) {
+      console.error(JSON.stringify({ msg: "malformed payload", issues: error.issues }));
+      return json(400, { error: 'payload must be {"url":"http(s)://..."}' });
+    }
+    if (error instanceof CodeCollisionError) {
+      console.error(JSON.stringify({ msg: "code collision after retries", code: error.code }));
+    }
+
+    // Todo lo demás es un 500: se relanza para que API Gateway lo cuente
+    // como error y el REPORT de CloudWatch lo marque como fallo.
+    throw error;
+  }
+};</code></pre>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">El diff vuelve a ser el juez</span>
+  <p>Mira lo que <em>no</em> vas a tocar: ni <code>domain/</code>, ni
+  <code>application/</code>, ni el adaptador de DynamoDB, ni un solo test. En la lección 07
+  entró una base de datos y el dominio no se enteró; hoy cambia <strong>el protocolo entero
+  de invocación</strong> y solo se mueve un fichero — el que tiene ese trabajo. Cuando
+  termines: <code>git diff --stat</code>, y cuenta los ficheros. Esa es la promesa de las
+  capas, cumplida dos veces seguidas con dos cambios de naturaleza distinta.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Los errores ya no «revientan»: se traducen</span>
+  <p>Antes, URL inválida = excepción = la invocación falla, y quien llamaba veía el error
+  crudo. Por HTTP eso sería un 500 mintiendo: la culpa es del cliente, y su código es
+  <strong>400</strong>. Fíjate en la asimetría: los errores <em>esperados</em> (URL mala,
+  payload roto) se capturan y traducen; la colisión agotada y lo imprevisto se
+  <strong>relanzan</strong> — un 500 de verdad debe seguir contando como fallo en las
+  métricas, no disfrazarse de respuesta. Y el <code>ok.json</code>/<code>malo.json</code> de
+  las lecciones anteriores ya no sirven tal cual: el payload ahora viaja <em>dentro</em> del
+  sobre. No los borres aún — <code>malo.json</code> tiene un papel en la verificación.</p>
+</div>
+
+<p>Comprueba en local antes de desplegar — tests y humo, con la regla de la lección 07: el
+humo de un bundle ESM se ejecuta <strong>desde un <code>.mjs</code></strong>, jamás desde
+<code>node -e</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>pnpm run typecheck &amp;&amp; pnpm run test        # 14 en verde, sin tocar ninguno
+pnpm run build
+
+cat &gt; smoke.mjs &lt;&lt;'EOF'
+process.env.TABLE_NAME = "smoke-table";
+const { handler } = await import("./dist/index.mjs");
+const ev = (body) =&gt; ({ version: "2.0", routeKey: "POST /links", body });
+console.log(await handler(ev("esto no es json")));                      // 400
+console.log(await handler(ev(JSON.stringify({ url: "ftp://x" }))));     // 400
+EOF
+node smoke.mjs &amp;&amp; rm smoke.mjs</code></pre>
+</div>
+
+<p>Los dos casos malos responden <code>{statusCode: 400}</code> sin acercarse a AWS. El caso
+bueno no se puede probar aquí — necesita la tabla — y esa es exactamente la frontera de la
+lección 07: el handler conoce AWS, su prueba es el despliegue.</p>
+
+<h2>La puerta, en Terraform</h2>
+
+<p>Cinco recursos nuevos, un fichero nuevo — <code>http-api.tf</code>, siguiendo tu criterio
+de partir por componentes: todo lo que ES la puerta, junto, en el orden en que una petición
+lo atraviesa. Terraform los fusionará igual; el orden es para ti.</p>
+
+<div class="code">
+  <div class="code-label"><span>http-api.tf</span><span class="tag">nuevo fichero</span></div>
+<pre><code># Todo lo que ES la puerta pública. Se lee como el viaje de una petición:
+# la puerta, el stage que la publica, el enchufe con la función, la ruta
+# que los une y el permiso que lo hace legal.
+
+# --- La puerta ---------------------------------------------------
+
+resource "aws_apigatewayv2_api" "shortener" {
+  name          = local.name
+  protocol_type = "HTTP"
+}
+
+# --- El stage: la puerta no existe hasta que se publica ----------
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.shortener.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+# --- El enchufe: la puerta sabe invocar a create_link ------------
+
+resource "aws_apigatewayv2_integration" "create_link" {
+  api_id           = aws_apigatewayv2_api.shortener.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.create_link.invoke_arn
+
+  # Hacia la Lambda siempre es POST, sea cual sea el método del cliente.
+  integration_method = "POST"
+
+  # El default del provider es "1.0". La consola usa "2.0".
+  payload_format_version = "2.0"
+}
+
+# --- La ruta: qué peticiones entran por este enchufe -------------
+
+resource "aws_apigatewayv2_route" "create_link" {
+  api_id    = aws_apigatewayv2_api.shortener.id
+  route_key = "POST /links"
+  target    = "integrations/${aws_apigatewayv2_integration.create_link.id}"
+}
+
+# --- El permiso: la Lambda acepta llamadas de ESTA api -----------
+
+resource "aws_lambda_permission" "http_api_create_link" {
+  statement_id  = "AllowInvokeFromHttpApi"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.create_link.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.shortener.execution_arn}/*/*"
+}</code></pre>
+</div>
+
+<p>Cuatro piezas de teoría escondidas ahí, de mayor a menor:</p>
+
+<div class="callout aws">
+  <span class="callout-title">La tercera clase de política — completa el mapa de IAM</span>
+  <p>Desde la lección 05 tienes dos: la de confianza (quién se pone el uniforme) y las del
+  rol (qué puertas abre). <code>aws_lambda_permission</code> es la tercera:
+  una <strong>política basada en recursos</strong> — no vive en ningún rol, vive
+  <em>pegada a la función</em>, y responde la pregunta inversa: <strong>¿quién puede
+  invocarme a mí?</strong> API Gateway no asume ningún rol tuyo para llamar a tu Lambda
+  (compáralo con la pregunta 2 de las tres de siempre): se presenta como el servicio
+  <code>apigateway.amazonaws.com</code>, y es la función quien lo deja pasar — solo desde
+  los ARNs de <code>source_arn</code>, para que no valga <em>cualquier</em> API de
+  <em>cualquier</em> cuenta. El mapa queda cerrado: identidad (rol y sus políticas),
+  confianza (quién asume), recurso (quién me toca).</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El tercer default traicionero — y este no cuesta dinero, cuesta el contrato</span>
+  <p><code>payload_format_version</code>: si no lo escribes, el provider manda
+  <code>"1.0"</code> — el formato de 2019, con <code>httpMethod</code> y sin
+  <code>rawPath</code> — mientras la consola crea todo con 2.0. Tu handler espera el sobre
+  2.0; con el default recibiría otro contrato y leería <code>undefined</code> donde esperaba
+  datos. Ni <code>validate</code> ni <code>plan</code> pueden verlo: la compatibilidad entre
+  el evento y tu código es una frontera que ninguna herramienta de Terraform cruza. Tras
+  <code>x86_64</code> y <code>PROVISIONED</code>, tercera vez: <em>el default del provider no
+  es tu default</em>.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El fallo silencioso de hoy: 500 con los logs vacíos</span>
+  <p>Borra mentalmente <code>aws_lambda_permission</code> y repasa qué pasaría: el
+  <code>apply</code> funciona, la URL existe, y el <code>curl</code> devuelve
+  <code>{"message":"Internal Server Error"}</code>… con <strong>cero líneas en los logs de la
+  función</strong> — ni <code>START</code> siquiera, porque la función nunca llegó a
+  invocarse. Es el cuarto de la colección (el ARN sin <code>:*</code>, el sourcemap en el
+  zip, el upsert de <code>PutItem</code>): fallos que no gritan donde estás mirando. La
+  pista para diagnosticarlo es justo la ausencia: <em>log vacío = el problema está antes de
+  la función</em>.</p>
+</div>
+
+<div class="callout tf">
+  <span class="callout-title">Dos detalles del stage y el método</span>
+  <p><strong><code>auto_deploy</code></strong>: en API Gateway, declarar rutas no basta — hay
+  que <em>publicarlas</em> a un stage (herencia de REST API, donde cada despliegue es un acto
+  manual). Con <code>auto_deploy = true</code> en el stage <code>$default</code>, cada cambio
+  se publica solo y la URL queda limpia, sin <code>/prod</code> ni sufijos.
+  <strong><code>integration_method = "POST"</code></strong>: es el método del tramo
+  puerta→Lambda, no el del cliente — invocar una Lambda por su API siempre es un POST. No lo
+  confundas con el <code>POST</code> de <code>route_key</code>: ese sí es el del cliente, y
+  que hoy coincidan es casualidad. En la lección 09, <code>GET /{code}</code> seguirá
+  integrándose con <code>integration_method = "POST"</code>.</p>
+</div>
+
+<p>Falta enseñarle la URL al mundo — y a ti. En <code>outputs.tf</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>outputs.tf</span><span class="tag">añade al final</span></div>
+<pre><code>output "api_url" {
+  description = "public base URL of the HTTP API"
+  value       = aws_apigatewayv2_stage.default.invoke_url
+  type        = string
+}</code></pre>
+</div>
+
+<h2>Despliega y demuéstralo</h2>
+
+<ol class="steps">
+
+<li>
+<p><code>pnpm run build</code> ya está hecho; ahora <code>terraform plan</code>. Léelo antes
+de mirar el resumen: debe salir <strong>5 a crear</strong> (api, stage, integración, ruta,
+permiso) y <strong>1 a modificar</strong> — la función, porque el
+<code>source_code_hash</code> del zip cambió con el handler nuevo. Si ves algo más,
+párate: ¿qué es y por qué?</p>
+</li>
+
+<li>
+<p><code>terraform apply</code>, y la prueba de fuego — el <code>curl</code> ya no lleva
+credenciales, ni perfil, ni firma. Cualquiera en internet puede hacerlo; hazlo tú
+primero:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>API_URL=$(terraform output -raw api_url)
+
+curl -s -X POST "$API_URL/links" \
+  -H 'content-type: application/json' \
+  -d '{"url": "https://developer.hashicorp.com/"}' \
+  -o ok.json -w 'HTTP %{http_code}\n'
+# → HTTP 201
+
+node -p 'require("./ok.json")'</code></pre>
+</div>
+<p>Si tienes el móvil a mano, repite el <code>curl</code> desde ahí con los datos móviles:
+misma URL, sin AWS por ninguna parte. Eso — una petición anónima desde otra red — es lo que
+ninguna invocación con <code>aws lambda invoke</code> podía demostrar.</p>
+</li>
+
+<li>
+<p>El 201 es la respuesta; ve a buscar el efecto, como siempre:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">el efecto, no la respuesta</span></div>
+<pre><code>CODE=$(node -p 'require("./ok.json").code')
+
+aws dynamodb get-item \
+  --table-name "$(terraform output -raw table_name)" \
+  --key "{\"code\": {\"S\": \"$CODE\"}}"</code></pre>
+</div>
+</li>
+
+<li>
+<p>Ahora los contratos de error. El sobre por fuera, tu <code>malo.json</code> por dentro —
+y un body que ni siquiera es JSON:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">los 400</span></div>
+<pre><code>curl -s -X POST "$API_URL/links" -d 'esto no es json' -w '\nHTTP %{http_code}\n'
+# → {"error":"body must be valid JSON"}  HTTP 400
+
+curl -s -X POST "$API_URL/links" \
+  -H 'content-type: application/json' \
+  -d '{"url": "ftp://archivo.viejo"}' -w '\nHTTP %{http_code}\n'
+# → HTTP 400, con el motivo del dominio
+
+curl -s "$API_URL/lo-que-sea" -w '\nHTTP %{http_code}\n'
+# → {"message":"Not Found"}  HTTP 404 — lo pone la puerta: ninguna ruta casa,
+#   tu función ni se invoca (compruébalo luego en los logs: no hay START)</code></pre>
+</div>
+</li>
+
+<li>
+<p>Y la pieza invisible del día, la política basada en recursos. Terraform la escribió;
+léela tú:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">la tercera política, con tus ojos</span></div>
+<pre><code>aws lambda get-policy \
+  --function-name url-shortener-create-link \
+  --query Policy --output text | node -p 'JSON.stringify(JSON.parse(require("fs").readFileSync(0, "utf8")), null, 2)'</code></pre>
+</div>
+<p>Ahí está el statement <code>AllowInvokeFromHttpApi</code>: <code>Principal</code> =
+<code>apigateway.amazonaws.com</code>, <code>Condition</code> con el ARN de <em>tu</em> API.
+Es el mismo documento que verías en la consola bajo «Resource-based policy» — pero tú sabes
+de qué recurso de Terraform salió y podrías recrearlo desde cero.</p>
+</li>
+
+<li>
+<p>Cierra la sesión con el checklist:</p>
+<ul class="checklist" data-key="l08-verify">
+  <li>La apuesta quedó resuelta (o retirada) con las líneas <code>REPORT</code> delante.</li>
+  <li>La política del proyecto 00 tiene <code>apigateway:*</code> y se aplicó antes que nada.</li>
+  <li><code>pnpm run test</code>: 14 en verde sin tocar ni un test — solo cambió el handler.</li>
+  <li>El <code>plan</code> contaba 5 a crear y 1 a modificar, y sabes por qué cada uno.</li>
+  <li>El <code>curl</code> anónimo devolvió 201 y el <code>get-item</code> encontró el ítem.</li>
+  <li>El body no-JSON y la URL <code>ftp://</code> devolvieron 400, no 500.</li>
+  <li>Has leído la resource-based policy con <code>get-policy</code> y sabes quién la puso.</li>
+  <li><code>git diff --stat</code>: en <code>app/src/</code> solo se movió <code>handler.ts</code>.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que tu API es <strong>pública de verdad</strong>: una petición anónima, desde
+    cualquier red, sin una credencial de AWS en ningún sitio — y el ítem apareció en la
+    tabla.</li>
+    <li>Que conoces <strong>las tres clases de política</strong> de IAM y puedes señalar
+    dónde vive cada una: el uniforme, las llaves del rol, y la política pegada al recurso —
+    leída con <code>get-policy</code>, no creída de oídas.</li>
+    <li>Que el handler es la <strong>única pieza que habla el protocolo</strong>: cambió la
+    forma de invocar el sistema entero y el diff tocó un fichero.</li>
+    <li>Que tus errores tienen <strong>contrato HTTP</strong>: 400 para lo que es culpa del
+    cliente, 500 auténtico para lo que es culpa tuya, y sabes por qué el 500 se relanza en
+    vez de fabricarse.</li>
+    <li>Que puedes explicar el tercer «default del provider» y qué herramienta lo detectaría:
+    ninguna — solo saberlo.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>El acortador aún no acorta.</strong> <code>GET /{code}</code> con su 301 no
+    existe: guardas enlaces que nadie puede seguir. Lección 09.</li>
+    <li><strong>La puerta está abierta de par en par.</strong> Sin autenticación, cualquiera
+    que descubra la URL puede llenar tu tabla de enlaces. Hoy es una decisión consciente: la
+    URL contiene un ID aleatorio, el presupuesto canario vigila, y los authorizers llegan
+    con el proyecto 03. Decidirlo a sabiendas ≠ no saber que pasa.</li>
+    <li><strong>El throttling es el de la cuenta</strong> (10 000 req/s): no has configurado
+    ninguno propio. Está bien así hoy, pero que no se te olvide que es un default
+    compartido por todas tus APIs de la región.</li>
+    <li><strong>Ningún navegador ha llamado aún con <code>fetch</code>.</strong> El
+    <code>curl</code> no dispara CORS; una web desde otro origen sería rechazada por el
+    preflight. El día que el acortador tenga frontend, <code>cors_configuration</code>
+    espera en la ficha.</li>
+  </ul>
+</div>
+
+<p class="small">El proyecto sigue desplegado, como siempre, y sigue costando cero en
+reposo: la puerta cobra por petición, la tabla por uso, la función por invocación. El día
+del derribo completo: <code>terraform destroy</code>.</p>
+
+<div class="callout why">
+  <span class="callout-title">La lección 07 anunció más de lo que hoy entrega — a propósito</span>
+  <p>El plan decía: puerta <em>y</em> segunda Lambda con su <code>for_each</code>. Se parte
+  (regla de la lección 05 de este curso: una lección, un tema): el cambio de protocolo del
+  handler más las cinco piezas de la puerta ya llenan los 40 minutos, y el
+  <code>for_each</code> merece llegar cuando haya <em>dos</em> funciones de verdad que
+  agrupar, no meterse con calzador en el minuto 38. La lección 09 recoge exactamente eso:
+  la función que redirige, su llave de <code>GetItem</code>, el mapa de funciones — y el
+  proyecto 01 completo.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">En la lección 09 añadirás la ruta <code>GET /{code}</code>. En su
+  integración con la Lambda de redirección, ¿qué pondrás en
+  <code>integration_method</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="GET es el método del cliente contra la ruta — vive en route_key. El tramo puerta→Lambda es otro viaje distinto: invocar una Lambda por su API es siempre un POST, pida lo que pida el cliente.">GET, el método que usará el cliente</button></li>
+    <li><button data-correct="true" data-why="Exacto: integration_method describe el tramo puerta→Lambda, y la API de invocación de Lambda es POST siempre. Que en la lección 08 coincidiera con el POST del cliente era casualidad, no regla.">POST, el método que usa la invocación</button></li>
+    <li><button data-correct="false" data-why="ANY existe, pero como route_key comodín para el cliente (ANY /ruta) — no describe el tramo hacia la Lambda. Además dejar 'cualquiera' donde la respuesta es 'siempre POST' es renunciar a entender el viaje.">ANY, el método que acepta cualquier caso</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Un compañero borra <code>aws_lambda_permission</code> «porque el rol de
+  la función ya tiene permisos». Aplica, y el <code>curl</code> da 500 con logs vacíos.
+  ¿Cuál era el error de su razonamiento?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Eso es. Las políticas del rol miran hacia afuera: qué puede hacer LA FUNCIÓN (escribir logs, PutItem). Quién puede invocar A la función es la pregunta inversa, y la responde la resource-based policy — la tercera clase, pegada a la función.">El rol dice qué hace, no quién llama</button></li>
+    <li><button data-correct="false" data-why="No hay ningún rol que 'darle' a API Gateway aquí: en el patrón AWS_PROXY no asume identidades tuyas — se presenta como servicio y es la función quien lo deja pasar por su propia política.">Faltó darle un rol asumible a API Gateway</button></li>
+    <li><button data-correct="false" data-why="El orden del apply no es el problema: aunque todo se cree a la vez, sin el recurso aws_lambda_permission la política basada en recursos simplemente no existe, se aplique en el orden que se aplique.">Los recursos se aplicaron en un orden incorrecto</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Tu handler hace <code>JSON.parse(event.body ?? "")</code>. Alguien
+  propone «simplificar»: que <code>createLink</code> reciba el evento entero y parsee él el
+  body. ¿Qué se rompería?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="Funcionar, funcionaría — zod puede validar lo que le eches. Lo roto no es el comportamiento de hoy: es la arquitectura que hace barato el cambio de mañana. Esa diferencia es la lección entera de las capas.">Nada, porque zod validaría igual el sobre</button></li>
+    <li><button data-correct="true" data-why="Exacto: application/ pasaría a conocer el sobre 2.0 de API Gateway — protocolo de invocación puro. El día que ese caso de uso se llame desde SQS o desde un test, el sobre HTTP fingido tendría que fabricarse. La frontera es: el protocolo muere en el handler.">La capa de aplicación conocería el protocolo</button></li>
+    <li><button data-correct="false" data-why="Los tests no se romperían: se ADAPTARÍAN, fabricando sobres HTTP falsos para probar lógica que no es HTTP. Ese olor — tests que montan un disfraz ajeno a lo que prueban — es el síntoma, no el daño de fondo.">Los tests existentes dejarían todos de compilar</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 09 — la segunda función.</strong> La que redirige:
+  <code>GET /{code}</code>, el <code>pathParameters</code> del sobre 2.0, el 301 con
+  <code>Location</code>, y su rol con una sola llave — <code>GetItem</code>, aplicando
+  «agrupa por permisos» de verdad. Y el refactor prometido: <code>for_each</code> sobre un
+  mapa de funciones, para que <code>create-link.tf</code> y su gemela no sean dos copias que
+  divergen. Con eso, el proyecto 01 queda completo y usable desde un navegador.</p>
+  <p class="small">Pendientes que arrastramos: el <strong>post-mortem del state</strong> de
+  la lección 03, el <strong>MFA del usuario <code>terraform</code></strong>, CI para los
+  tests (proyecto 07) — y <code>zod/mini</code>, solo si hoy la apuesta se perdió.</p>
+  <div class="nav-links">
+    <a href="./0007-la-memoria-del-acortador.html">← Lección 07</a>
+    <a href="../reference/aws-apigateway.html">Referencia: API Gateway</a>
+    <a href="../reference/aws-lambda.html">Referencia: Lambda</a>
+    <a href="../reference/terraform-cli.html">Chuleta: CLI y HCL</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Tres cosas: las líneas <code>REPORT</code> del paso 0 con tu
+    veredicto de la apuesta — se acabó el fiar; el <code>curl</code> del 201 con su
+    <code>get-item</code>; y la política que te devolvió <code>get-policy</code>. Y una
+    pregunta para pensar, no para buscar: si mañana quisieras que <em>solo tu frontend</em>
+    pudiera crear enlaces pero <em>cualquiera</em> pudiera seguirlos, ¿en cuál de las tres
+    clases de política intervendrías — o en ninguna? Defiende la respuesta.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

@@ -29,12 +29,12 @@ usarlo, y cómo se escribe en Terraform. Todos terminan con preguntas de comprob
 | [AWS IAM](./aws-iam.html) | Gratis, siempre | 00 y todos los demás |
 | [AWS Lambda](./aws-lambda.html) | Por uso, cero en reposo | 01, 02, 03 |
 | [Amazon DynamoDB](./aws-dynamodb.html) | Por uso, cero en reposo | 01, 02, 03 |
+| [Amazon API Gateway](./aws-apigateway.html) | Por uso, cero en reposo | 01, 03 |
 
 La ficha de Lambda incluye además [las dos capacidades de *Custom settings*](./aws-lambda.html#capacidades-2026)
 —*durable execution* y *EC2 capacity provider*— y por qué ninguna encaja en este curso.
 
-_Pendientes: API Gateway, SQS, EventBridge, VPC, ALB, RDS, CloudFront,
-Bedrock, EKS._
+_Pendientes: SQS, EventBridge, VPC, ALB, RDS, CloudFront, Bedrock, EKS._
 
 ## Cómo se generan
 
