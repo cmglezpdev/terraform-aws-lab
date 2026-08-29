@@ -45,10 +45,10 @@ export const handler = async (event: HttpEvent): Promise<HttpResponse> => {
       return json(400, { message: "invalid target url", reason: error.reason });
     } else if (error instanceof z.ZodError) {
       console.error(JSON.stringify({ msg: "malformed payload", issues: error.issues }));
-      json(400, { message: "malformed payload", issues: error.issues });
+      return json(400, { message: "malformed payload", issues: error.issues });
     } else if (error instanceof CodeCollisionError) {
       console.error(JSON.stringify({ msg: "code collision after retries", code: error.code }));
-      json(400, { message: "code collision after retries", code: error.code });
+      return json(400, { message: "code collision after retries", code: error.code });
     }
     
     // Todo lo demás es un 500: se relanza para que API Gateway lo cuente
