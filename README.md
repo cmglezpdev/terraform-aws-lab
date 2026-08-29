@@ -56,3 +56,5 @@ Este repositorio es también un curso. El material está en:
 - [`reference/`](./reference/README.md) — chuletas imprimibles y una ficha por servicio AWS
 - [`GLOSSARY.md`](./GLOSSARY.md) — vocabulario canónico
 - [`RESOURCES.md`](./RESOURCES.md) — fuentes de confianza
+- [`practice/`](./practice/README.md) — consolidación sin supervisión: ejercicios para
+  resolver por tu cuenta (con revisión posterior) y un cuestionario de práctica por servicio
