@@ -306,6 +306,57 @@ rechaza avanzar por sentir que el ejemplo es de juguete — hay que atenderlo, n
   en la ficha para cuando haya frontend. La API queda **abierta a sabiendas** — la pieza que
   falta se llama authorizer y llega en el proyecto 03.
 
+## Lección 09 — la segunda función (2026-08-29, LR-0014)
+
+- **Avería real como paso 0**: su `handler.ts` retranscrito perdió dos `return` (ramas
+  `ZodError`/`CodeCollisionError` → 500). Confirmada contra su bundle construido antes de
+  publicar. La lección da el síntoma y pistas; el diagnóstico es suyo. Heurística nueva,
+  inversa a la de la 08: **500 con logs = el fallo está dentro**. Al revisar su salida,
+  comprobar que entendió por qué su humo no lo veía (no cubría el JSON con forma mala).
+- **Vocabulario nuevo**: el puerto pertenece al consumidor (`LinkFinder` segregado, no
+  ensanchar `LinkRepository`); la ausencia no grita (`GetItem` sin `Item` = 200 vacío,
+  quinto fallo silencioso); «esto lo demuestra el test, no el curl» (el no-efecto solo lo ve
+  el fake, `lookups.length === 0`).
+- **301 elegido como decisión defendible**: cacheado para siempre; imposible corregir
+  destinos o contar clics repetidos (los comerciales usan 302/307 por analítica). Si algún
+  día pide contador de clics: el 301 es el obstáculo, no los permisos.
+- **`smoke.mjs` es ya script permanente del repo** (`pnpm run smoke`, 6 contratos, dos
+  bundles); `malo.json` jubilado — pendiente de LR-0013 resuelto. 22 tests.
+- **Medido**: `create-link.mjs` 836 297 B, `get-link.mjs` 505 748 B — la diferencia es zod
+  casi al byte. Reutilizar como prueba de «cada artefacto pesa lo que su handler sabe».
+- **Trampa frontera código↔infra**: renombrar el bundle exige `handler =
+  "create-link.handler"`; si se olvida, `apply` triunfa y la invocación da
+  `Runtime.ImportModuleError`. Mismo género que `payload_format_version`.
+- **El `for_each` se aplazó por segunda vez, declarado** con motivo nuevo: hacía falta que
+  los gemelos existieran (hoy se siente el copia-pega) y el paso a `for_each` cambia
+  direcciones en el state → plan destruir-y-recrear → **lección 10: bloques `moved`, «el
+  refactor invisible»**, quiz 1 lo deja preparado. `get-link.tf` declara en su comentario
+  que la duplicación es deliberada. No aplazarlo una tercera vez.
+- Rutas verificadas contra la doc: variable = un segmento; específica > variable >
+  `{proxy+}` > `$default`. Los tres 404 tienen dos autores (dos suyos, uno de la puerta).
+- La pregunta del cierre (por qué el bundle lector pesa 330 KB menos) tiene la respuesta
+  buena en LR-0014 — exige nombrar el reparto por consumidor, no solo «no usa zod».
+
+### Su implementación (2026-08-29, comiteada el mismo día) — divergencias a seguir
+
+Hizo la lección por su cuenta antes de que se revisara, con variaciones propias, casi todas
+buenas: `Link` unificado en `domain/link.ts` (deduplicación que la lección dejó pasar a
+propósito), adaptador `DynamoDbLinkFinder` en clase separada (válido; la lección usaba una
+clase con dos puertos), y el fix del paso 0 lo encontró y comiteó solo. Tres cosas abiertas:
+
+1. **Eligió 302, no 301** en `get-link.ts`. Divergencia legítima (corregible + contable) —
+   pero hay que pedirle que la defienda con los dos precios del 301 delante. Si la defiende
+   bien, es señal de madurez; actualizar el README del proyecto con su porqué.
+2. **`CodeCollisionError` → 400** en su `create-link.ts`. La lección argumenta 500 (agotar
+   reintentos no es culpa del cliente). Preguntarle de quién es la culpa en ese caso; no
+   corregido a propósito.
+3. **Imports muertos en `handlers/get-link.ts`** (z, createLink, DynamoDbLinkRepository…
+   restos del copia-pega): su `get-link.mjs` pesa 815 KB — igual que el gemelo — y la
+   pregunta del cierre de la lección no funciona con su build. `tsc` no avisa porque
+   `noUnusedLocals` está comentado en su tsconfig. Señalado como ejercicio al comitear;
+   verificar en la próxima sesión que el bundle bajó a ~500 KB (y valorar activar
+   `noUnusedLocals`).
+
 ## Ideas para futuras lecciones
 
 - El `plan` como herramienta de lectura: enseñarle a leer un diff de 200 líneas.

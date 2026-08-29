@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 09 · La segunda función</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 09 · Proyecto <code>01-serverless-api</code></p>
+  <h1>La segunda función</h1>
+  <p class="deck">Tu acortador guarda enlaces que nadie puede seguir. Hoy nace la función que
+  redirige — <code>GET /{code}</code>, un 301 y ninguna línea de negocio nueva — y con ella
+  la primera decisión de arquitectura serverless de verdad: ¿por qué <em>dos</em> funciones y
+  no una? La respuesta es la heurística de la lección 06 aplicada por primera vez: se agrupa
+  por permisos. Pero antes de construir nada, hay una avería desplegada en producción. La
+  pusiste tú, y tu humo no la vio.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD — todo pago por uso, en reposo cero</span>
+    <span><b>Terraform</b> el gemelo <code>get-link.tf</code> · ruta <code>GET /{code}</code></span>
+    <span><b>Node</b> dos entradas, dos bundles, un humo que no miente</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+<p>Tres cierres, de memoria, antes de tocar el teclado.</p>
+
+<details class="recall">
+  <summary>Hoy crearás la integración de <code>GET /{code}</code>. ¿Qué va en su
+  <code>integration_method</code>, y por qué no es lo mismo que el método de
+  <code>route_key</code>?</summary>
+  <p><code>POST</code>. El <code>GET</code> de <code>route_key</code> es el tramo
+  cliente→puerta; <code>integration_method</code> describe el tramo puerta→Lambda, e invocar
+  una Lambda por su API es siempre un POST. En la lección 08 los dos tramos coincidían por
+  casualidad; hoy por fin se separan y se ve que son dos viajes distintos.</p>
+</details>
+
+<details class="recall">
+  <summary>Un <code>curl</code> devuelve 500 y el grupo de logs de la función está vacío
+  — ni <code>START</code>. ¿Dónde buscas?</summary>
+  <p><em>Log vacío = el problema está antes de la función.</em> La función nunca se invocó:
+  el sospechoso es el permiso de invocación (<code>aws_lambda_permission</code>, la política
+  basada en recursos) o la ruta. Guárdala fresca: hoy el síntoma contrario — un 500 <em>con</em>
+  logs — también aparece, y significa justo lo opuesto.</p>
+</details>
+
+<details class="recall">
+  <summary>La lección 07: ¿qué hace <code>PutItem</code> si el ítem ya existe, y qué tuviste
+  que añadir para impedirlo?</summary>
+  <p>Machaca en silencio — es un <em>upsert</em> — y lo impide la condición
+  <code>attribute_not_exists(code)</code>, que convierte la colisión en un error explícito.
+  Hoy conocerás a su hermana de lectura: lo que hace <code>GetItem</code> cuando el ítem
+  <em>no</em> existe. Pista: tampoco grita.</p>
+</details>
+
+<div class="callout win">
+  <span class="callout-title">Hoy no se toca el proyecto 00 — y es la primera vez</span>
+  <p>Ningún servicio nuevo: Lambda, DynamoDB, CloudWatch Logs y API Gateway ya están en la
+  política del usuario <code>terraform</code>. Desde la lección 05 no pasaba que una lección
+  empezara sin ampliar permisos. Eso también es una señal: el proyecto ya tiene todas sus
+  piezas — hoy solo añadimos más de lo mismo, y la semana que viene lo ordenamos.</p>
+</div>
+
+<h2>Paso 0 — hay una avería en producción</h2>
+
+<ol class="steps">
+
+<li>
+<p>Tu API lleva desplegada desde la lección 08. Lánzale esto — un body que <em>sí</em> es
+JSON válido, pero no trae <code>url</code>:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>API_URL=$(terraform output -raw api_url)
+
+curl -s -X POST "$API_URL/links" \
+  -H 'content-type: application/json' \
+  -d '{"enlace": "https://example.com"}' -w '\nHTTP %{http_code}\n'</code></pre>
+</div>
+<p>Según el contrato de la lección 08, esto es culpa del cliente: <strong>400</strong>. Mira
+lo que devuelve de verdad.</p>
+</li>
+
+<li>
+<p>Diagnostícalo tú, con las herramientas que ya tienes, antes de abrir el desplegable.
+Dos pistas direccionales: los logs de la función esta vez <strong>no</strong> están vacíos
+— ¿qué te dice eso, con la heurística de arriba? Y el <code>smoke.mjs</code> de la lección
+08 probaba dos casos malos… ¿cuántos caminos de 400 tiene tu <code>handler.ts</code>?</p>
+
+<details class="recall">
+  <summary>Cuando tengas un culpable (o te rindas), abre.</summary>
+  <p>En tu <code>handler.ts</code>, la rama del <code>ZodError</code> construye el
+  <code>json(400, …)</code>… <strong>y no lo devuelve</strong>. Sin <code>return</code>, la
+  ejecución sigue hasta el <code>throw error</code> del final: la excepción se relanza, la
+  invocación falla y la puerta responde 500. Los logs lo cuentan entero: está la línea
+  <code>malformed payload</code> <em>y además</em> el error de runtime — la función corrió,
+  luego el problema está <em>dentro</em>. Tu humo no podía verlo: probaba el body no-JSON
+  (primer <code>return</code>, sano) y el <code>ftp://</code> (rama de
+  <code>InvalidTargetUrlError</code>, sana), pero ningún JSON con la forma equivocada — justo
+  la rama coja. La moraleja no es «pon el return»: es que <strong>un humo que no cubre todos
+  los contratos es un humo que jura en falso</strong>. Hoy lo arreglamos dos veces: el
+  handler, y el humo — que pasa a ser un script permanente del repo.</p>
+</details>
+</li>
+
+</ol>
+
+<h2>¿Por qué dos funciones y no una?</h2>
+
+<p>Podrías enchufar <code>GET /{code}</code> a la Lambda que ya tienes y despachar por
+<code>routeKey</code>. Muchos equipos lo hacen (el patrón se llama <em>lambdalith</em>) y no
+es ningún pecado. Pero la heurística que dejamos escrita en la lección 06 dice: <a
+href="../reference/typescript-lambda.html#cuantas-lambdas"><strong>agrupa por permisos, no
+por entidad</strong></a> — el eje de IAM es el único que no se compensa después. Y aquí los
+permisos parten el problema en dos con una línea limpísima: crear necesita
+<code>dynamodb:PutItem</code>; seguir un enlace necesita <code>dynamodb:GetItem</code> y nada
+más. Una sola función necesitaría ambas llaves — y entonces el endpoint público de
+<em>lectura</em>, el que va a recibir el tráfico anónimo de internet, tendría permiso de
+<em>escritura</em> sobre tu tabla. Dos funciones, dos roles, dos llaves: si mañana alguien
+encuentra cómo abusar de la redirección, su radio de daño no incluye escribir. Eso es
+<em>least privilege</em> dejando de ser una frase de la lección 04 y pasando a ser una
+decisión de diseño que sabes defender.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El plano de hoy</span>
+  <p>Una segunda Lambda (<code>url-shortener-get-link</code>) con su rol, su grupo de logs y
+  su única llave de datos; un segundo enchufe y la ruta <code>GET /{code}</code> en la puerta
+  que ya existe; y en el código, un caso de uso nuevo de lectura con su puerto — el de
+  DynamoDB aprende a buscar. El dominio no cambia: redirigir no tiene reglas de negocio
+  nuevas. Nada de esto estrena conceptos: es la segunda vuelta de todo lo que ya sabes, que
+  es exactamente lo que la convierte en el ensayo perfecto.</p>
+</div>
+
+<h2>El código: un puerto para el que lee</h2>
+
+<p>Primero, la pregunta incómoda: ¿qué necesita saber el caso de uso de redirección? Dado un
+código, encontrar su URL. ¿Necesita <code>save()</code>? No. Entonces su puerto no es
+<code>LinkRepository</code> — pedirle el repositorio entero sería pedir más de lo que
+consume. Se declara un puerto nuevo, minúsculo, <strong>del tamaño exacto de su
+consumidor</strong>:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/link-finder.ts</span><span class="tag">nuevo</span></div>
+<pre><code>import type { Link } from "./link-repository.ts";
+import type { ShortCode } from "../domain/short-code.ts";
+
+/** The port belongs to the consumer: getLink only needs to look up, not to save. */
+export interface LinkFinder {
+    findByCode(code: ShortCode): Promise&lt;Link | null&gt;;
+}</code></pre>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">El puerto pertenece al consumidor</span>
+  <p>Fíjate en lo que este fichero de seis líneas te compra: <code>LinkRepository</code>,
+  <code>create-link.ts</code> y su test <strong>no se tocan</strong> — el fake de la lección
+  06 sigue implementando exactamente el contrato que ya implementaba. Si en vez de un puerto
+  nuevo hubieras <em>ensanchado</em> el existente añadiéndole <code>findByCode</code>, el
+  compilador te habría obligado a tocar el fake de un test que no tiene nada que ver con
+  leer. Esa es la regla: el puerto lo dicta quien lo consume, no quien lo implementa. Un
+  adaptador puede implementar varios puertos; un caso de uso no debería cargar con métodos
+  que no llama.</p>
+</div>
+
+<p>Segundo, la única «regla» del día, y es del dominio: <strong>qué forma tiene un código
+válido</strong>. Importa por algo muy concreto: <code>{code}</code> atrapa <em>cualquier</em>
+segmento — cuando un navegador visite tu dominio pedirá <code>/favicon.ico</code>, y eso
+llegará a tu función con <code>code = "favicon.ico"</code>. Sin guarda, cada una de esas
+tonterías paga un viaje a DynamoDB. Con guarda, el dominio responde gratis:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/domain/short-code.ts</span><span class="tag">reemplaza entero</span></div>
+<pre><code>import { randomBytes } from "node:crypto";
+
+const CODE_BYTES = 5;
+/** 5 bytes in base64url are always 7 characters, no padding. */
+const CODE_SHAPE = /^[A-Za-z0-9_-]{7}$/;
+
+export type ShortCode = string &amp; { readonly __brand: "ShortCode" };
+
+export function generateShortCode(): ShortCode {
+    return randomBytes(CODE_BYTES).toString("base64url") as ShortCode;
+}
+
+/** Anything a browser puts in the path reaches us: /favicon.ico, /robots.txt... */
+export function isShortCode(raw: string): raw is ShortCode {
+    return CODE_SHAPE.test(raw);
+}</code></pre>
+</div>
+
+<p>Tercero, el caso de uso — y una confesión: sin la guarda serían dos líneas y no
+justificaría su fichero (el criterio de la lección 06 sigue vivo). Con ella, tiene un trabajo
+que ni el handler ni el adaptador deberían hacer: decidir <em>qué merece una búsqueda</em>:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/get-link.ts</span><span class="tag">nuevo</span></div>
+<pre><code>import { isShortCode } from "../domain/short-code.ts";
+import type { TargetUrl } from "../domain/target-url.ts";
+import type { LinkFinder } from "./link-finder.ts";
+
+/** Returns the target URL, or null when there is nothing to redirect to. */
+export async function getLink(rawCode: string, finder: LinkFinder): Promise&lt;TargetUrl | null&gt; {
+    // A malformed code cannot exist in the table: answer without paying the lookup.
+    if (!isShortCode(rawCode)) return null;
+
+    const link = await finder.findByCode(rawCode);
+    return link?.url ?? null;
+}</code></pre>
+</div>
+
+<p>Y sus tests. El del medio es el importante — léelo dos veces:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/application/get-link.test.ts</span><span class="tag">nuevo</span></div>
+<pre><code>import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { getLink } from "./get-link.ts";
+import type { LinkFinder } from "./link-finder.ts";
+import type { Link } from "./link-repository.ts";
+import { generateShortCode } from "../domain/short-code.ts";
+import type { TargetUrl } from "../domain/target-url.ts";
+
+/** Fake en memoria del puerto de lectura. Registra cada búsqueda. */
+class FakeLinkFinder implements LinkFinder {
+  lookups: string[] = [];
+  private readonly links: Map&lt;string, Link&gt;;
+
+  constructor(links: Link[] = []) {
+    this.links = new Map(links.map((l) =&gt; [l.code, l]));
+  }
+
+  async findByCode(code: string): Promise&lt;Link | null&gt; {
+    this.lookups.push(code);
+    return this.links.get(code) ?? null;
+  }
+}
+
+describe("getLink", () =&gt; {
+  const code = generateShortCode();
+  const url = "https://developer.hashicorp.com/" as TargetUrl;
+
+  it("returns the target URL when the code exists", async () =&gt; {
+    const finder = new FakeLinkFinder([{ code, url }]);
+    assert.equal(await getLink(code, finder), url);
+  });
+
+  it("returns null when the code has valid shape but is not stored", async () =&gt; {
+    const finder = new FakeLinkFinder();
+    assert.equal(await getLink(generateShortCode(), finder), null);
+    assert.equal(finder.lookups.length, 1);
+  });
+
+  // Lo que un curl no puede demostrar: que el 404 barato no tocó la tabla.
+  for (const junk of ["favicon.ico", "robots.txt", "x", "toolong99", "abc/def", ""]) {
+    it(`rejects "${junk}" without asking the finder`, async () =&gt; {
+      const finder = new FakeLinkFinder();
+      assert.equal(await getLink(junk, finder), null);
+      assert.equal(finder.lookups.length, 0);
+    });
+  }
+});</code></pre>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra el test, no el <code>curl</code></span>
+  <p>La frase de siempre, invertida por primera vez. Desde fuera, «código con mala forma» y
+  «código que no está» son indistinguibles: 404 los dos. Que el primero <strong>no tocó la
+  tabla</strong> solo puede afirmarlo alguien que vea las llamadas — y ese alguien es el
+  fake, con su lista <code>lookups</code>. Hay verificaciones que pertenecen al despliegue
+  (el efecto en la tabla, lección 07) y verificaciones que pertenecen al test (el
+  <em>no</em>-efecto, hoy). Saber cuál es cuál es medio oficio.</p>
+</div>
+
+<p>Cuarto, el adaptador aprende a buscar — el único fichero que conoce el SDK gana un método
+e implementa <em>los dos</em> puertos:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/infrastructure/dynamodb-link-repository.ts</span><span class="tag">cambios marcados</span></div>
+<pre><code>import { ConditionalCheckFailedException, <b>GetItemCommand,</b> PutItemCommand, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { CodeCollisionError, type Link, type LinkRepository } from "../application/link-repository.ts";
+<b>import type { LinkFinder } from "../application/link-finder.ts";
+import type { ShortCode } from "../domain/short-code.ts";
+import type { TargetUrl } from "../domain/target-url.ts";</b>
+
+
+export class DynamoDbLinkRepository implements LinkRepository<b>, LinkFinder</b> {
+
+    // ... constructor y save(), exactamente como estaban ...
+
+<b>    async findByCode(code: ShortCode): Promise&lt;Link | null&gt; {
+        const { Item } = await this.client.send(new GetItemCommand({
+            TableName: this.tableName,
+            Key: { code: { S: code } },
+        }));
+
+        // La ausencia no es un error: sin Item, la respuesta es un 200 vacío.
+        if (!Item?.url?.S) return null;
+        return { code, url: Item.url.S as TargetUrl };
+    }</b>
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa de AWS de hoy: la ausencia no grita</span>
+  <p><code>GetItem</code> sobre un código que no existe <strong>no lanza ningún error</strong>:
+  responde 200 con un objeto sin <code>Item</code>. Es la hermana exacta del upsert de la
+  lección 07 — allí escribir sobre lo existente callaba, aquí leer lo inexistente calla. En
+  DynamoDB, la existencia nunca es una excepción: es un dato que tu código debe mirar. De ahí
+  el <code>Item?.url?.S</code> con tres interrogantes: sin ítem, sin atributo o sin valor, la
+  respuesta del adaptador es <code>null</code> — y quien decide qué significa ese
+  <code>null</code> (un 404) vive dos capas más arriba. Quinta pieza de la colección de
+  fallos que no gritan: ARN sin <code>:*</code>, sourcemap, upsert, permiso de invocación, y
+  ahora el ítem fantasma.</p>
+</div>
+
+<h2>Dos entradas, dos artefactos</h2>
+
+<p>Ahora hay dos raíces de composición, así que <code>handler.ts</code> + <code>index.ts</code>
+se quedan cortos. Reorganiza: cada handler a <code>src/handlers/</code>, con el nombre de su
+función. El de creación es el tuyo <strong>con la avería del paso 0 curada</strong> — al
+moverlo, verifica las tres ramas del <code>catch</code>: <code>InvalidTargetUrlError</code> y
+<code>ZodError</code> <em>devuelven</em> su 400; solo <code>CodeCollisionError</code> deja
+caer al <code>throw</code>, porque agotar los reintentos no es culpa del cliente y debe
+contar como 500:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>mkdir -p src/handlers
+git mv src/handler.ts src/handlers/create-link.ts
+git rm src/index.ts        # su único trabajo era reexportar; ya no hay «el» handler</code></pre>
+</div>
+<p class="small">Al mover <code>create-link.ts</code>, sus imports relativos ganan un nivel:
+<code>./application/…</code> pasa a <code>../application/…</code>. <code>tsc</code> te
+señalará cada uno.</p>
+
+<p>El handler nuevo es más pequeño que su gemelo — redirigir no valida payloads. Del sobre
+2.0 solo le interesa una cosa que no habíamos usado: <code>pathParameters</code>, donde la
+puerta deja lo que capturó <code>{code}</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/src/handlers/get-link.ts</span><span class="tag">nuevo</span></div>
+<pre><code>import { getLink } from "../application/get-link.ts";
+import { DynamoDbLinkRepository } from "../infrastructure/dynamodb-link-repository.ts";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+
+// Del sobre 2.0 solo nos interesa el parámetro de la ruta.
+interface HttpEvent {
+  pathParameters?: { code?: string };
+}
+
+interface HttpResponse {
+  statusCode: number;
+  headers?: Record&lt;string, string&gt;;
+  body?: string;
+}
+
+const tableName = process.env.TABLE_NAME;
+if (!tableName) throw new Error("Missing required environment variable TABLE_NAME");
+
+const finder = new DynamoDbLinkRepository(new DynamoDBClient({}), tableName);
+
+export const handler = async (event: HttpEvent): Promise&lt;HttpResponse&gt; =&gt; {
+  const code = event.pathParameters?.code;
+  const url = code ? await getLink(code, finder) : null;
+
+  if (!url) {
+    return {
+      statusCode: 404,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ error: "unknown code" }),
+    };
+  }
+
+  // La respuesta ES la redirección: sin body, solo la puerta de salida.
+  return { statusCode: 301, headers: { location: url } };
+};</code></pre>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">301: la respuesta que tu Lambda solo dará una vez</span>
+  <p>Un <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/301">301</a> dice
+  «esto se movió <em>para siempre</em>», y los navegadores se lo toman en serio: <strong>lo
+  cachean</strong>. La segunda vez que alguien use el mismo enlace en el mismo navegador,
+  saltará directo al destino — tu Lambda no verá la petición. Para un acortador cuyos enlaces
+  no cambian es exactamente lo que quieres: gratis y más rápido. Pero tiene dos precios que
+  debes saber nombrar: si un día quisieras <em>corregir</em> el destino de un código, los
+  navegadores que ya lo visitaron no volverían a preguntarte; y si quisieras <em>contar
+  clics</em>, te faltarían todos los repetidos. Los acortadores comerciales usan 302/307 por
+  esa segunda razón — la analítica vale más que el salto ahorrado. Elegir 301 aquí es una
+  decisión, no un default: apúntala como algo que sabes defender.</p>
+</div>
+
+<p>Falta enseñarle a esbuild que ahora hay dos puntos de entrada. Con varios, esbuild exige
+<code>--outdir</code> en vez de <code>--outfile</code>, nombra cada bundle como su entrada, y
+<code>--out-extension</code> conserva nuestro <code>.mjs</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/package.json</span><span class="tag">scripts que cambian</span></div>
+<pre><code>"build": "esbuild <b>src/handlers/create-link.ts src/handlers/get-link.ts</b> --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" <b>--outdir=dist --out-extension:.js=.mjs</b>",
+<b>"smoke": "node smoke.mjs",</b></code></pre>
+</div>
+
+<p>Y el humo asciende: de fichero efímero a script del repo, con <strong>todos</strong> los
+contratos que no necesitan AWS — los tres 400 del creador (incluido el que tu humo viejo no
+cubría) y los 404 baratos del lector:</p>
+
+<div class="code">
+  <div class="code-label"><span>app/smoke.mjs</span><span class="tag">nuevo — permanente</span></div>
+<pre><code>// Humo de los dos bundles ESM. Regla de la lección 07: siempre desde un .mjs.
+process.env.TABLE_NAME = "smoke-table";
+
+const { handler: createLink } = await import("./dist/create-link.mjs");
+const { handler: getLink } = await import("./dist/get-link.mjs");
+
+let failures = 0;
+const expect = async (label, promise, statusCode) =&gt; {
+  const res = await promise;
+  const ok = res.statusCode === statusCode;
+  if (!ok) failures++;
+  console.log(`${ok ? "ok " : "FAIL"} ${label} → ${res.statusCode} (esperaba ${statusCode})`);
+};
+
+const post = (body) =&gt; createLink({ version: "2.0", routeKey: "POST /links", body });
+const get = (code) =&gt; getLink({ version: "2.0", routeKey: "GET /{code}", pathParameters: { code } });
+
+// Los tres 400 de create-link: ninguno necesita AWS.
+await expect("body no-JSON        ", post("esto no es json"), 400);
+await expect("payload sin url     ", post(JSON.stringify({ enlace: "https://x.com" })), 400);
+await expect("protocolo prohibido ", post(JSON.stringify({ url: "ftp://archivo.viejo" })), 400);
+
+// Los 404 baratos de get-link: la guarda responde sin tocar la tabla.
+await expect("favicon.ico         ", get("favicon.ico"), 404);
+await expect("código corto        ", get("x"), 404);
+await expect("sin pathParameters  ", getLink({ version: "2.0" }), 404);
+
+process.exit(failures ? 1 : 0);</code></pre>
+</div>
+
+<p>Comprueba la cadena entera — y de paso jubila a <code>malo.json</code>, que ya no pinta
+nada (su caso vive en el humo; <code>ok.json</code> se regenera en cada verificación):</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">app/</span></div>
+<pre><code>pnpm run typecheck        # los imports movidos, todos señalados y corregidos
+pnpm run test             # 22 en verde: los 14 de siempre + 8 del lector
+pnpm run build            # dos bundles: create-link.mjs y get-link.mjs
+pnpm run smoke            # 6 contratos, ok los seis
+git rm ../malo.json</code></pre>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Mira el peso de los bundles — el build te está delatando la arquitectura</span>
+  <p><code>create-link.mjs</code>: 836 297 bytes. <code>get-link.mjs</code>:
+  <strong>505 748</strong>. La diferencia — unos 330 KB — es zod, casi al byte (lo medimos en
+  la lección 06: 327 893 B). El lector no valida payloads, no importa zod, y esbuild solo
+  empaqueta lo que cada entrada alcanza desde sus imports. Dos funciones no comparten bundle
+  aunque compartan repositorio: <strong>cada artefacto pesa exactamente lo que su handler
+  sabe</strong>. Es el «el zip no es tu repositorio» de la lección 06, ahora en estéreo.</p>
+</div>
+
+<h2>El gemelo, en Terraform</h2>
+
+<p>Tres retoques y un fichero nuevo. Primero, los nombres: <code>function_name</code> a secas
+ya no identifica a nadie — en <code>main.tf</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>main.tf</span><span class="tag">reemplaza los locals</span></div>
+<pre><code>locals {
+  name                      = "url-shortener"
+  create_link_function_name = "${local.name}-create-link"
+  get_link_function_name    = "${local.name}-get-link"
+}</code></pre>
+</div>
+
+<p>Segundo, <code>create-link.tf</code> debe apuntar al artefacto renombrado. Tres cambios:
+todas las referencias a <code>local.function_name</code> pasan a
+<code>local.create_link_function_name</code> (Terraform te chivará las que olvides), y en el
+artefacto y la función:</p>
+
+<div class="code">
+  <div class="code-label"><span>create-link.tf</span><span class="tag">dos líneas</span></div>
+<pre><code>data "archive_file" "create_link" {
+  type        = "zip"
+  source_file = "${path.module}/app/dist/<b>create-link.mjs</b>"   # antes: index.mjs
+  output_path = "${path.module}/build/create_link.zip"
+}
+
+resource "aws_lambda_function" "create_link" {
+  # ...
+  handler = <b>"create-link.handler"</b>                            # antes: index.handler
+  # ...
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El nombre del fichero dentro del zip es configuración</span>
+  <p><code>handler = "create-link.handler"</code> significa: <em>en el fichero
+  <code>create-link.mjs</code>, el export <code>handler</code></em>. Si renombras el bundle y
+  olvidas esta línea, el <code>apply</code> triunfa y la primera invocación revienta con
+  <code>Runtime.ImportModuleError: Cannot find module 'index'</code> — otro desajuste que
+  ninguna herramienta de Terraform puede ver, porque vive entre el contenido del zip y una
+  string. Mismo género que el <code>payload_format_version</code> de la lección 08: la
+  frontera código↔infra solo la vigilas tú (y tu humo… que por eso ahora es permanente).</p>
+</div>
+
+<p>Tercero, el gemelo. Léelo entero antes de copiarlo: es <code>create-link.tf</code> con
+tres diferencias de fondo — reutiliza el <code>lambda_assume_role</code> (la política de
+confianza es idéntica: mismo uniforme, otro portador), su llave de datos dice
+<code>GetItem</code> donde el otro decía <code>PutItem</code>, y su handler apunta al bundle
+pequeño:</p>
+
+<div class="code">
+  <div class="code-label"><span>get-link.tf</span><span class="tag">nuevo fichero</span></div>
+<pre><code># Todo lo que ES la función get_link: identidad, logs, la llave de lectura,
+# el artefacto y la función. Gemela de create-link.tf — y que se note:
+# esta duplicación es deliberada, y la lección 10 la funde sin destruir nada.
+
+# --- Identidad: quién puede ponerse el uniforme -----------------
+
+resource "aws_iam_role" "get_link" {
+  name               = local.get_link_function_name
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+# --- Logs: el grupo y la llave para escribir en él --------------
+
+resource "aws_cloudwatch_log_group" "get_link" {
+  name              = "/aws/lambda/${local.get_link_function_name}"
+  retention_in_days = 7
+}
+
+data "aws_iam_policy_document" "get_link_logs" {
+  statement {
+    sid     = "WriteOwnLogs"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+
+    resources = ["${aws_cloudwatch_log_group.get_link.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "get_link_logs" {
+  name   = "write-own-logs"
+  role   = aws_iam_role.get_link.id
+  policy = data.aws_iam_policy_document.get_link_logs.json
+}
+
+# --- Datos: la llave para LEER de la tabla — y solo leer --------
+
+data "aws_iam_policy_document" "get_link_get" {
+  statement {
+    sid       = "GetLinks"
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.links.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "get_link_get" {
+  name   = "get-links"
+  role   = aws_iam_role.get_link.id
+  policy = data.aws_iam_policy_document.get_link_get.json
+}
+
+# --- El artefacto y la función ----------------------------------
+
+data "archive_file" "get_link" {
+  type        = "zip"
+  source_file = "${path.module}/app/dist/get-link.mjs"
+  output_path = "${path.module}/build/get_link.zip"
+}
+
+resource "aws_lambda_function" "get_link" {
+  function_name = local.get_link_function_name
+  role          = aws_iam_role.get_link.arn
+
+  runtime       = "nodejs24.x"
+  handler       = "get-link.handler"
+  architectures = ["arm64"]
+
+  filename         = data.archive_file.get_link.output_path
+  source_code_hash = data.archive_file.get_link.output_base64sha256
+
+  memory_size = 128
+  timeout     = 5
+
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.links.name
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.get_link,
+    aws_iam_role_policy.get_link_logs,
+    aws_iam_role_policy.get_link_get
+  ]
+}</code></pre>
+</div>
+
+<p>Y la puerta gana su segunda ruta — al final de <code>http-api.tf</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>http-api.tf</span><span class="tag">añade al final</span></div>
+<pre><code># --- El segundo enchufe: la puerta sabe invocar a get_link -------
+
+resource "aws_apigatewayv2_integration" "get_link" {
+  api_id           = aws_apigatewayv2_api.shortener.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.get_link.invoke_arn
+
+  # El cliente hará GET; el tramo puerta→Lambda sigue siendo POST.
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+}
+
+# --- La ruta con parámetro: un segmento, cualquier valor ---------
+
+resource "aws_apigatewayv2_route" "get_link" {
+  api_id    = aws_apigatewayv2_api.shortener.id
+  route_key = "GET /{code}"
+  target    = "integrations/${aws_apigatewayv2_integration.get_link.id}"
+}
+
+# --- El permiso: cada función decide quién la invoca -------------
+
+resource "aws_lambda_permission" "http_api_get_link" {
+  statement_id  = "AllowInvokeFromHttpApi"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.get_link.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.shortener.execution_arn}/*/*"
+}</code></pre>
+</div>
+
+<div class="callout tf">
+  <span class="callout-title">Qué atrapa <code>{code}</code> — y qué no</span>
+  <p>Una variable de ruta captura <strong>exactamente un segmento</strong>:
+  <code>GET /abc</code> entra, <code>GET /abc/def</code> no casa con ninguna ruta y lo
+  despacha la puerta con su 404 — tu función ni se invoca (ya sabes cómo comprobarlo: sin
+  <code>START</code>). Si un día conviven <code>GET /health</code> y <code>GET /{code}</code>,
+  <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html">gana
+  la coincidencia más específica</a>: la ruta estática, luego la variable, luego
+  <code>{proxy+}</code> (que sí es glotona y atrapa varios segmentos, solo al final de la
+  ruta), y al fondo <code>$default</code>. Y fíjate: el permiso de invocación se repite por
+  función — <code>aws_lambda_permission</code> vive pegado a <em>cada</em> Lambda, no a la
+  puerta. La tercera política es del recurso, y ahora hay dos recursos.</p>
+</div>
+
+<h2>Despliega y demuéstralo</h2>
+
+<ol class="steps">
+
+<li>
+<p><code>terraform plan</code>, y léelo antes del resumen. Debe contar <strong>8 a
+crear</strong> (rol, grupo de logs, dos políticas del rol, función, enchufe, ruta, permiso —
+todos del lector) y <strong>1 a modificar</strong>: <code>create_link</code>, y el diff te
+dice exactamente por qué — <code>handler</code> nuevo y <code>source_code_hash</code> nuevo,
+el artefacto renombrado con la avería curada dentro. Si sale otra cosa, párate y explícala
+antes de seguir.</p>
+</li>
+
+<li>
+<p><code>terraform apply</code>, y el momento del proyecto entero — crea un enlace y
+<em>síguelo</em>:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>API_URL=$(terraform output -raw api_url)
+
+curl -s -X POST "$API_URL/links" \
+  -H 'content-type: application/json' \
+  -d '{"url": "https://developer.hashicorp.com/terraform"}' \
+  -o ok.json -w 'HTTP %{http_code}\n'
+
+CODE=$(node -p 'require("./ok.json").code')
+
+curl -i -s "$API_URL/$CODE" | head -4
+# HTTP/2 301
+# location: https://developer.hashicorp.com/terraform</code></pre>
+</div>
+<p>Ese <code>location</code> es tu 301 saliendo por la puerta. <code>curl</code> no sigue
+redirecciones si no se lo pides — por eso ves la costura. Ahora pídeselo, y comprueba que el
+destino responde de verdad:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">el salto completo</span></div>
+<pre><code>curl -sL -o /dev/null -w '%{http_code} tras %{num_redirects} redirección\n' "$API_URL/$CODE"
+# 200 tras 1 redirección</code></pre>
+</div>
+<p>Y la prueba reina: pega <code>$API_URL/$CODE</code> en el navegador del móvil.
+Aterrizar en la doc de Terraform desde un enlace de siete letras servido por tu
+infraestructura — <strong>el acortador, por fin, acorta</strong>.</p>
+</li>
+
+<li>
+<p>Los contratos del que no encuentra:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">los 404</span></div>
+<pre><code>curl -s "$API_URL/zzzzzzz" -w '\nHTTP %{http_code}\n'
+# {"error":"unknown code"}  HTTP 404 — forma válida, no está: GetItem sin Item
+
+curl -s "$API_URL/favicon.ico" -w '\nHTTP %{http_code}\n'
+# {"error":"unknown code"}  HTTP 404 — la guarda respondió gratis (lo jura el test)
+
+curl -s "$API_URL/abc/def" -w '\nHTTP %{http_code}\n'
+# {"message":"Not Found"}   HTTP 404 — este body es de la puerta: ninguna ruta casa</code></pre>
+</div>
+<p>Tres 404 con dos autores distintos — distingue quién firma cada body: los
+<code>error</code> son tuyos, el <code>message</code> es de la puerta.</p>
+</li>
+
+<li>
+<p>Y la separación de llaves, con tus ojos. La función pública de lectura <strong>no puede
+escribir</strong> — pídele a IAM que te enseñe las políticas del rol del lector:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">least privilege, verificado</span></div>
+<pre><code>aws iam list-role-policies --role-name url-shortener-get-link
+# write-own-logs, get-links — y nada más
+
+aws iam get-role-policy --role-name url-shortener-get-link \
+  --policy-name get-links --query PolicyDocument.Statement
+# una sola acción: dynamodb:GetItem, sobre tu tabla</code></pre>
+</div>
+</li>
+
+<li>
+<p>Cierra la sesión:</p>
+<ul class="checklist" data-key="l09-verify">
+  <li>El 500 del paso 0 quedó diagnosticado por ti (logs con líneas = el fallo está dentro).</li>
+  <li><code>pnpm run test</code>: 22 en verde. <code>pnpm run smoke</code>: 6 contratos ok.</li>
+  <li>El <code>plan</code> contaba 8 a crear y 1 a modificar, y supiste el porqué de cada uno.</li>
+  <li>El <code>curl -i</code> enseñó el 301 con su <code>location</code>, y el <code>-L</code> aterrizó con 200.</li>
+  <li>El enlace funcionó desde el navegador del móvil, sin AWS por ninguna parte.</li>
+  <li>Los tres 404 tienen autor conocido: dos tuyos, uno de la puerta.</li>
+  <li><code>list-role-policies</code> del lector: dos políticas, ninguna escribe en la tabla.</li>
+  <li><code>malo.json</code> jubilado; <code>smoke.mjs</code> ascendido a script del repo.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que el proyecto 01 <strong>hace lo que promete el roadmap</strong>: <code>POST /links</code>
+    crea, <code>GET /{code}</code> redirige con 301, todo desde un navegador cualquiera.</li>
+    <li>Que «agrupa por permisos» ya no es una heurística leída sino una <strong>frontera que
+    desplegaste</strong>: el endpoint anónimo de lectura no tiene, ni podría usar, la llave de
+    escritura — y lo verificaste en IAM, no de oídas.</li>
+    <li>Que un puerto pertenece a su consumidor: añadiste capacidad de lectura sin tocar el
+    contrato de escritura, sus tests ni su fake.</li>
+    <li>Que diagnosticaste un 500 <strong>con</strong> logs usando la heurística inversa a la
+    de la lección 08 — y que tu humo, ahora permanente, cubre el contrato entero.</li>
+    <li>Que sabes qué responde DynamoDB ante lo que no existe (nada — y no grita), y qué capa
+    convierte ese silencio en un 404.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>Los gemelos van a divergir.</strong> <code>create-link.tf</code> y
+    <code>get-link.tf</code> son un copia-pega con tres diferencias; al tercer retoque que
+    hagas en uno y olvides en el otro, tendrás un bug de configuración. La cura tiene nombre
+    (<code>for_each</code> sobre un mapa, o un módulo local) y lección: la 10.</li>
+    <li><strong>El 301 no se puede «despublicar».</strong> Los navegadores que ya siguieron un
+    enlace lo tienen cacheado; ni borrar el ítem de la tabla los detendría. Decisión tomada a
+    sabiendas — sabrías cambiarla (302) y decir qué pierdes con cada una.</li>
+    <li><strong>Nadie cuenta clics.</strong> Y con 301 cacheado, nadie podría contarlos bien.
+    Si el acortador tuviera métricas de negocio, la elección de código de estado sería una
+    conversación con producto, no una línea en un handler.</li>
+    <li><strong>La puerta sigue abierta y sin CORS</strong> — igual que ayer, a sabiendas:
+    authorizer en el proyecto 03, <code>cors_configuration</code> en la ficha cuando haya
+    frontend.</li>
+  </ul>
+</div>
+
+<p class="small">El proyecto queda desplegado, como siempre: en reposo, cero. El día del
+derribo: <code>terraform destroy</code>.</p>
+
+<div class="callout why">
+  <span class="callout-title">El <code>for_each</code> prometido no está aquí — otra vez, y con motivo nuevo</span>
+  <p>La lección 08 prometió el mapa de funciones para hoy, y hoy no está. La razón esta vez
+  no es solo el reloj: es que el refactor bueno <strong>necesita que los gemelos existan
+  primero</strong> — hoy has sentido el copia-pega, la 10 lo cura — y sobre todo que hacerlo
+  bien es un tema entero de Terraform: pasar recursos existentes a <code>for_each</code>
+  les cambia la dirección en el state, y un <code>plan</code> ingenuo propone
+  <strong>destruirlo todo y recrearlo</strong>. Evitarlo sin tocar AWS (bloques
+  <code>moved</code>, el refactor invisible) es de lo más valioso del curso para una
+  entrevista, y merece sus 40 minutos. La quiz 1 te deja asomado al precipicio.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Lección 10, avance: reescribes las dos funciones como
+  <code>aws_lambda_function.fn</code> con <code>for_each</code> sobre un mapa. Sin nada más,
+  ¿qué propone <code>terraform plan</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="Terraform no compara configuraciones 'equivalentes': compara direcciones. aws_lambda_function.create_link y aws_lambda_function.fn[&quot;create_link&quot;] son direcciones distintas, y el state solo conoce la primera.">Sin cambios, porque los recursos resultantes son idénticos</button></li>
+    <li><button data-correct="true" data-why="Exacto: la dirección es la identidad. Lo que hay en el state (create_link) 'sobra' y lo del código nuevo (fn[&quot;…&quot;]) 'falta' — destruir y crear. La cura son los bloques moved, y es la lección 10 entera.">Destruir cada recurso viejo y crear su versión nueva</button></li>
+    <li><button data-correct="false" data-why="No hay error que dar: para Terraform el plan es perfectamente legal — borra lo que ya no declaras y crea lo que declaras nuevo. Que sea legal y a la vez desastroso es justamente lo que lo hace peligroso.">Un error, porque los dos nombres chocan en el state</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Producto pide un contador de clics por enlace. Sin tocar nada más,
+  ¿qué parte de lo desplegado hoy se interpone?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="La llave se amplía en un minuto (UpdateItem en la política del lector) — es un cambio trivial de una línea en get-link.tf. Lo que no se arregla con permisos es que muchas peticiones ya no llegan a tu función.">La política del rol lector, que no permite escribir el contador</button></li>
+    <li><button data-correct="true" data-why="Eso es: el 301 cacheado hace que los navegadores repetidores salten directo al destino sin pasar por tu Lambda — esos clics son invisibles e irrecuperables. Contar bien exige 302/307, y es un cambio de contrato, no de código.">El 301 cacheado, que esconde los clics repetidos a tu función</button></li>
+    <li><button data-correct="false" data-why="GetItem y el contador conviven sin problema (UpdateItem con ADD es atómico). El obstáculo no está en la tabla ni en leer: está en las peticiones que tu función nunca llega a ver por culpa de la caché del 301.">La lectura con GetItem, que no puede modificar el ítem leído</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">El <code>curl</code> a <code>/favicon.ico</code> y a
+  <code>/zzzzzzz</code> devuelven el mismo 404 con el mismo body. ¿Por qué el test del fake
+  es la única prueba de que el primero no tocó la tabla?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Exacto: por fuera ambos caminos son indistinguibles — misma respuesta, mismo autor. Solo alguien sentado en el puerto ve si hubo búsqueda, y el fake registra cada llamada en lookups. El no-efecto se demuestra en el test; el efecto, en el despliegue.">Desde fuera ambos caminos responden idéntico; solo el puerto ve la diferencia</button></li>
+    <li><button data-correct="false" data-why="Las métricas de DynamoDB existen y a gran escala hasta lo insinuarían — pero son agregadas, tardías y no atribuyen una petición concreta a una búsqueda concreta. Como prueba de un comportamiento puntual, no alcanzan.">Porque CloudWatch no ofrece ninguna métrica de lecturas de DynamoDB</button></li>
+    <li><button data-correct="false" data-why="El coste confirmaría poco: una GetItem cuesta millonésimas y la factura no desglosa por petición. La prueba no va de dinero — va de que el comportamiento externo es idéntico y la diferencia solo es visible en el puerto.">Porque la factura de AWS tarda demasiado en reflejar cada lectura</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 10 — el refactor invisible.</strong> Los gemelos se funden:
+  <code>for_each</code> sobre un mapa de funciones, quizá un módulo local — y la técnica que
+  lo hace posible sin destruir nada: los bloques <code>moved</code>, el <code>plan</code>
+  como detector de identidades y la prueba final de que un buen refactor de Terraform deja
+  AWS <em>exactamente igual</em>. Con eso, el proyecto 01 se cierra de verdad.</p>
+  <p class="small">Pendientes que arrastramos: el <strong>post-mortem del state</strong> de la
+  lección 03, el <strong>MFA del usuario <code>terraform</code></strong>, CI para los tests
+  (proyecto 07), y durable execution (proyecto 03).</p>
+  <div class="nav-links">
+    <a href="./0008-la-puerta-publica.html">← Lección 08</a>
+    <a href="../reference/aws-apigateway.html">Referencia: API Gateway</a>
+    <a href="../reference/aws-dynamodb.html">Referencia: DynamoDB</a>
+    <a href="../reference/typescript-lambda.html">Referencia: TypeScript en Lambda</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Tres cosas: el <code>curl -i</code> con su <code>location</code>
+    y el <code>-L</code> con su 200; los tres 404 (dime quién firma cada uno sin mirar la
+    lección); y el <code>git diff --stat</code> — cuéntame qué ficheros esperabas ver y
+    cuáles te sorprendieron. Y la pregunta para pensar, sin buscar: <code>get-link.mjs</code>
+    pesa 330 KB menos que su gemelo compartiendo repositorio y adaptador — ¿qué decisión
+    tuya, de qué lección, hace posible esa diferencia?
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

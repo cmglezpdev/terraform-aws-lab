@@ -53,10 +53,13 @@ pago por uso y con tu volumen es prácticamente cero.
 | 06 | [El zip no es tu repositorio](./lessons/0006-el-zip-no-es-tu-repositorio.html) | 01 | [Lambda](./reference/aws-lambda.html#capacidades-2026) · [TypeScript en Lambda](./reference/typescript-lambda.html) |
 | 07 | [La memoria del acortador](./lessons/0007-la-memoria-del-acortador.html) | 01 | [DynamoDB](./reference/aws-dynamodb.html) |
 | 08 | [La puerta pública](./lessons/0008-la-puerta-publica.html) | 01 | [API Gateway](./reference/aws-apigateway.html) |
-| 09 | _La segunda función_ (pendiente) | 01 | — (`for_each`, `GET /{code}`, 301) |
+| 09 | [La segunda función](./lessons/0009-la-segunda-funcion.html) | 01 | — (`GET /{code}`, 301, puerto del consumidor) |
+| 10 | _El refactor invisible_ (pendiente) | 01 | — (`for_each`, bloques `moved`, ¿módulo local?) |
 
 La lección 06 se insertó el 2026-08-25, a petición suya, entre el cerebro y la memoria: capas,
 una dependencia real (`zod`) y tests. La memoria y la puerta corren un número cada una.
 La lección 08 se partió el 2026-08-28: la puerta y el cambio de protocolo del handler llenan
 la sesión, así que la segunda Lambda y el `for_each` prometidos pasan a la 09 — la propia
-lección lo dice. El proyecto 01 se completa con la 09.
+lección lo dice. La 09 (2026-08-29) volvió a partir: el `for_each` necesita que los gemelos
+`create-link.tf`/`get-link.tf` existan primero, y fundirlos sin destruir nada (bloques
+`moved`) es un tema entero. El proyecto 01 se completa con la 10.
