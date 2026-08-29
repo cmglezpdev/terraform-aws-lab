@@ -1,0 +1,1470 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Práctica · Cuestionario del curso</title>
+<style>
+/* Tokens copiados de assets/course.css para que la app sea autónoma */
+:root {
+  --bg:#fffcf7; --bg-sunk:#f5f0e6; --bg-code:#f7f3ea;
+  --ink:#1a1814; --ink-soft:#5c554a; --ink-faint:#8a8175; --rule:#ddd5c6;
+  --accent:#7a3b12; --accent-bg:#f6e9dd;
+  --tf:#5b3ea8; --tf-bg:#efeaf9; --aws:#9a5b00; --aws-bg:#fbf0dc;
+  --danger:#94261f; --danger-bg:#fbe9e7; --ok:#2c6142; --ok-bg:#e6f2ea;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Charter,Georgia,serif;
+  --sans:ui-sans-serif,-apple-system,"Segoe UI",Inter,system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --measure:40rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#14120f; --bg-sunk:#1c1915; --bg-code:#1a1714;
+    --ink:#e8e2d6; --ink-soft:#a89f90; --ink-faint:#7d7466; --rule:#363128;
+    --accent:#e0956a; --accent-bg:#2a1d13;
+    --tf:#b39ff0; --tf-bg:#201a30; --aws:#e0aa5c; --aws-bg:#2a2114;
+    --danger:#e88a82; --danger-bg:#2c1715; --ok:#7fc39b; --ok-bg:#14241b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#14120f; --bg-sunk:#1c1915; --bg-code:#1a1714;
+  --ink:#e8e2d6; --ink-soft:#a89f90; --ink-faint:#7d7466; --rule:#363128;
+  --accent:#e0956a; --accent-bg:#2a1d13;
+  --tf:#b39ff0; --tf-bg:#201a30; --aws:#e0aa5c; --aws-bg:#2a2114;
+  --danger:#e88a82; --danger-bg:#2c1715; --ok:#7fc39b; --ok-bg:#14241b;
+}
+* { box-sizing:border-box; }
+body {
+  background:var(--bg); color:var(--ink); font-family:var(--serif);
+  font-size:1.0625rem; line-height:1.62; margin:0; padding:3rem 1.5rem 6rem;
+  -webkit-font-smoothing:antialiased;
+}
+main, header { max-width:var(--measure); margin-inline:auto; }
+.eyebrow {
+  font-family:var(--sans); font-size:.72rem; font-weight:600;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 .6rem;
+}
+h1 { font-size:2rem; line-height:1.15; font-weight:600; letter-spacing:-.015em; margin:0 0 .5rem; }
+.deck { font-size:1.1rem; color:var(--ink-soft); font-style:italic; margin:0 0 2rem; }
+h2 { font-size:1.15rem; font-weight:600; font-family:var(--sans); margin:2rem 0 .8rem; }
+p { margin:0 0 1rem; }
+code {
+  font-family:var(--mono); font-size:.855em; background:var(--bg-code);
+  border:1px solid var(--rule); border-radius:3px; padding:.08em .32em;
+}
+pre {
+  font-family:var(--mono); font-size:.8rem; line-height:1.55; background:var(--bg-code);
+  border:1px solid var(--rule); border-radius:6px; padding:.9rem 1rem;
+  margin:0 0 1.1rem; overflow-x:auto; white-space:pre;
+}
+a { color:var(--accent); }
+button { font-family:var(--sans); cursor:pointer; }
+.theme-toggle {
+  position:fixed; top:1rem; right:1rem; font-size:.75rem;
+  background:var(--bg-sunk); color:var(--ink-soft);
+  border:1px solid var(--rule); border-radius:999px; padding:.35rem .8rem; z-index:10;
+}
+
+/* pantalla de inicio */
+.topics { display:grid; grid-template-columns:repeat(auto-fill,minmax(15rem,1fr)); gap:.5rem; margin:0 0 1.4rem; }
+.topic-chip {
+  display:flex; align-items:flex-start; gap:.6rem; padding:.6rem .8rem;
+  border:1px solid var(--rule); border-radius:6px; background:var(--bg-sunk);
+  cursor:pointer; font-family:var(--sans); font-size:.88rem; user-select:none;
+}
+.topic-chip input { margin-top:.25em; accent-color:var(--accent); }
+.topic-chip.on { border-color:var(--accent); background:var(--accent-bg); }
+.topic-chip .t-label { font-weight:600; }
+.topic-chip .t-hint { display:block; font-size:.72rem; color:var(--ink-faint); }
+.topic-chip .t-stats { display:block; font-size:.72rem; color:var(--ink-soft); margin-top:.15rem; }
+.controls { display:flex; flex-wrap:wrap; gap:.6rem 1.4rem; align-items:center; margin:0 0 1.6rem; font-family:var(--sans); font-size:.9rem; }
+.controls .group { display:flex; gap:.35rem; align-items:center; }
+.sizebtn, .selbtn {
+  border:1px solid var(--rule); border-radius:999px; background:var(--bg);
+  color:var(--ink); font-size:.82rem; padding:.3rem .85rem;
+}
+.sizebtn.on { border-color:var(--tf); background:var(--tf-bg); color:var(--tf); font-weight:600; }
+.primary {
+  border:1px solid var(--accent); border-radius:6px; background:var(--accent);
+  color:var(--bg); font-size:.95rem; font-weight:600; padding:.6rem 1.4rem;
+}
+.primary:disabled { opacity:.4; cursor:default; }
+
+/* quiz */
+.quiz-card {
+  margin:1.4rem 0; padding:1.1rem 1.25rem; background:var(--bg-sunk);
+  border:1px solid var(--rule); border-radius:7px;
+}
+.quiz-kicker {
+  font-family:var(--sans); font-size:.68rem; font-weight:700; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--ink-faint); margin:0 0 .5rem;
+  display:flex; justify-content:space-between; gap:1rem;
+}
+.quiz-kicker .k-topic { color:var(--aws); }
+.quiz-q { font-weight:600; margin:0 0 .9rem; }
+.quiz-opts { list-style:none; padding:0; margin:0; display:grid; gap:.45rem; }
+.quiz-opts button {
+  width:100%; text-align:left; font-size:.9rem; line-height:1.4;
+  color:var(--ink); background:var(--bg); border:1px solid var(--rule);
+  border-radius:5px; padding:.6rem .8rem;
+  display:flex; gap:.6rem; align-items:baseline;
+}
+.quiz-opts button:hover:not(:disabled) { border-color:var(--ink-faint); }
+.quiz-opts button:disabled { cursor:default; }
+.quiz-opts .keyhint {
+  font-family:var(--mono); font-size:.7rem; color:var(--ink-faint);
+  border:1px solid var(--rule); border-radius:3px; padding:0 .35em; flex-shrink:0;
+}
+.quiz-opts button.correct { border-color:var(--ok); background:var(--ok-bg); }
+.quiz-opts button.wrong { border-color:var(--danger); background:var(--danger-bg); }
+.quiz-opts button.faded { opacity:.45; }
+.feedback { margin-top:.9rem; font-size:.92rem; padding-top:.8rem; border-top:1px solid var(--rule); }
+.feedback b.v-ok { color:var(--ok); }
+.feedback b.v-no { color:var(--danger); }
+.feedback .src { font-family:var(--sans); font-size:.8rem; margin-top:.5rem; display:block; }
+.nextrow { margin-top:1rem; display:flex; justify-content:flex-end; gap:.6rem; }
+.progress { font-family:var(--sans); font-size:.8rem; color:var(--ink-faint); margin:0 0 .3rem; }
+.bar { height:4px; background:var(--bg-sunk); border-radius:2px; overflow:hidden; margin:0 0 1rem; }
+.bar > div { height:100%; background:var(--accent); width:0; transition:width .2s; }
+
+/* resultados */
+.score { font-size:1.5rem; font-weight:600; margin:0 0 1rem; }
+table.results { border-collapse:collapse; width:100%; font-family:var(--sans); font-size:.86rem; margin:0 0 1.4rem; }
+.results th, .results td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--rule); }
+.results th { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); }
+.results td.num { font-variant-numeric:tabular-nums; }
+.ask {
+  font-family:var(--sans); font-size:.88rem; color:var(--ink-soft);
+  background:var(--accent-bg); border-radius:6px; padding:.85rem 1.1rem; margin-top:2.5rem;
+}
+.ask b { color:var(--accent); }
+.footer-links { font-family:var(--sans); font-size:.85rem; margin-top:1.5rem; display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; }
+.hidden { display:none; }
+@media (max-width:34rem) { body { padding:2rem 1rem 5rem; } h1 { font-size:1.6rem; } }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" id="themeToggle" type="button">tema</button>
+
+<header>
+  <p class="eyebrow">Práctica · Terraform aplicado a AWS</p>
+  <h1>Cuestionario del curso</h1>
+  <p class="deck">Preguntas aleatorias sacadas de tus lecciones y fichas de referencia.
+  Elige los temas, responde, y cada fallo te enseña dónde releer.</p>
+</header>
+
+<main>
+
+<section id="viewStart">
+  <h2>1 · Elige los temas</h2>
+  <div class="topics" id="topicList"></div>
+  <div class="controls">
+    <div class="group">
+      <button class="selbtn" id="btnAll" type="button">todos</button>
+      <button class="selbtn" id="btnNone" type="button">ninguno</button>
+    </div>
+    <div class="group" id="sizeGroup">
+      <span>Ronda:</span>
+      <button class="sizebtn" data-size="10" type="button">10</button>
+      <button class="sizebtn" data-size="20" type="button">20</button>
+      <button class="sizebtn" data-size="0" type="button">todas</button>
+    </div>
+  </div>
+  <button class="primary" id="btnStart" type="button">Empezar la ronda</button>
+  <p class="progress" id="poolInfo" style="margin-top:.8rem"></p>
+</section>
+
+<section id="viewQuiz" class="hidden">
+  <p class="progress" id="qProgress"></p>
+  <div class="bar"><div id="qBar"></div></div>
+  <div id="qCard"></div>
+</section>
+
+<section id="viewResults" class="hidden">
+  <h2>Resultado de la ronda</h2>
+  <p class="score" id="rScore"></p>
+  <table class="results" id="rTable"></table>
+  <div class="nextrow" style="justify-content:flex-start">
+    <button class="primary" id="btnAgain" type="button">Otra ronda igual</button>
+    <button class="selbtn" id="btnBack" type="button">Cambiar temas</button>
+  </div>
+</section>
+
+<div class="ask">
+  <b>Soy tu profesor, no un PDF.</b> Si fallas una pregunta y la explicación no te basta,
+  tráemela al chat con tu razonamiento: ahí está la mitad del valor. Y si crees que una
+  respuesta está mal, mejor todavía — discutírmela es la otra mitad.
+</div>
+
+<div class="footer-links">
+  <a href="../README.md">Sección de práctica</a>
+  <a href="../../GLOSSARY.md">Glosario</a>
+  <a href="../../reference/README.md">Fichas de referencia</a>
+  <a href="../../ROADMAP.md">Roadmap</a>
+</div>
+
+</main>
+
+<script>
+"use strict";
+
+const TOPICS = {
+  "terraform":          { label: "Terraform",            hint: "state · backend · plan · CLI" },
+  "iam":                { label: "IAM",                  hint: "políticas · roles · evaluación" },
+  "lambda":             { label: "Lambda",               hint: "rol de ejecución · logs · coste" },
+  "typescript-tooling": { label: "TypeScript y tooling", hint: "capas · esbuild · pnpm · tests" },
+  "dynamodb":           { label: "DynamoDB",             hint: "claves · escritura condicional" },
+  "s3":                 { label: "S3",                   hint: "objetos · versionado · clases" },
+  "apigateway":         { label: "API Gateway",          hint: "rutas · integración · permisos" },
+  "cuenta-alertas":     { label: "Cuenta y alertas",     hint: "Budgets · SNS · credenciales" }
+};
+
+/* Cada pregunta: topic, type (mc | tf | code), question, code?, options,
+   answer (índice de la correcta), explanation, source (ruta relativa). */
+const QUESTIONS = [
+
+/* ─────────────── TERRAFORM ─────────────── */
+{ topic:"terraform", type:"mc",
+  question:"Borras un recurso a mano desde la consola de AWS. ¿Qué ve el siguiente terraform plan?",
+  options:["Que hay que volver a crear ese recurso","Que no hay ningún cambio pendiente","Que el state está roto y falla","Que hay que borrar ese código"],
+  answer:0,
+  explanation:"El refresh consulta AWS, descubre que el recurso ya no está, actualiza el state, y el diff contra tu configuración da «falta crearlo». Eso es drift, y Terraform lo corrige — nunca borra tu código ni falla por ello.",
+  source:"../../lessons/0001-el-primer-apply.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"De estos cuatro ficheros de un proyecto Terraform, ¿cuál es el único que SÍ debe estar en git?",
+  options:[".terraform.lock.hcl","terraform.tfstate","terraform.tfvars","El directorio .terraform/"],
+  answer:0,
+  explanation:"El lock file fija la versión exacta del provider y sus hashes, para que tu CI use el mismo binario que tú: es el package-lock.json de Terraform. El state lleva secretos, el tfvars lleva tus valores, y .terraform/ es caché recreable.",
+  source:"../../lessons/0001-el-primer-apply.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Escribes bucket = \"tf-state-${var.entorno}\" dentro del bloque backend \"s3\". ¿Qué pasa?",
+  options:["Falla: el backend no admite ninguna variable","Funciona si declaras la variable antes","Funciona usando el valor por defecto","Falla solo durante el primer apply"],
+  answer:0,
+  explanation:"El backend se resuelve antes de que exista ninguna variable, porque Terraform necesita saber dónde está el state para poder evaluar nada. La salida profesional es la configuración parcial: terraform init -backend-config=fichero.hcl.",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Un compañero cerró el portátil a mitad de un apply y está de vacaciones. Todo el equipo ve «Error acquiring the state lock». ¿Qué haces?",
+  options:["Confirmas que nadie aplica y haces force-unlock con el ID del error","Borras el objeto del state en S3","Esperas a que el lock caduque solo","Cambias la key del backend a otra ruta"],
+  answer:0,
+  explanation:"El ID viene impreso en el propio mensaje. Confirmar que nadie está aplicando es la mitad del procedimiento: forzar el unlock sobre un apply vivo es como se corrompe un state de verdad. El lock no caduca — es un objeto normal de S3.",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"De las cuatro protecciones del bucket de state, ¿cuál es la única que te salva tras un terraform state rm equivocado?",
+  options:["El versionado del bucket S3","El bloqueo con use_lockfile","El cifrado en reposo AES-256","El bloqueo de acceso público"],
+  answer:0,
+  explanation:"El versionado conserva la escritura anterior: el state dañado se sube como versión nueva y la buena sigue ahí, recuperable por su VersionId. El bloqueo evita escrituras simultáneas, no escrituras equivocadas hechas con tus propias credenciales.",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"En Terraform 1.11 o superior con backend S3, ¿cómo se configura el bloqueo del state?",
+  options:["use_lockfile = true en el bloque backend","dynamodb_table con una clave LockID","No hace falta: S3 bloquea por defecto","Ejecutando terraform lock antes de cada apply"],
+  answer:0,
+  explanation:"El bloqueo nativo de S3 es un objeto .tflock creado con escritura condicional. La tabla de DynamoDB está deprecada desde 1.11 — y casi todo el material de internet todavía te la hará crear. No existe ningún comando terraform lock.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"¿Qué impide el campo lineage del fichero de state?",
+  options:["Mezclar dos states de líneas distintas, como aplicar el de prod sobre dev","Que dos apply escriban a la vez","Que se pierdan versiones antiguas","Que un recurso cambie de dirección"],
+  answer:0,
+  explanation:"Es un UUID generado la primera vez que identifica esa línea de state. Terraform se niega a mezclar dos states con lineage distinto — es lo que te salva de aplicar el state equivocado sobre otro entorno. El bloqueo y el versionado son piezas aparte.",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"¿Para qué sirve el campo serial del state?",
+  options:["Detectar que el state remoto cambió mientras trabajabas","Contar cuántos recursos gestiona el proyecto","Identificar la versión de Terraform usada","Ordenar los recursos dentro del fichero"],
+  answer:0,
+  explanation:"Es un contador que sube en cada escritura. Si tu copia local tiene un serial más viejo que el remoto, Terraform se planta en vez de pisar los cambios de otro. La versión de Terraform va en otro campo (terraform_version).",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"En un plan aparece -/+ junto a tu tabla de DynamoDB. ¿Qué significa?",
+  options:["Destruir la tabla y crearla de nuevo, con pérdida de datos","Modificarla en su sitio, sin recrearla","Crear la nueva y después borrar la vieja, sin pérdida","Releerla como data source"],
+  answer:0,
+  explanation:"-/+ es «forces replacement»: cambiaste un atributo que AWS no permite modificar y Terraform propone destruir y recrear. Junto a una base de datos, ese símbolo significa parar y pensar antes de escribir yes.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"¿Qué hace terraform state rm aws_s3_bucket.logs?",
+  options:["Terraform olvida el bucket; sigue existiendo en AWS sin que nadie lo gestione","Borra el bucket de AWS inmediatamente","Lo marca para destruir en el siguiente apply","Lo mueve al state de otro proyecto"],
+  answer:0,
+  explanation:"state rm solo borra la entrada del state: el recurso real queda huérfano, vivo y facturando, y ningún plan volverá a verlo. Así es como se crean los recursos fantasma que aparecen en la factura. Para moverlo entre states existe state mv.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"En un directorio de autopsia con bloques import, ejecutas terraform plan -generate-config-out=descubierto.tf. ¿Qué toca en AWS?",
+  options:["Nada: el plan es de solo lectura y escribe un fichero en tu disco","Importa los recursos a este state","Crea recursos temporales de prueba","Modifica etiquetas de los recursos importados"],
+  answer:0,
+  explanation:"El plan consulta la API y genera el HCL descubierto, sin escribir nada en AWS. Lo que sí importaría los recursos es un apply — y en un directorio de autopsia no se ejecuta nunca: un destroy posterior borraría la Lambda de verdad.",
+  source:"../../reference/terraform-cli.html#autopsia" },
+
+{ topic:"terraform", type:"tf",
+  question:"Todo data source de Terraform consulta una API remota.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"aws_iam_policy_document y archive_file no llaman a ninguna API: son funciones locales disfrazadas de data source porque el lenguaje no tenía otra forma de expresarlo. La pista: si un data source no necesita credenciales, es de estos.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Quieres saber qué valores acepta budget_type sin credenciales y sin abrir el navegador. ¿El truco más rápido?",
+  options:["Escribir un valor inventado y ejecutar terraform validate","terraform providers schema -json","El autocompletado del editor","Ejecutar terraform console y probar valores"],
+  answer:0,
+  explanation:"El provider enumera los valores válidos en el propio mensaje de error, sin tocar AWS. El esquema JSON te dice qué argumentos existen y de qué tipo, pero nunca la lista de valores permitidos — esa vive en el código del provider.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"¿Cuándo está justificado terraform apply -target=recurso?",
+  options:["Como válvula de emergencia puntual, sabiendo que deja el state parcialmente aplicado","Como forma habitual de acelerar applies grandes","Para desplegar entornos distintos del mismo código","Nunca: el flag no existe"],
+  answer:0,
+  explanation:"-target existe para salir de un atolladero concreto, no como forma de trabajar: aplicar solo una parte del grafo deja el resto sin converger y el state a medias. Para entornos hay workspaces o directorios separados.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Cambias de backend. ¿Qué diferencia hay entre init -migrate-state e init -reconfigure?",
+  options:["-migrate-state copia el state al destino nuevo; -reconfigure usa el nuevo tal cual, sin copiar nada","Son sinónimos: los dos migran el state","-reconfigure copia y -migrate-state descarta","-migrate-state borra el state del origen al terminar"],
+  answer:0,
+  explanation:"-migrate-state lee el state de donde estaba y lo escribe en el destino, dejando el origen intacto. -reconfigure descarta el backend anterior y asume que lo que hay en el nuevo ya es correcto. Y en ambos caminos, el borrado del origen va siempre al final.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"terraform", type:"code",
+  question:"¿Dónde queda oculto el valor de este output?",
+  code:"output \"db_password\" {\n  value     = aws_db_instance.main.password\n  sensitive = true\n}",
+  options:["Solo en la salida por pantalla; en el state se escribe en claro","En pantalla y en el state, cifrado","En ningún sitio: sensitive impide guardarlo","Solo en el state; en pantalla se ve"],
+  answer:0,
+  explanation:"sensitive = true tapa el valor en la consola, nada más. Terraform guarda en el state todos los atributos tal y como los devolvió el provider, en texto plano — HashiCorp lo dice explícitamente. Por eso el state vive cifrado en S3 y fuera de git.",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Con count = 3 sobre un recurso, borras el elemento del medio de la lista que lo alimenta. ¿Qué propone el plan?",
+  options:["Destruir y recrear recursos que no tocaste, porque los índices se corren","Borrar solo el elemento del medio","No changes: Terraform detecta la intención","Un error de sintaxis en el count"],
+  answer:0,
+  explanation:"count identifica cada recurso por su índice: al borrar el [1], el que era [2] pasa a ser [1] y Terraform lo ve como otro recurso. for_each usa claves estables que no se mueven — por eso es la opción por defecto.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"¿Cuándo se justifica escribir un depends_on?",
+  options:["Solo para dependencias reales que ninguna referencia expresa","Siempre que dos recursos estén relacionados","Para acelerar el apply paralelizando menos","Cuando el provider lo exige en su documentación"],
+  answer:0,
+  explanation:"Si puedes sustituirlo por una referencia de atributo, la referencia gana: se documenta sola y no queda obsoleta. Un depends_on «por si acaso» serializa el grafo y ralentiza los apply sin ganar nada. El caso legítimo típico: permisos IAM que nada referencia.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Un plan propone cambios que tú no pediste. ¿Cuál es el primer comando de diagnóstico?",
+  options:["terraform plan -refresh-only","terraform apply -auto-approve","terraform state rm del recurso afectado","terraform force-unlock"],
+  answer:0,
+  explanation:"Es drift: alguien tocó AWS a mano o cambió el provider. -refresh-only muestra qué cambió en la realidad sin proponer tocarla — primero entiendes, luego decides si adoptas el cambio o lo reviertes.",
+  source:"../../reference/terraform-cli.html" },
+
+{ topic:"terraform", type:"tf",
+  question:"Partir main.tf en varios ficheros (dynamodb.tf, outputs.tf…) cambia el orden en que Terraform crea los recursos.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"Terraform fusiona todos los .tf del directorio en un solo documento y construye el grafo con las referencias, no con la posición en el fichero. El reparto es para humanos — y terraform plan con «No changes» tras el refactor es la prueba.",
+  source:"../../lessons/0003-saca-el-state-de-tu-portatil.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"Quieres repetir el bloque anidado ingress dentro de UN único security group, uno por cada puerto de una lista. ¿Qué usas?",
+  options:["Un bloque dynamic dentro del recurso","Un for_each en el recurso","Un count en el recurso","Un depends_on con la lista"],
+  answer:0,
+  explanation:"dynamic genera bloques anidados repetidos dentro de un mismo recurso: exactamente su caso de uso. for_each o count a nivel de recurso crearían varios security groups distintos, no varias reglas dentro de uno.",
+  source:"../../lessons/0002-haz-que-la-alarma-suene.html" },
+
+{ topic:"terraform", type:"mc",
+  question:"En el plan ves arn = (known after apply). ¿Qué significa?",
+  options:["Es un valor que decide AWS al crear el recurso, no tú","Falta declarar una variable","Hay un error de sintaxis en el HCL","El recurso tiene drift pendiente"],
+  answer:0,
+  explanation:"ARNs, IDs y demás identificadores los asigna AWS en el momento de la creación: Terraform no puede conocerlos durante el plan. Es información normal de un recurso nuevo, no un problema.",
+  source:"../../lessons/0001-el-primer-apply.html" },
+
+/* ─────────────── IAM ─────────────── */
+{ topic:"iam", type:"mc",
+  question:"Tu política de identidad permite s3:GetObject sobre un bucket. La política del bucket tiene un Deny explícito para tu usuario. ¿Qué pasa al leer el objeto?",
+  options:["Se deniega: el Deny gana siempre","Se permite: los Allow se suman","Se permite: manda la política de identidad","Depende de cuál sea más específica"],
+  answer:0,
+  explanation:"Un Deny explícito, venga de donde venga, se evalúa antes que todo lo demás y termina la evaluación: no hay Allow que lo contrarreste. Identidad y recurso sí se suman — pero solo entre Allow.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"code",
+  question:"Con esta política, tu código hace PutObject sobre una clave del bucket y recibe AccessDenied. ¿Por qué?",
+  code:"statement {\n  actions   = [\"s3:*\"]\n  resources = [\"arn:aws:s3:::mi-bucket\"]\n}",
+  options:["El ARN cubre el bucket, no los objetos: falta arn:aws:s3:::mi-bucket/*","El comodín s3:* no incluye PutObject","El bloqueo de acceso público lo impide","El cifrado exige un permiso de KMS"],
+  answer:0,
+  explanation:"El ARN del bucket y el del objeto son dos espacios de nombres que no se solapan. PutObject actúa sobre objetos, que se nombran con la barra y el patrón. Cuando una política de S3 «no hace nada», mira la barra.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Dejas tres roles, cuarenta políticas y diez usuarios creados durante todo el mes. ¿Cuánto cuesta?",
+  options:["Nada: IAM no cobra jamás","Nada, dentro del nivel gratuito","Poco: solo cobran los roles","Poco: cobran las llamadas a la API"],
+  answer:0,
+  explanation:"IAM, STS e Identity Center son funciones de la cuenta sin coste adicional — no existe tarifa alguna a la que llegar. Es el único servicio del curso que no puede aparecer en tu factura; lo que sí aparece es lo que tus permisos dejaron crear.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Una Lambda necesita escribir en una tabla de DynamoDB. ¿Qué identidad le das?",
+  options:["Un rol de ejecución para ella","Un usuario IAM con claves de acceso","Un grupo IAM con la política puesta","Solo una política en la tabla"],
+  answer:0,
+  explanation:"Las cargas dentro de AWS reciben credenciales temporales a través de un rol — es la segunda práctica recomendada de AWS. Un usuario con claves obliga a guardar un AKIA en algún sitio, y una Lambda no puede pertenecer a un grupo.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Le pones a un usuario un permissions boundary con Action:\"*\" sobre Resource:\"*\" y le quitas todas las demás políticas. ¿Qué puede hacer?",
+  options:["Nada: un boundary no concede permisos","Todo: el comodín lo permite","Solo lectura sobre la cuenta","Todo, igual que el root"],
+  answer:0,
+  explanation:"Un boundary es un techo, no una concesión: el permiso efectivo es la intersección con las políticas de identidad, y la intersección con el conjunto vacío es vacía. Boundaries, SCP, RCP y session policies solo restan.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Una política del backend S3 tiene GetObject, PutObject y DeleteObject sobre la clave del state. ¿Qué le falta para que el bloqueo funcione?",
+  options:["Una sentencia sobre el objeto .tflock, que es otro ARN","Una sentencia con la acción ListBucket","Una sentencia sobre la tabla de DynamoDB","Una sentencia para el cifrado KMS"],
+  answer:0,
+  explanation:"El lock es un objeto aparte cuya clave lleva el sufijo .tflock — otro ARN que la política no menciona. Sin él, Terraform no puede ni coger ni soltar el bloqueo. Es el desfase clásico de los tutoriales anteriores a use_lockfile.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Aplicas una política que, sin querer, deniega a tu propio usuario todo iam:*. Ya no puedes editarla con él. ¿Qué haces?",
+  options:["Entras como root y la corriges","Abres un ticket con soporte técnico","Creas otro usuario con permisos totales","Cierras sesión y vuelves a entrar"],
+  answer:0,
+  explanation:"Restaurar los permisos de un administrador que se ha bloqueado a sí mismo está en la lista oficial de tareas que solo root puede hacer — es literalmente para lo que root sigue existiendo. Crear otro usuario también exigiría el iam:* que acabas de perder.",
+  source:"../../reference/aws-iam.html#tareas-root" },
+
+{ topic:"iam", type:"code",
+  question:"Un rol tiene estas dos piezas. ¿Qué pregunta contesta la assume_role_policy?",
+  code:"resource \"aws_iam_role\" \"app\" {\n  assume_role_policy = data.aws_iam_policy_document.assume.json\n}\n\nresource \"aws_iam_role_policy\" \"logs\" {\n  role   = aws_iam_role.app.id\n  policy = data.aws_iam_policy_document.logs.json\n}",
+  options:["Quién puede SER este rol — mira hacia afuera, al que lo asume","Qué puede HACER el rol — mira hacia los recursos","Qué recursos puede crear Terraform con él","Cuánto dura la sesión del rol"],
+  answer:0,
+  explanation:"El rol es un uniforme: la política de confianza dice quién puede ponérselo (por eso su única acción es sts:AssumeRole), y la de identidad (aws_iam_role_policy) dice qué puertas abre. La palabra «policy» es lo único que comparten.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"iam", type:"mc",
+  question:"¿Por qué aws_iam_policy_attachment (sin sujeto en el nombre) es peligroso?",
+  options:["Es exclusivo: desasocia a cualquier identidad que no esté en ese bloque","Adjunta la política a todos los usuarios de la cuenta","Convierte la política en una de recurso","Solo funciona con políticas gestionadas por AWS"],
+  answer:0,
+  explanation:"Pese al nombre genérico, ese recurso se apropia de la política: cualquier usuario, grupo o rol que la tenga y no aparezca listado queda desasociado en el siguiente apply. Usa siempre las variantes con sujeto: role/user/group_policy_attachment.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Un apply falla con AccessDenied justo después de crear un rol. Lo repites sin tocar nada y funciona. ¿Qué ha pasado?",
+  options:["IAM es eventualmente consistente: el cambio tardó en propagarse","El provider tiene un bug conocido de reintentos","El lock del state interfirió con el apply","AWS limitó la velocidad de tus peticiones"],
+  answer:0,
+  explanation:"La propia documentación lo dice: IAM es eventually consistent y no conviene ponerlo en rutas críticas. Un rol recién creado puede no ser visible aún para la API que lo consume. No estás loco: es esto, y el provider no reintenta en todos los casos.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"tf",
+  question:"Un grupo IAM es una identidad con la que un proceso puede autenticarse.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"Un grupo no es una identidad: es un contenedor para colgar políticas una sola vez sobre varios usuarios. Nadie «es» un grupo ni puede autenticarse como tal — por eso una Lambda tampoco puede pertenecer a uno.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"¿Qué identidad ignora por diseño todas las políticas de identidad y los SCP?",
+  options:["El root de la cuenta","Un usuario con AdministratorAccess","Un rol con sesión de 12 horas","El administrador de Identity Center"],
+  answer:0,
+  explanation:"La regla de denegación por defecto tiene exactamente una excepción: el root, que tiene acceso total e inacotable. No existe ninguna política que lo limite — la única forma de tener límites es dejar de usarlo.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"iam", type:"mc",
+  question:"¿Qué tipo de política es el único que puede conceder acceso a un principal de OTRA cuenta AWS?",
+  options:["La política de recurso","La política de identidad gestionada","El permissions boundary","La session policy"],
+  answer:0,
+  explanation:"La política de recurso vive en el propio recurso (un topic, un bucket) y es la única que admite nombrar principals de otra cuenta. Las de identidad solo aplican a identidades de la cuenta donde están escritas.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"¿La forma correcta de verificar que root tiene MFA activo y cero claves de acceso activas?",
+  options:["Generar y leer el informe de credenciales","Mirar el panel de la consola de IAM","aws sts get-caller-identity con root","aws iam list-users y revisar la lista"],
+  answer:0,
+  explanation:"aws iam generate-credential-report + get-credential-report devuelve el CSV que es la fuente de verdad de la cuenta entera: mfa_active en true y access_key_1/2_active en false para la fila de root. La consola se mira; el informe se demuestra.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"iam", type:"mc",
+  question:"aws login con tu usuario IAM falla, y con root funciona. ¿La causa documentada solo en la guía de la CLI?",
+  options:["Al usuario le falta la política gestionada SignInLocalDevelopmentAccess","El usuario necesita claves de acceso creadas","aws login solo funciona con root","Falta activar MFA en el usuario"],
+  answer:0,
+  explanation:"aws login con un usuario IAM exige esa política gestionada de AWS; root no la necesita porque no necesita ninguna. Está documentada en la guía de la CLI, no en la de IAM — por eso el error no es evidente.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"iam", type:"mc",
+  question:"¿Por qué el límite de claves de acceso por usuario es exactamente 2?",
+  options:["Para poder rotar una clave sin cortar el servicio","Por compatibilidad con clientes antiguos","Una de trabajo y otra de solo lectura","Es ajustable: 2 es solo el valor inicial"],
+  answer:0,
+  explanation:"El 2 existe para la rotación: creas la clave nueva, migras el servicio, y solo entonces borras la vieja. No es ajustable — y si necesitas más de dos, el diseño está pidiendo un rol con credenciales temporales.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"De los ocho tipos de política de IAM, ¿cuántos CONCEDEN permisos?",
+  options:["Cuatro: las tres de identidad y la de recurso","Todos, cada uno en su ámbito","Solo las políticas gestionadas por AWS","Dos: identidad y boundary"],
+  answer:0,
+  explanation:"Conceden las de identidad (gestionada por AWS, gestionada por ti, inline) y la de recurso. Boundaries, SCP, RCP y session policies solo restan: un boundary con Action:\"*\" no da poder a nadie. Es el error conceptual que más se ve en entrevistas.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"tf",
+  question:"El ARN de un usuario IAM lleva la región donde se creó.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"IAM es global: arn:aws:iam::999999999999:user/terraform tiene el hueco de la región vacío. El endpoint único vive físicamente en us-east-1 — una caída allí impide modificar IAM aunque tu infraestructura esté en otra región.",
+  source:"../../reference/aws-iam.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Creas un aws_iam_user_login_profile sin clave PGP. ¿Dónde acaba la contraseña generada?",
+  options:["En el state, en texto plano","En ningún sitio: AWS no la devuelve","Cifrada dentro del state","Solo en la pantalla, una vez"],
+  answer:0,
+  explanation:"El atributo password se escribe entero en el state, como todos los atributos. sensitive = true solo lo tapa en pantalla. Lo tolerable del curso: el state ya vive cifrado en S3, y password_reset_required la invalida en el primer acceso.",
+  source:"../../lessons/0004-deja-de-ser-root.html" },
+
+{ topic:"iam", type:"mc",
+  question:"Tu política de identidad NO menciona s3:GetObject, pero la política del bucket te lo concede explícitamente (y no hay ningún Deny). ¿Qué pasa?",
+  options:["Se permite: dentro de una cuenta, identidad y recurso se suman","Se deniega: la identidad tiene la última palabra","Se deniega: hacen falta las dos a la vez","Depende del orden de evaluación"],
+  answer:0,
+  explanation:"Dentro de la misma cuenta basta con que UNA de las dos conceda: se suman. Lo que se interseca es identidad con boundary. Y un Deny explícito, en cualquiera de ellas, lo corta todo.",
+  source:"../../reference/aws-iam.html" },
+
+/* ─────────────── LAMBDA ─────────────── */
+{ topic:"lambda", type:"mc",
+  question:"Tu función tarda 400 ms con 512 MB. Subes a 1.024 MB y tarda 180 ms. ¿Qué le pasó al coste de duración por invocación?",
+  options:["Bajó, aunque parezca imposible","Subió, porque pagas más memoria","Igual: se compensa exactamente","No cambia: solo cuentan peticiones"],
+  answer:0,
+  explanation:"0,5 GB × 0,4 s = 0,2 GB-s frente a 1 GB × 0,18 s = 0,18 GB-s. Doblar la memoria dobla el precio por segundo, pero si el tiempo cae a menos de la mitad, el producto baja. Por eso la memoria se mide, no se adivina.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Un servicio interno recibe 2.000 peticiones por segundo, constantes, todo el día. Cada una tarda 50 ms. ¿Lambda o Fargate?",
+  options:["Fargate: la carga es constante","Lambda: el trabajo es corto","Da igual: cuestan lo mismo","Lambda con concurrencia aprovisionada"],
+  answer:0,
+  explanation:"El pago por uso gana cuando hay valles; aquí no los hay. Con carga alta y plana, contenedores siempre encendidos con la capacidad justa salen mucho más baratos y sin cold starts. La concurrencia aprovisionada añadiría coste por hora encima.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Despliegas una Lambda, la invocas y devuelve 200 correcto. Pero en CloudWatch no existe ningún grupo de logs suyo. ¿Qué pasa?",
+  options:["Al rol de ejecución le falta el permiso de logs","Los logs tardan: hay que esperar unos minutos","El código no escribe ningún log","El handler apunta a otro fichero"],
+  answer:0,
+  explanation:"Escribir logs es una acción contra la API de CloudWatch Logs y necesita permiso en el rol como cualquier otra. Sin él, la función corre perfectamente y es muda. Es la causa número uno de «mi Lambda no hace nada y no sé por qué».",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Subes un objeto a S3, eso invoca tu Lambda, y la función lanza una excepción. Sin DLQ ni destino de fallo, ¿qué le pasa al evento?",
+  options:["Se reintenta dos veces y luego se descarta","Se devuelve el error a quien invocó","El objeto se vuelve a procesar solo","Se descarta sin ningún reintento"],
+  answer:0,
+  explanation:"S3 invoca de forma asíncrona: Lambda encola el evento y reintenta dos veces. Agotados los reintentos, sin DLQ ni destino de fallo, el evento desaparece — solo queda rastro en las métricas de error. En síncrono, en cambio, el error viaja al llamador.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"code",
+  question:"Cambias el TypeScript, ejecutas pnpm run build, y terraform plan dice «No changes». ¿Qué falta en el recurso?",
+  code:"resource \"aws_lambda_function\" \"app\" {\n  function_name = \"mi-funcion\"\n  filename      = data.archive_file.app.output_path\n  # ...\n}",
+  options:["source_code_hash: la ruta del zip no cambia aunque cambie el contenido","depends_on hacia el archive_file","publish = true para versionar","Un timeout mayor para el build"],
+  answer:0,
+  explanation:"filename es una ruta, y una ruta no cambia nunca. source_code_hash = data.archive_file.app.output_base64sha256 le da a Terraform el SHA-256 del zip, que sí cambia con el contenido — y entonces el plan detecta el despliegue pendiente.",
+  source:"../../lessons/0005-tu-codigo-en-aws.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Un compañero adjunta la gestionada AWSLambdaBasicExecutionRole «porque es lo estándar». Frente a una política propia de dos acciones sobre un ARN, ¿qué concede de más?",
+  options:["Crear y escribir en cualquier grupo de logs de la cuenta","Escribir objetos en cualquier bucket","Crear roles nuevos en la cuenta","Invocar cualquier función Lambda"],
+  answer:0,
+  explanation:"Esa política concede CreateLogGroup, CreateLogStream y PutLogEvents sobre «*». Si el grupo de logs ya lo crea Terraform, la función no necesita crear nada: dos acciones sobre un único ARN bastan. Menos superficie, mismo resultado.",
+  source:"../../lessons/0005-tu-codigo-en-aws.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Quitas el depends_on del grupo de logs, y algo invoca la función justo cuando se crea, antes que el grupo. ¿Qué es lo peor que puede pasar?",
+  options:["Lambda crea el grupo por su cuenta y el apply siguiente choca: dos dueños","Terraform detecta un ciclo y no aplica","La función no llega a desplegarse","El grupo hereda la retención igualmente"],
+  answer:0,
+  explanation:"Los nombres coinciden por convención, no por referencia — Terraform no ve dependencia alguna. Si Lambda crea el grupo primero, nace fuera del state, sin retención, y el siguiente apply falla con ResourceAlreadyExists sobre un recurso que no controla.",
+  source:"../../lessons/0005-tu-codigo-en-aws.html" },
+
+{ topic:"lambda", type:"code",
+  question:"Con esta política, la función despliega, responde bien… y no escribe ni un log. ¿Por qué?",
+  code:"data \"aws_iam_policy_document\" \"logs\" {\n  statement {\n    actions   = [\"logs:CreateLogStream\", \"logs:PutLogEvents\"]\n    resources = [aws_cloudwatch_log_group.app.arn]\n  }\n}",
+  options:["Falta el sufijo :* — PutLogEvents actúa sobre los streams, no sobre el grupo","Falta la acción logs:CreateLogGroup","El data source no llama a la API de AWS","La política tarda en propagarse"],
+  answer:0,
+  explanation:"El provider quita a propósito el sufijo :* del ARN del grupo, y logs:PutLogEvents lo necesita porque actúa sobre los streams de dentro. La forma correcta: resources = [\"${aws_cloudwatch_log_group.app.arn}:*\"]. El síntoma no es AccessDenied: es silencio.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"No declaras architectures en aws_lambda_function. ¿Qué despliega el provider y qué implica?",
+  options:["x86_64, que cuesta un 20% más por GB-segundo que arm64","arm64, el más barato","La arquitectura de tu máquina local","Depende de la región"],
+  answer:0,
+  explanation:"El default del provider es x86_64. arm64 (Graviton) cuesta exactamente un 20% menos por GB-segundo — 0,0000133334 frente a 0,0000166667 USD — y para JS puro no hay motivo para no usarlo. Primer caso de «el default del provider no es tu default».",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"De los cuatro recursos de una Lambda que funciona (función, rol, política de logs, grupo de logs), ¿cuál es el único obligatorio además de la función?",
+  options:["El rol: role es argumento requerido de la API CreateFunction","La política de logs: sin ella el apply falla","El grupo de logs: sin él la función no arranca","Todos son obligatorios"],
+  answer:0,
+  explanation:"No existe una Lambda sin rol — aunque sea un rol vacío, la función necesita una identidad. Sin política de logs, despliega y es muda; sin grupo declarado, Lambda lo crea sola en la primera invocación (fuera de Terraform y sin retención).",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Guardas datos del usuario en una variable declarada fuera del handler. ¿Cuál es el riesgo?",
+  options:["La siguiente invocación en el mismo entorno puede verlos","Ninguno: cada invocación parte de cero","La función pierde rendimiento notablemente","El deploy falla por estado mutable"],
+  answer:0,
+  explanation:"El entorno de ejecución se reutiliza: lo declarado fuera del handler sobrevive entre invocaciones que caigan en él. Es una optimización enorme para conexiones y clientes del SDK — y una fuga de datos si guardas estado de un usuario. Reutiliza conexiones; nunca estado.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Además de la RAM, ¿qué controla el parámetro de memoria de una Lambda?",
+  options:["La potencia de CPU, proporcional: 1.769 MB equivalen a una vCPU","Nada más: solo la memoria disponible","El tamaño máximo del paquete","El número de reintentos asíncronos"],
+  answer:0,
+  explanation:"Lambda asigna CPU proporcional a la memoria configurada. Por eso subir la memoria a veces abarata la función: con más CPU termina antes y el producto GB-segundo baja. No es intuitivo y hay que medirlo.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"¿Cómo eliges el timeout de una función?",
+  options:["Lo que debería tardar más un margen — es tu único freno de coste","Siempre el máximo, 900 segundos, por seguridad","El default del provider, que ya está pensado","Igual al timeout de API Gateway"],
+  answer:0,
+  explanation:"Si la función se cuelga esperando algo que nunca responde, pagas hasta el timeout — y con reintentos detrás, multiplicado. 900 s es el límite duro del servicio, no una recomendación. El default del provider (3 s) tampoco es tu default.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Un millón de invocaciones que hacen console.log de un evento de 4 KB. ¿Qué línea de la factura gana?",
+  options:["Los logs: unos 2 USD de ingesta frente a 0,20 USD de peticiones","Las peticiones, siempre","La duración, por el tiempo de log","Ninguna: el free tier lo cubre todo siempre"],
+  answer:0,
+  explanation:"Que los logs cuesten más que el cómputo es lo normal, no la excepción: la ingesta vale 0,50 USD/GB. Y el valor por defecto de retención es «para siempre» — pon retention_in_days en cada grupo, siempre.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"tf",
+  question:"La consola de Lambda puede modificar tu rol IAM sin avisarte al configurar los logs.",
+  options:["Verdadero","Falso"],
+  answer:0,
+  explanation:"Está escrito en la doc de AWS: al configurar el grupo de logs desde la consola, Lambda añade al rol permiso para escribir en CUALQUIER grupo. Hay una casilla — «Add required permissions» — para impedirlo, y casi nadie sabe que existe. La IaC no añade complejidad: revela la que la consola escondía.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Haces terraform destroy y el grupo /aws/lambda/mi-funcion sigue existiendo en CloudWatch. ¿Por qué?",
+  options:["Lo creó Lambda en una invocación, no Terraform: nunca estuvo en el state","Los grupos de logs no se pueden borrar","destroy nunca toca CloudWatch","Es un bug conocido del provider"],
+  answer:0,
+  explanation:"Si la función se invocó antes de que existiera el grupo declarado, Lambda lo creó por su cuenta: nació fuera de Terraform, sin retención, y sobrevive a tu destroy acumulando coste. Por eso el grupo se declara y se protege con depends_on.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"En una invocación síncrona (API Gateway, aws lambda invoke), la función lanza una excepción. ¿Qué hace Lambda?",
+  options:["Nada: el error viaja a quien llamó, sin reintentos","Reintenta dos veces automáticamente","Encola el evento para más tarde","Lo manda a la DLQ por defecto"],
+  answer:0,
+  explanation:"En síncrono quien llama espera la respuesta, así que el error es suyo y Lambda no reintenta. Los dos reintentos automáticos son del modo asíncrono (S3, SNS, EventBridge); en el event source mapping, quien decide es el origen.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"Tu función necesita guardar un fichero que debe seguir existiendo en la próxima invocación. ¿Dónde lo pones?",
+  options:["En S3 o DynamoDB: /tmp desaparece con el entorno","En /tmp, que aguanta hasta 10 GB","En una variable global del módulo","En el directorio del código de la función"],
+  answer:0,
+  explanation:"/tmp existe (512 MB a 10.240 MB) pero muere con el entorno de ejecución, y no controlas cuándo. Todo lo que deba durar más que una invocación vive fuera: S3, DynamoDB, RDS. El disco de Lambda es mentira útil, no almacenamiento.",
+  source:"../../reference/aws-lambda.html" },
+
+{ topic:"lambda", type:"mc",
+  question:"¿Cuál es el único modo de Lambda que factura aunque nadie invoque la función?",
+  options:["La concurrencia aprovisionada","La concurrencia reservada","El empaquetado como imagen de contenedor","El runtime arm64"],
+  answer:0,
+  explanation:"La aprovisionada mantiene entornos inicializados y cobra por hora (~1,37 USD/mes por función a 128 MB): es el parámetro que se olvida encendido. La reservada solo aparta un trozo del pozo y cuesta cero en reposo.",
+  source:"../../reference/aws-lambda.html" },
+
+/* ─────────────── TYPESCRIPT Y TOOLING ─────────────── */
+{ topic:"typescript-tooling", type:"mc",
+  question:"Tu bundle pesa 328 KB, pero el zip que sube a AWS pesaba 220 KB en vez de los ~65 KB esperados. ¿Qué viajaba de más?",
+  options:["El sourcemap: source_dir comprimía todo dist/, y el .map pesa el triple que el código","El lockfile de pnpm dentro del zip","El bundle sin minificar","El tsconfig.json de la raíz"],
+  answer:0,
+  explanation:"esbuild deja dos ficheros en dist/ y source_dir los comprime ambos. Node ni siquiera lee sourcemaps sin --enable-source-maps. El arreglo vive en Terraform: archive_file con source_file apuntando solo al bundle — el zip baja un 70%.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"Validas el payload con zod y tienes la regla MAX_URL_LENGTH. ¿Dónde vive cada cosa?",
+  options:["La regla en domain/ como dato exportado; el esquema zod en application/","Todo en domain/: validar es regla de negocio","Todo en el handler: es la frontera","El esquema en infrastructure/, junto al SDK"],
+  answer:0,
+  explanation:"En domain/ no entra nada que aparezca en el package.json — ni zod, ni un ORM. La regla es un dato puro del dominio; la forma del payload se valida en application/ con la librería. Prueba de que está bien: cambiar zod por Valibot no toca domain/.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"El SDK de AWS ya viene incluido en el runtime nodejs24.x. ¿Por qué AWS recomienda empaquetarlo igualmente?",
+  options:["El runtime trae una versión que AWS cambia sin avisarte","El runtime no incluye ningún cliente","Empaquetarlo reduce el tamaño del zip","Sin empaquetarlo el handler pierde los tipos"],
+  answer:0,
+  explanation:"La versión menor del SDK embebido varía por región y AWS la actualiza cuando quiere. Empaquetar es el mismo argumento que tu .terraform.lock.hcl: la versión que corre es la que tú probaste. Cuesta ~500 KB de bundle y se paga a gusto.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"code",
+  question:"Ejecutas los tests con node --test y revienta con ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. ¿Qué línea es la culpable?",
+  code:"export class ShortCode {\n  constructor(readonly value: string) {}\n}",
+  options:["El parameter property del constructor: Node borra tipos, no genera código","El export de una clase desde un módulo","La palabra readonly en cualquier posición","El tipo string en el parámetro"],
+  answer:0,
+  explanation:"Node ejecuta TypeScript borrando tipos (strip-only): todo lo que exija GENERAR código falla — parameter properties, enum y namespace. Se escribe el campo declarado y asignado a mano. readonly en una propiedad normal sí se borra sin problema.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"¿Qué está prohibido importar en domain/?",
+  options:["Todo lo que aparezca en el package.json; los globales del lenguaje sí valen","Solo el SDK de AWS","Cualquier cosa, incluido node:crypto","Solo los tipos de eventos de Lambda"],
+  answer:0,
+  explanation:"La regla corta («prohibido el SDK») se quedaba corta: ninguna dependencia externa entra en el dominio, tampoco zod. URL, Date, Intl o node:crypto sí — no los instalas, están en cualquier runtime. La capa que más años vive no puede caducar con una librería.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"¿Cómo se tipa el event que recibe el handler, y por qué?",
+  options:["unknown: los tipos desaparecen al compilar y quien invoca es AWS","Con la interfaz APIGatewayProxyEventV2","any, para no pelear con el compilador","string, porque llega serializado"],
+  answer:0,
+  explanation:"Declarar el evento con una interfaz no valida nada en runtime: solo apaga las preguntas del compilador sobre datos que no controlas. unknown te obliga a parsear en la frontera — que es exactamente lo que quieres.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"«Parse, don't validate»: ¿qué distingue a un parser de un validador?",
+  options:["Devuelve un tipo distinto: la comprobación queda registrada en el sistema de tipos","Es más rápido en tiempo de ejecución","Lanza excepciones en vez de devolver false","Funciona sin librerías externas"],
+  answer:0,
+  explanation:"Un validador devuelve true/false y te deja el dato igual de sospechoso. Un parser devuelve TargetUrl donde había string: nadie más abajo puede saltarse la comprobación, porque el tipo lo impide. Cada capa recibe datos más fuertes que la anterior.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"zod entra entero en el bundle (328 KB) pero zod/mini se poda a 9 KB. ¿Por qué?",
+  options:["zod encadena métodos y esbuild no puede demostrar cuáles no usas; zod/mini usa funciones sueltas","zod/mini está escrito en otro lenguaje","esbuild trata zod como dependencia externa","zod/mini no valida, solo tipa"],
+  answer:0,
+  explanation:"El tree shaking elimina lo que no se alcanza desde el entrypoint — pero con una API de métodos encadenados el bundler no puede probar qué métodos sobran y se lleva la librería entera. Las funciones sueltas de zod/mini sí se podan, a cambio de otra API.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"¿Por qué pnpm run build va SIEMPRE antes de terraform plan, y no es una preferencia?",
+  options:["archive_file se resuelve durante el plan: sin dist/ el plan falla","Terraform cachea el zip anterior","El apply borra dist/ al terminar","Por convención del equipo"],
+  answer:0,
+  explanation:"El data archive_file se evalúa en el plan, así que el artefacto tiene que existir ya. El build nunca entra en Terraform: Terraform gestiona infraestructura, construir artefactos es del pipeline. Orden fijo: build → plan → apply.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"code",
+  question:"¿Por qué las comillas simples en este script de package.json?",
+  code:"\"test\": \"node --test 'src/**/*.test.ts'\"",
+  options:["Para que el glob lo expanda Node, no la shell","Para escapar los asteriscos en JSON","Son intercambiables con las dobles","Para que funcione en Windows"],
+  answer:0,
+  explanation:"Sin comillas, la shell expandiría el patrón (o no, según la shell) antes de que Node lo vea. Con comillas simples el glob llega intacto a Node, que lo expande igual en cualquier máquina. Hace falta además allowImportingTsExtensions, válido solo con noEmit.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"En Lambda: «Dynamic require of \"node:https\" is not supported». Tu prueba de humo local con node -e pasaba. ¿Qué ocurrió?",
+  options:["El SDK trae CJS y el bundle es ESM: el stub de require solo falla al cargar como ESM puro","El runtime de Lambda no soporta node:https","esbuild olvidó incluir el módulo https","El zip se corrompió al subir"],
+  answer:0,
+  explanation:"esbuild deja un stub de require al bundlear CJS dentro de ESM, y node -e carga el bundle como CJS — donde el stub sí encuentra require. La prueba mentía. Arreglo: banner con createRequire en el build. Regla nueva: el humo de un bundle ESM se ejecuta desde un .mjs, nunca con node -e.",
+  source:"../../lessons/0007-la-memoria-del-acortador.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"Tras instalar con pnpm 11, esbuild no funciona y aparece ERR_PNPM_IGNORED_BUILDS. ¿Qué haces?",
+  options:["Aprobar su postinstall con allowBuilds en pnpm-workspace.yaml","Añadir onlyBuiltDependencies al package.json","Reinstalar con npm, que no bloquea nada","Bajar a pnpm 10"],
+  answer:0,
+  explanation:"pnpm 11 bloquea por defecto los scripts postinstall de las dependencias — un argumento de seguridad, no un bug — y esbuild necesita el suyo. La clave moderna es allowBuilds en pnpm-workspace.yaml; onlyBuiltDependencies es lo viejo que aún circula por internet.",
+  source:"../../lessons/0006-el-zip-no-es-tu-repositorio.html" },
+
+{ topic:"typescript-tooling", type:"tf",
+  question:"Si los 14 tests unitarios pasan, el rol IAM y los ARN del despliegue están bien.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"Un test unitario es ciego a la infraestructura: pasaría entero con el rol roto, el ARN sin :* y el handler mal apuntado. No los invalida — los separa. La infraestructura se prueba con invoke y logs contra AWS real: eso es verificar.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"¿El criterio principal para decidir cuántas Lambdas tiene tu API?",
+  options:["Agrupar por conjuntos de permisos IAM, no por entidad","Una por endpoint, siempre","Una sola con un router dentro, siempre","Por el tamaño del bundle de cada una"],
+  answer:0,
+  explanation:"Los permisos se conceden por función: la granularidad de tus funciones ES la granularidad de tu privilegio mínimo, y es el único eje que no se compensa después. Si dos operaciones necesitan permisos distintos, sepáralas; si no, agruparlas no cuesta seguridad.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"¿Cuál es la prueba de que la frontera entre capas está bien puesta al validar datos?",
+  options:["Cambiar zod por Valibot no debe tocar domain/","Que todos los tests estén en un solo fichero","Que el handler no supere las 50 líneas","Que application/ no tenga dependencias"],
+  answer:0,
+  explanation:"Si sustituir la librería de validación obliga a tocar el dominio, la regla y el mecanismo están mezclados. Y la heurística hermana: cuando un caso de prueba no sabe a qué fichero pertenece, la frontera está mal puesta — al moverla, los tests se reparten solos.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"tf",
+  question:"Un branded type (string & { readonly __brand: \"ShortCode\" }) añade bytes al bundle.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"En tiempo de ejecución sigue siendo un string: la marca vive solo en el sistema de tipos y desaparece al compilar. Cero bytes, y a cambio TypeScript ya no deja pasar cualquier cadena donde se espera un ShortCode.",
+  source:"../../reference/typescript-lambda.html" },
+
+{ topic:"typescript-tooling", type:"mc",
+  question:"¿Cuál es la prueba de diagnóstico que resume la frase de AWS «separate the handler from your core logic»?",
+  options:["Si para probar una función necesitas AWS, la función sabe demasiado sobre AWS","Si el handler supera las 100 líneas, hay que partirlo","Si hay más de tres imports, sobra una capa","Si el bundle supera 1 MB, el diseño está mal"],
+  answer:0,
+  explanation:"Leída al revés, la frase es un detector: la testabilidad no es una consecuencia agradable de las capas, es su definición operativa. Una capa que no se prueba más fácil que la de abajo no se ha ganado el directorio.",
+  source:"../../reference/typescript-lambda.html" },
+
+/* ─────────────── DYNAMODB ─────────────── */
+{ topic:"dynamodb", type:"mc",
+  question:"Tabla de auditoría legal: cada evento se escribe una vez, se lee quizá una vez al año, acumula 4 TB. ¿Qué cambias?",
+  options:["La clase de tabla, a Standard-IA","El modo de pago, a provisionado","Añadir DAX delante de la tabla","Replicarla en una segunda región"],
+  answer:0,
+  explanation:"Con 4 TB dominando la factura, Standard-IA baja el almacenamiento de 0,25 a 0,10 USD/GB-mes y encarece un 25% unas peticiones que casi no existen. Es exactamente el caso para el que existe esa clase. El billing_mode no toca el precio del gigabyte.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Para la tabla del acortador: ¿clave de partición code (aleatorio), o fecha con code de clave de ordenación «para listar por día»?",
+  options:["Por código: la consulta del producto manda, y el hash reparte uniforme","Por fecha: así puedo listar por día","Da igual: la clave compuesta cubre ambos","Da lo mismo: un GSI lo resuelve luego"],
+  answer:0,
+  explanation:"La consulta real es «dame este código», y un código aleatorio reparte perfecto entre particiones. Con la fecha como partición, todo el tráfico del día cae en una sola: 1.000 escrituras/segundo de techo da igual lo grande que sea la tabla — la hot partition de manual.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Tu Lambda hace PutItem de un código que YA existe, sin ConditionExpression. ¿Qué devuelve DynamoDB?",
+  options:["Éxito: machaca el ítem sin avisar","ConditionalCheckFailedException","Error de clave primaria duplicada","Éxito: fusiona los atributos"],
+  answer:0,
+  explanation:"PutItem es un upsert: reemplaza el ítem completo y responde 200 como si nada — el enlace de otro usuario apunta ahora a tu URL y nadie se enteró. La escritura condicional no es una optimización: es la corrección del sistema. Fusionar atributos es UpdateItem, otra operación.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Necesitas las URLs más visitadas agregadas por dominio, para un informe mensual. ¿Cómo se hace bien?",
+  options:["Exportar la tabla a S3 y agregar allí fuera (Athena)","Un Scan mensual que agrupe en memoria","Un GSI con el dominio como clave","Cien lecturas transaccionales atómicas"],
+  answer:0,
+  explanation:"El export a S3 no consume capacidad de la tabla, y sobre esos ficheros el SQL con agregaciones es trivial. Un Scan factura la tabla completa en cada pasada, y un GSI da otra vista clave→ítem, no agregaciones. Analítica y operación tienen motores distintos a propósito.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"code",
+  question:"Añades created_at al bloque attribute «para documentar el esquema». validate y plan pasan limpios. ¿Qué sembraste?",
+  code:"resource \"aws_dynamodb_table\" \"links\" {\n  hash_key = \"code\"\n  attribute { name = \"code\"       type = \"S\" }\n  attribute { name = \"created_at\" type = \"S\" }\n}",
+  options:["Un plan que nunca converge: cada apply propone un índice imposible","Un coste extra por atributo almacenado","La tabla destruida y recreada","Escrituras rechazadas por violar el esquema"],
+  answer:0,
+  explanation:"attribute no es el esquema: es la lista de claves (de la tabla o de un índice). Un atributo que no es clave de nada deja la configuración pidiendo un índice que no existe — el plan infinito documentado por el propio provider. Y ninguna herramienta te avisa antes.",
+  source:"../../lessons/0007-la-memoria-del-acortador.html" },
+
+{ topic:"dynamodb", type:"code",
+  question:"No escribiste ningún depends_on hacia la tabla y aun así Terraform la crea antes que la función. ¿Qué garantiza el orden?",
+  code:"resource \"aws_lambda_function\" \"create_link\" {\n  environment {\n    variables = {\n      TABLE_NAME = aws_dynamodb_table.links.name\n    }\n  }\n}",
+  options:["La referencia de atributo: es una arista del grafo","La posición de los bloques en el fichero","El depends_on que ya lleva la función","El provider, que conoce ambos recursos"],
+  answer:0,
+  explanation:"TABLE_NAME referencia un atributo de la tabla: Terraform no puede conocer su valor sin crearla antes. Eso es una dependencia implícita — la forma correcta. El orden en el fichero no importa, y el provider no conoce tu intención.",
+  source:"../../lessons/0007-la-memoria-del-acortador.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"En el acortador, ¿qué señal concreta alimenta el bucle de reintento cuando un código generado colisiona?",
+  options:["La ConditionalCheckFailedException que produce la condición, traducida a un error del contrato","Un código de estado 409 de DynamoDB","El timeout de la escritura","Una lectura previa que detecta el duplicado"],
+  answer:0,
+  explanation:"attribute_not_exists(code) hace que la escritura falle con ConditionalCheckFailedException; el adaptador la traduce a CodeCollisionError (idioma del contrato) y el caso de uso reintenta con otro código. Sin la condición no hay señal: el bucle quedaría vivo pero ciego.",
+  source:"../../lessons/0007-la-memoria-del-acortador.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"No declaras billing_mode en aws_dynamodb_table. ¿Qué obtienes?",
+  options:["PROVISIONED, que cobra por hora aunque nadie use la tabla","PAY_PER_REQUEST, el recomendado","Un error: el argumento es obligatorio","Depende de la región"],
+  answer:0,
+  explanation:"El default del provider es PROVISIONED — el contrario al que quieres con tráfico bajo o a ráfagas. El free tier de 25 WCU/RCU lo tapa en cuentas pequeñas… hasta la tabla que deja de caber. Segundo caso de «el default del provider no es tu default».",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Cambias el hash_key de una tabla con datos. ¿Qué dirá el plan?",
+  options:["-/+ forces replacement: destruye la tabla y sus datos","~ modificar en sitio","Un error: el cambio está prohibido","Nada: la clave se renombra en caliente"],
+  answer:0,
+  explanation:"hash_key es ForceNew: la clave de partición decide la distribución física y no se puede cambiar en una tabla viva. El plan lo dirá con -/+ — y ese símbolo junto a una base de datos significa parar. Las claves se deciden una vez, antes de la tabla.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"¿Cuál es la diferencia real entre Query y Scan?",
+  options:["Query usa la clave y lee lo que pides; Scan lee y factura la tabla entera","Scan es más rápido en tablas pequeñas","Query solo funciona con índices","Son equivalentes con FilterExpression"],
+  answer:0,
+  explanation:"«Query pregunta, Scan confiesa»: Scan recorre todo en páginas de 1 MB y factura cada byte leído, filtre lo que filtre después. Un Scan periódico en producción es casi siempre un error de diseño que la factura delata.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Escribes un ítem de 5 KB en modo on-demand. ¿Cuántas unidades de escritura consume?",
+  options:["5: una WRU por cada KB","1: una escritura es una unidad","10: el doble por ser on-demand","Depende del número de atributos"],
+  answer:0,
+  explanation:"Las unidades miden tamaño, no peticiones: una escritura cubre hasta 1 KB, así que 5 KB son 5 WRU. En lectura, 4 KB por RRU (y la eventual, la mitad). Las transaccionales cuestan el doble.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Justo después de escribir un ítem, una lectura normal devuelve el valor viejo. ¿Qué pasa?",
+  options:["Nada raro: la lectura es eventual por defecto; pide ConsistentRead si lo necesitas","Un bug de replicación de AWS","La escritura falló silenciosamente","La tabla está en throttling"],
+  answer:0,
+  explanation:"Leer es eventual por defecto: justo tras escribir puedes ver el valor anterior. La consistencia fuerte se pide por operación con ConsistentRead — y cuesta el doble. Es un intercambio, no un fallo.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Tus ítems rondan los 2 MB (un PDF pequeño por registro). ¿Qué haces?",
+  options:["El objeto a S3, la clave y los metadatos en la tabla","Subir el límite por ticket","Partir el PDF en varios ítems","Comprimirlo hasta que quepa"],
+  answer:0,
+  explanation:"El límite duro es 400 KB por ítem y no se amplía: es una señal de diseño. Lo grande vive en S3 (que sirve objetos), y DynamoDB guarda la clave y lo consultable. Cada servicio en su papel.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Pones deletion_protection_enabled = true en la tabla del curso. ¿Consecuencia?",
+  options:["terraform destroy falla hasta que lo pongas a false y apliques","Solo protege contra borrado desde la consola","Nada: es el valor por defecto","Impide también los apply de cambios"],
+  answer:0,
+  explanation:"En producción es una virtud; en un curso donde todo se destruye al terminar, un cepo: el destroy se bloquea hasta desactivarlo con un apply previo. Conocer el flag es saber cuándo NO ponerlo.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"¿Cuál es el techo físico de una partición de DynamoDB?",
+  options:["3.000 unidades de lectura y 1.000 de escritura por segundo","40.000 lecturas por segundo","No hay techo: escala infinito","1 MB por segundo de transferencia"],
+  answer:0,
+  explanation:"Cada partición física sirve como máximo 3.000 RRU / 1.000 WRU por segundo, y no es ajustable: es diseño. Por eso la clave de partición debe repartir — una clave con pocos valores concentra el tráfico y te estrangula aunque la tabla vaya sobrada.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"tf",
+  question:"attribute_not_exists(code) convierte «crea solo si no existe» en una operación atómica sin coste extra de red.",
+  options:["Verdadero","Falso"],
+  answer:0,
+  explanation:"La condición se evalúa dentro de la propia escritura, en la partición, como parte de la misma operación: no hay lectura previa ni viaje extra. Es la primitiva de candados e idempotencia que DynamoDB te da gratis — y la misma acción IAM que un PutItem normal.",
+  source:"../../reference/aws-dynamodb.html" },
+
+{ topic:"dynamodb", type:"mc",
+  question:"Añades un GSI a una tabla con mucho tráfico de escritura. ¿Qué efecto tiene en el coste?",
+  options:["Duplica el coste de escritura de los atributos proyectados","Ninguno: los índices son gratis","Solo encarece las lecturas","Cobra por hora como DAX"],
+  answer:0,
+  explanation:"Cada escritura en la tabla se replica al índice: escribes una vez, pagas también el GSI. Antes de añadir uno, pregunta si la consulta secundaria justifica duplicar el coste de cada escritura — y recuerda que un GSI no hace agregaciones.",
+  source:"../../reference/aws-dynamodb.html" },
+
+/* ─────────────── S3 ─────────────── */
+{ topic:"s3", type:"mc",
+  question:"Volcados diarios de base de datos: se conservan siete años por norma legal y en cuatro años nadie ha leído ninguno. ¿Qué clase eliges?",
+  options:["Glacier Deep Archive","S3 Standard","Glacier Instant Retrieval","Intelligent-Tiering"],
+  answer:0,
+  explanation:"Acceso menos de una vez al año y recuperación en horas: es exactamente su caso. La duración mínima de 180 días no molesta guardando siete años. Standard pagaría 0,023 USD/GB-mes por datos que nadie lee — dos órdenes de magnitud de diferencia.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"Un compañero añade aws_s3_bucket_server_side_encryption_configuration con AES256 «para que los datos estén cifrados». ¿Qué le dices?",
+  options:["Ese cifrado ya está puesto: es automático desde enero de 2023 y no se puede desactivar","Ese recurso rompe el apply","Ese cifrado tiene coste extra","Ese cifrado oculta las claves de los objetos"],
+  answer:0,
+  explanation:"Desde el 5 de enero de 2023 todo objeto nuevo se cifra con SSE-S3 (AES-256), gratis y sin interruptor de apagado. El recurso declara lo que ya ocurre: no está mal, está de más. Si un tutorial lo trae, es anterior a 2023.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"Diez millones de registros de 2 KB, leídos sueltos por identificador varias veces por segundo. ¿Dónde los pones?",
+  options:["En DynamoDB","En S3 Standard","En S3 Standard-IA","En S3 Express One Zone"],
+  answer:0,
+  explanation:"Registros pequeños leídos por clave a alta frecuencia son el caso canónico de DynamoDB: milisegundos y coste por petición muy inferior. En S3, muchos objetos diminutos es un antipatrón — y Standard-IA lo empeora con su mínimo facturable de 128 KB por objeto.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"Bucket con versionado: un objeto de 1 GB se sobrescribe cada día. A los 30 días, ¿cuánto almacenamiento pagas?",
+  options:["Unos 30 GB","1 GB: la versión actual","2 GB tras consolidar","7 GB por la retención por defecto"],
+  answer:0,
+  explanation:"El versionado apila: cada sobrescritura crea una versión nueva y conserva todas las anteriores. Solo desaparecen si escribes una regla de ciclo de vida que las expire. Para el state de Terraform da igual — son kilobytes.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"En S3, ¿qué dirección de la transferencia de datos es gratis y cuál duele en la factura?",
+  options:["Entrar es gratis; salir a internet es lo caro","Salir es gratis; entrar es lo caro","Ambas son gratis dentro del free tier","Ambas cuestan lo mismo"],
+  answer:0,
+  explanation:"La entrada desde internet es gratis (entrar es fácil); la salida se cobra a partir de los 100 GB/mes agregados. Es la razón de poner CloudFront delante de contenido público, y de que «migrar de nube» sea caro.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"«Renombrar una carpeta» con 10.000 objetos dentro, ¿qué es en realidad?",
+  options:["Copiar cada objeto a una clave nueva y borrar el viejo","Una operación de metadatos instantánea","Un solo PUT sobre el prefijo","Imposible: las carpetas son inmutables"],
+  answer:0,
+  explanation:"En S3 no hay carpetas: la clave es una sola cadena plana y las barras son decorado de la consola. Cambiar el «nombre de la carpeta» es reescribir cada clave — 10.000 COPY más 10.000 DELETE, con su tiempo y su coste.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"tf",
+  question:"Tras un PUT, un GET inmediato puede devolver la versión anterior del objeto durante unos segundos.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"Desde diciembre de 2020 S3 tiene consistencia fuerte: un GET posterior a un PUT devuelve siempre la versión nueva, sin coste extra. El material anterior a esa fecha — que sigue circulando — te dirá lo contrario.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"¿Qué mecanismo de S3 hace posible el lock de use_lockfile de Terraform?",
+  options:["Las escrituras condicionales: un PUT con If-None-Match:* falla si la clave ya existe","El versionado del bucket","Una cola interna de escrituras","El bloqueo de acceso público"],
+  answer:0,
+  explanation:"El lock no es magia: es un objeto .tflock que solo puede crear el primero que llegue, gracias a la escritura condicional. El mismo mecanismo convierte a S3 en un sistema de exclusión mutua — y jubiló a la tabla de DynamoDB.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"Con versionado activo, ¿qué hace exactamente un DELETE sobre un objeto?",
+  options:["Coloca un delete marker encima: el objeto sigue existiendo y pagándose","Borra la versión más reciente","Borra todas las versiones","Falla: con versionado no se puede borrar"],
+  answer:0,
+  explanation:"El DELETE no borra: apila una marca. Para borrar de verdad hay que eliminar cada versión por su VersionId. Es lo que convierte «he corrompido el state» en «recupero la versión de hace diez minutos» — y también lo que sigue facturando si lo olvidas.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"¿Por qué AWS recomienda vaciar y conservar un bucket antes que borrarlo?",
+  options:["El nombre es global: otra cuenta puede reclamarlo y recibir tus peticiones","Borrar un bucket cuesta dinero","Los buckets borrados no liberan su almacenamiento","Por los logs de acceso pendientes"],
+  answer:0,
+  explanation:"Al borrar un bucket, cualquier cuenta del mundo puede registrar ese nombre y empezar a recibir el tráfico que iba dirigido al tuyo — configuraciones viejas incluidas. La salida moderna es el account regional namespace, que reserva el nombre a tu cuenta.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"code",
+  question:"Ves este recurso en un ejemplo de internet. ¿Qué te dice del ejemplo?",
+  code:"resource \"aws_s3_bucket\" \"web\" {\n  bucket = \"mi-web\"\n  versioning {\n    enabled = true\n  }\n}",
+  options:["Es anterior a 2022: desde el provider v4, el versionado es un recurso aparte","Es la forma recomendada actual","Solo funciona en us-east-1","Activa el versionado dos veces"],
+  answer:0,
+  explanation:"Desde la versión 4 del provider, aws_s3_bucket solo crea el bucket: versionado, política, ciclo de vida y cifrado son recursos propios que apuntan a él (aws_s3_bucket_versioning, etc.). El bloque embebido delata material viejo.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"terraform destroy falla porque el bucket tiene objetos. ¿Qué hace force_destroy = true y dónde no lo pondrías jamás?",
+  options:["Borra todos los objetos y versiones sin recuperación; jamás en el bucket de state","Fuerza el destroy saltándose el lock; jamás en producción","Borra solo los delete markers; vale en cualquier bucket","Es un flag de la CLI, no del recurso"],
+  answer:0,
+  explanation:"S3 no permite borrar un bucket no vacío; force_destroy vacía primero, incluidas todas las versiones, sin vuelta atrás. En el bucket del state es exactamente lo contrario de lo que quieres — ahí va prevent_destroy, que bloquea el destroy del stack entero.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"Borras el recurso aws_s3_bucket_versioning de tu configuración y aplicas. ¿Qué pasa con el versionado?",
+  options:["Pasa a Suspended: las versiones existentes siguen ahí y siguen facturándose","Se desactiva del todo y borra las versiones","Nada: el recurso es declarativo puro","El apply falla: no se puede quitar"],
+  answer:0,
+  explanation:"El versionado de un bucket no puede volver a «Disabled»: quitarlo lo suspende. Las versiones viejas no desaparecen — siguen ocupando y pagándose hasta que una regla de ciclo de vida las expire.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"¿El coste fantasma clásico de S3 que no se ve en la consola?",
+  options:["Los multipart uploads abortados: partes huérfanas que ocupan y se facturan","Los delete markers acumulados","Los metadatos de cada objeto","Las peticiones LIST de la propia consola"],
+  answer:0,
+  explanation:"Una subida grande que falla deja sus partes almacenadas e invisibles. Se limpian con una regla de ciclo de vida abort_incomplete_multipart_upload. Si un bucket «vacío» factura almacenamiento, empieza por ahí.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"Los cuatro true del public access block ya son el comportamiento por defecto. ¿Por qué escribirlos igualmente?",
+  options:["Dejan la intención por escrito y el plan detecta drift si alguien los desactiva","Sin ellos el bucket nace público","El provider los exige desde la v4","Por compatibilidad con buckets antiguos"],
+  answer:0,
+  explanation:"Sobre lo que Terraform no gestiona no hay plan que valga: si un día alguien abre el bucket a mano, quieres que el plan te lo grite. El cifrado, en cambio, no se declara — nadie puede quitarlo, así que no hay drift posible que vigilar.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"tf",
+  question:"Los buckets filtrados que salen en las noticias estaban públicos porque S3 es público por defecto.",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"«By default, new buckets, access points, and objects don't allow public access»: nacen privados y con el bloqueo de acceso público activo. Cada filtración famosa requirió que alguien desactivara esas protecciones a mano.",
+  source:"../../reference/aws-s3.html" },
+
+{ topic:"s3", type:"mc",
+  question:"¿Qué es exactamente un objeto de S3?",
+  options:["Unos bytes, una clave de texto y unos metadatos; se escribe y se lee entero","Un fichero con permisos POSIX","Un bloque de disco montable","Una fila consultable por atributos"],
+  answer:0,
+  explanation:"No puedes modificar el byte 4.096 de un objeto: si algo cambia, subes el objeto completo otra vez. S3 es un guardarropa, no una estantería — y esa diferencia con un disco o un sistema de ficheros es lo que hay que entender para no usarlo mal.",
+  source:"../../reference/aws-s3.html" },
+
+/* ─────────────── API GATEWAY ─────────────── */
+{ topic:"apigateway", type:"mc",
+  question:"Aplicas la puerta, haces curl y recibes {\"message\":\"Internal Server Error\"}. Los logs de la función: vacíos, ni un START. ¿Sospechoso número uno?",
+  options:["Falta aws_lambda_permission: API Gateway no puede invocar","El rol de ejecución de la función","El código del handler","El payload format de la integración"],
+  answer:0,
+  explanation:"Log vacío = la función nunca corrió: el problema está ANTES de la función. Sin la política basada en recursos, API Gateway no tiene permiso de invocación y devuelve 500 sin que la Lambda se entere. Un rol o un handler rotos habrían dejado rastro.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Te piden vender el acceso a la API con claves por cliente y límites distintos para cada uno. Estás en HTTP API. ¿Qué haces?",
+  options:["Migrar a REST API: API keys y usage plans son exactamente lo que HTTP API no tiene","Implementar las claves en un authorizer propio","Configurar throttling por stage","Repartir la API en varias HTTP APIs"],
+  answer:0,
+  explanation:"Es el caso de libro para pagar el 3,5×: puedes nombrar la pieza concreta que falta. El throttling de HTTP API es por ruta o stage — no distingue quién llama. Reimplementarlo a mano es mantener código propio para algo que el otro producto trae de serie.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Un servicio interno con 40 millones de peticiones al día, planas y predecibles. ¿Qué puerta le pones, pensando en coste?",
+  options:["Un ALB: su coste fijo por hora compensa a ese volumen","HTTP API: solo cobra por peticiones","Function URLs por cada endpoint","REST API con caché"],
+  answer:0,
+  explanation:"40 M/día ≈ 1.200 M/mes ≈ más de 1.100 USD solo en peticiones de HTTP API. Un ALB cobra ~17 USD/mes de base más LCUs: a volumen alto y plano, el coste fijo gana. Pagar por petición es para tráfico bajo o variable.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"code",
+  question:"Tu handler lee event.rawPath. Declaras la integración así. ¿Qué pasa en producción?",
+  code:"resource \"aws_apigatewayv2_integration\" \"fn\" {\n  integration_type = \"AWS_PROXY\"\n  integration_uri  = aws_lambda_function.fn.invoke_arn\n  # sin payload_format_version\n}",
+  options:["Falla: el provider manda formato 1.0 y el evento no trae rawPath","Funciona: el formato moderno es el default","terraform validate lo detecta antes","Falla el apply por argumento requerido"],
+  answer:0,
+  explanation:"La consola crea integraciones con 2.0, pero el default del provider es \"1.0\" — dos herramientas, dos defaults. En 1.0 el evento trae path y httpMethod, no rawPath: tu handler leerá undefined. Y validate no ve contratos de eventos. Tercer «default del provider».",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Para la ruta GET /{code} de la redirección, ¿qué pones en integration_method?",
+  options:["POST: invocar una Lambda por su API es siempre POST","GET, el método que usará el cliente","ANY, para aceptar cualquier caso","DELETE tras servir la redirección"],
+  answer:0,
+  explanation:"integration_method describe el tramo puerta→Lambda, y la API de invocación de Lambda es POST siempre, pida lo que pida el cliente. El método del cliente vive en el route_key. Que en POST /links coincidieran era casualidad, no regla.",
+  source:"../../lessons/0008-la-puerta-publica.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Un compañero borra aws_lambda_permission «porque el rol de la función ya tiene permisos». ¿El error de su razonamiento?",
+  options:["El rol dice qué hace la función; quién puede invocarla lo dice la política pegada a la función","API Gateway necesita asumir el rol y ya no puede","El orden del apply quedó mal","El rol solo vale para el runtime, no para las rutas"],
+  answer:0,
+  explanation:"Las políticas del rol miran hacia afuera: qué puede hacer LA función (logs, PutItem). Quién puede invocar A la función es la pregunta inversa, y la responde la tercera clase de política — la basada en recursos, que se lee con aws lambda get-policy.",
+  source:"../../lessons/0008-la-puerta-publica.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Alguien propone que createLink reciba el evento HTTP entero y parsee él el body, «para simplificar el handler». ¿Qué se rompe?",
+  options:["application/ pasaría a conocer el protocolo: el sobre de API Gateway debe morir en el handler","Nada: zod validaría igual","Los tests dejarían de compilar","El payload format dejaría de aplicar"],
+  answer:0,
+  explanation:"El sobre 2.0 es protocolo de invocación puro. Si el caso de uso lo conoce, el día que se llame desde SQS o desde un test habrá que fabricar un sobre HTTP fingido. Los tests no se romperían — se disfrazarían, y ese olor es el síntoma.",
+  source:"../../lessons/0008-la-puerta-publica.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"¿Cuándo está justificado pagar REST API (3,5× por petición) en vez de HTTP API?",
+  options:["Cuando puedas nombrar la pieza concreta que falta: API keys, WAF, caché, canary","Siempre: es el producto más completo","Cuando esperas más de un millón de peticiones","Nunca: REST API está deprecado"],
+  answer:0,
+  explanation:"HTTP API es el punto de partida. La tabla oficial de diferencias es la fuente: si tu requisito no está en la columna que le falta a HTTP API, no hay debate. REST API no está deprecado — es el hermano caro con usage plans, WAF, caché y canary.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Tu Lambda admite hasta 15 minutos, pero las peticiones vía HTTP API mueren antes. ¿Por qué?",
+  options:["El timeout de integración es 30 segundos y no se puede subir","Falta configurar keep-alive en el stage","El throttling corta las peticiones largas","El payload superó los 10 MB"],
+  answer:0,
+  explanation:"La puerta corta a los 30 s, da igual lo que admita la función: es un límite duro. Una tarea más larga no pasa por la puerta — se dispara asíncrona y el cliente consulta el resultado después.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Escribes route_key = \"POST/links\" (sin espacio). ¿Qué pasa?",
+  options:["Se crea una ruta que jamás casará: las peticiones caen en 404 y nadie avisa","El apply falla con error de formato","API Gateway lo normaliza solo","Funciona: el espacio es opcional"],
+  answer:0,
+  explanation:"El route_key es literal: método + UN espacio + camino. \"POST/links\" o una barra final de más crean una ruta válida para la API pero imposible de casar — y el síntoma es un 404 Not Found sin ninguna pista del porqué.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Creas rutas nuevas pero el stage $default no tiene auto_deploy. ¿Qué pasa al aplicar?",
+  options:["Los cambios no atienden tráfico: una configuración no publicada no existe para los clientes","Se publican igualmente al hacer apply","El apply falla pidiendo un deployment","Las rutas viejas dejan de funcionar"],
+  answer:0,
+  explanation:"Una configuración de rutas no sirve tráfico hasta desplegarse a un stage. Con auto_deploy = true, cada cambio se publica solo (y $default desaparece de la URL); sin él, necesitas crear deployments a mano — y olvidarlo deja la API sirviendo la versión vieja.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"En el source_arn del aws_lambda_permission, ¿qué valor va?",
+  options:["El execution_arn de la API seguido de /*/*","El api_endpoint de la API","El invoke_arn de la función","El ARN del stage $default"],
+  answer:0,
+  explanation:"execution_arn (arn:aws:execute-api:…) es el ARN para permisos; api_endpoint es la URL pública — no son intercambiables. El sufijo /*/* cubre cualquier stage y cualquier ruta de esa API, y ni una más.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Un webhook de un tercero llama a UNA única función tuya. ¿Qué le pones delante?",
+  options:["Una Lambda Function URL: gratis y tres líneas","Una HTTP API completa","Un ALB pequeño","CloudFront con origen Lambda"],
+  answer:0,
+  explanation:"Para un solo endpoint sin rutas ni throttling propio, la Function URL da HTTPS directo a la función sin coste de puerta. API Gateway gana cuando hay varias rutas, authorizers o límites que configurar.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Tu HTTP API devuelve una respuesta de 4,5 MB. ¿Cómo se factura esa petición?",
+  options:["Como 9 peticiones: se mide en incrementos de 512 KB","Como 1 petición, siempre","No se factura: las respuestas son gratis","Como transferencia de datos de S3"],
+  answer:0,
+  explanation:"Las peticiones de HTTP API se miden en bloques de 512 KB. Con JSONs pequeños no lo notarás jamás; sirviendo ficheros, sí. Y el free tier de API Gateway caduca a los 12 meses — no es como el de Lambda o DynamoDB.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"mc",
+  question:"Alguien te hace 50.000 peticiones por segundo. Con throttling configurado, ¿qué recibe el atacante y qué ve tu backend?",
+  options:["Recibe 429; el backend ni se entera","Recibe 500; el backend procesa una parte","Recibe 200 lento; el backend hace cola","Recibe 403; el backend loguea el intento"],
+  answer:0,
+  explanation:"El throttling es de la puerta: al superar el límite devuelve 429 Too Many Requests sin invocar nada detrás. Por defecto rige el límite de la cuenta — 10.000 req/s con ráfagas de 5.000 — configurable por ruta y por stage.",
+  source:"../../reference/aws-apigateway.html" },
+
+{ topic:"apigateway", type:"tf",
+  question:"Las acciones IAM de API Gateway se llaman como sus operaciones: apigateway:CreateApi, apigateway:DeleteRoute…",
+  options:["Verdadero","Falso"],
+  answer:1,
+  explanation:"API Gateway es la excepción: sus acciones IAM son verbos HTTP — apigateway:POST, apigateway:GET, apigateway:DELETE — porque su plano de control es una API REST sobre recursos. Por eso la política del usuario terraform amplía con apigateway:*, no con nombres de operación.",
+  source:"../../lessons/0008-la-puerta-publica.html" },
+
+/* ─────────────── CUENTA Y ALERTAS ─────────────── */
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Cuenta AWS recién abierta, alarma FORECASTED al 100%. Al día siguiente olvidas un NAT Gateway. ¿Qué pasa?",
+  options:["La alarma no se dispara nunca: las proyecciones necesitan ~5 semanas de historial","Se dispara unas 12 horas después","La alarma detiene el NAT Gateway","La alarma bloquea el gasto extra"],
+  answer:0,
+  explanation:"AWS necesita unas 5 semanas de datos para generar proyecciones: antes, la alarma existe en la consola y está inerte. Regla práctica: en una cuenta joven, siempre al menos una alarma ACTUAL a umbral bajo — es la única que funciona seguro desde el día uno.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"La factura del mes pasado fue el triple de lo normal y quieres saber qué servicio la disparó. ¿Qué abres?",
+  options:["Cost Explorer","AWS Budgets","CloudWatch Alarms","Service Quotas"],
+  answer:0,
+  explanation:"Budgets vigila hacia adelante y avisa; Cost Explorer analiza hacia atrás y desglosa por servicio, región, etiqueta y periodo. Para la autopsia de una factura, el forense es Cost Explorer.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Quieres cinco presupuestos, uno por proyecto, todos con alarmas por correo. ¿Cuánto cuesta al mes?",
+  options:["Cero: los presupuestos sin acciones son gratis y sin límite de cantidad","Unos 9 USD: 0,10 al día desde el tercero","Depende de cuántos correos se envíen","Gratis solo los dos primeros"],
+  answer:0,
+  explanation:"El uso normal de Budgets es literalmente gratis: solo cobran los budget actions, y a partir del tercero. No hay excusa para no tener presupuesto en cualquier cuenta AWS — no tenerlo es lo primero que delata una cuenta descuidada.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Cruzaste el umbral ACTUAL del 50% el día 12 y llegó el correo. El día 20 vas por el 80%. ¿Vuelve a avisar esa misma notificación?",
+  options:["No, hasta el periodo siguiente: ACTUAL avisa una sola vez por periodo","Sí, cada vez que el gasto suba","Sí, un recordatorio diario","Sí, en cada refresco de 8-12 horas"],
+  answer:0,
+  explanation:"Las alarmas ACTUAL se disparan una vez por presupuesto y periodo, la primera vez que se cruza el umbral. Por eso se configuran varias a umbrales distintos (50%, 90%) — y la FORECASTED, que sí puede avisar varias veces si la proyección oscila.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Añades subscriber_sns_topic_arns al presupuesto pero olvidas la política de recurso del topic. ¿Qué ocurre?",
+  options:["Falla con «Invalid SNS topic», un error que no menciona permisos","Funciona: referenciar el ARN basta","Terraform crea la política sola","Aplica bien y avisa después"],
+  answer:0,
+  explanation:"Budgets no tiene permiso para publicar en el topic, y el error lo disimula. Referenciar un ARN no concede nada: en AWS los permisos son siempre explícitos, y quien debe autorizar a budgets.amazonaws.com es la política DEL topic — una política de recurso.",
+  source:"../../lessons/0002-haz-que-la-alarma-suene.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"¿Por qué la política del topic lleva condiciones sobre aws:SourceAccount?",
+  options:["Sin ellas, otra cuenta podría hacer que Budgets publicara en TU topic: el confused deputy","Cifran el contenido del mensaje","Reducen el coste del topic","Terraform obliga a incluirlas"],
+  answer:0,
+  explanation:"Cualquiera puede crear un presupuesto en SU cuenta apuntando al ARN de TU topic, y sería el servicio Budgets — con permiso — quien publicara. La condición ata el permiso a tu cuenta: es el patrón «confused deputy», y cae en entrevistas.",
+  source:"../../lessons/0002-haz-que-la-alarma-suene.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Publicas «pedido creado» en un topic SNS y el consumidor está caído tres minutos. ¿Qué pasa con el mensaje?",
+  options:["Se pierde tras los reintentos: SNS no almacena","Se guarda hasta que el consumidor vuelva","Va a una DLQ automática","La publicación se bloquea hasta entregarlo"],
+  answer:0,
+  explanation:"SNS empuja, reintenta un rato y descarta: no hay bandeja de entrada ni «dame los de ayer». Por eso el patrón real es SNS + SQS — el topic da el fan-out y la cola da la persistencia y los reintentos de cada consumidor.",
+  source:"../../reference/aws-sns.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Necesitas orden estricto entre eventos de un pedido Y avisar por correo al cliente. ¿Cómo lo montas?",
+  options:["Un topic FIFO para el orden más un Standard para el correo","Un topic FIFO con suscripción email","Un topic Standard con orden activado","Un topic mixto con ambos modos"],
+  answer:0,
+  explanation:"Un topic FIFO solo entrega a colas SQS: suscribir un correo da error, porque ese destino no puede preservar el orden y AWS prefiere fallar a mentir sobre la garantía. Si hay un humano en el destino, es Standard.",
+  source:"../../reference/aws-sns.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Tu topic recibe 200.000 publicaciones al mes y las reparte a tres colas SQS. ¿Qué cuesta?",
+  options:["Nada: cabe en el millón gratuito y las entregas a SQS no se cobran","El triple, por las tres colas","Unos diez céntimos al mes","Una cuota fija por topic"],
+  answer:0,
+  explanation:"Las 200.000 peticiones caben de sobra en el millón mensual gratuito, y las entregas a SQS (y a Lambda) son gratis en cualquier volumen. Lo único caro de SNS es el SMS.",
+  source:"../../reference/aws-sns.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Haces apply con una suscripción email y nunca pulsas el enlace de confirmación. Luego terraform destroy. ¿Qué queda en AWS?",
+  options:["La suscripción sin confirmar: no se puede cancelar por API","Nada: todo se borra limpio","El destroy falla siempre","La suscripción, confirmada automáticamente"],
+  answer:0,
+  explanation:"Una suscripción pendiente no se puede eliminar por API. Terraform la quita de su state en silencio, pero en AWS sigue — salvo que borres el topic entero. La confirmación manual es deliberada: impide suscribir a terceros sin su permiso.",
+  source:"../../reference/aws-sns.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Levantas un recurso caro a las 10:00. ¿Cuándo puede reflejarlo tu presupuesto, como pronto?",
+  options:["Horas después: los datos de facturación se refrescan hasta 3 veces al día, con 8-12 h entre medias","En unos minutos","En tiempo real, como CloudWatch","Al final del mes"],
+  answer:0,
+  explanation:"Budgets lee datos de facturación, no métricas: entre el uso y la factura hay un retraso, y entre refrescos otro. Por eso el presupuesto es la red secundaria — la primaria es tu disciplina de terraform destroy.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Tu presupuesto cruza el umbral. ¿Qué hace AWS con tus recursos?",
+  options:["Nada: un presupuesto notifica; parar recursos exige budget actions, que son otra cosa","Detiene las instancias EC2 y RDS","Bloquea la creación de recursos nuevos","Degrada los recursos a capas gratuitas"],
+  answer:0,
+  explanation:"Un presupuesto normal no corta, no borra y no bloquea: manda un correo o publica en un topic. Los budget actions sí pueden aplicar una política restrictiva o parar instancias — y son la única parte del servicio que cuesta dinero (desde el tercero).",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"¿Qué diferencia hay entre notificar con subscriber_email_addresses y con subscriber_sns_topic_arns?",
+  options:["El correo directo no exige confirmación; la suscripción vía SNS sí","Son equivalentes en todo","El correo directo cuesta dinero; SNS es gratis","SNS avisa más rápido que el correo"],
+  answer:0,
+  explanation:"Con el correo directo, AWS envía desde budgets@costalerts.amazonaws.com sin nada que confirmar. Con un topic SNS, la suscripción email queda en PendingConfirmation hasta que alguien pulsa el enlace — y hasta entonces no recibe nada.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"¿Puedes pedirle a un topic SNS los mensajes publicados ayer?",
+  options:["No: SNS empuja y no almacena; para persistencia se pone SQS entre medias","Sí, con la API de replay","Sí, durante 24 horas","Solo en topics FIFO"],
+  answer:0,
+  explanation:"No existe operación de lectura sobre un topic: nadie «lee» SNS, SNS entrega. Si un suscriptor necesita sobrevivir a su propia caída, la respuesta es una cola SQS suscrita al topic — el patrón estándar del proyecto 02.",
+  source:"../../reference/aws-sns.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"¿La forma más rápida de generar una factura desagradable con SNS?",
+  options:["Un bucle reintentando SMS: se cobra por mensaje y por país","Publicar mensajes de 256 KB","Suscribir demasiadas colas SQS","Crear cientos de topics vacíos"],
+  answer:0,
+  explanation:"Todo lo demás en SNS es prácticamente gratis a escala pequeña; el SMS se cobra por mensaje, varía muchísimo por país, y puede costar cientos de veces más que un correo. Topics vacíos y entregas a SQS cuestan exactamente cero.",
+  source:"../../reference/aws-sns.html" },
+
+{ topic:"cuenta-alertas", type:"code",
+  question:"Esto falla en el plan. ¿Por qué?",
+  code:"variable \"monthly_budget_usd\" { type = number }\n\nresource \"aws_budgets_budget\" \"monthly\" {\n  limit_amount = var.monthly_budget_usd\n}",
+  options:["limit_amount es un string: hace falta tostring(var.monthly_budget_usd)","El presupuesto no admite variables","Falta el bloque notification","budget_type tiene un valor inválido"],
+  answer:0,
+  explanation:"Sorpresa clásica del recurso: limit_amount se declara como string, no como número. Si lo alimentas desde una variable numérica, envuélvelo en tostring(). El resto del recurso sí admite variables con normalidad.",
+  source:"../../reference/aws-budgets.html" },
+
+{ topic:"cuenta-alertas", type:"mc",
+  question:"Activas kms_master_key_id en el topic de alertas de presupuesto. ¿Qué acabas de romper?",
+  options:["Las alarmas de Budgets: el servicio no puede usar la clave sin una política de KMS adicional","Nada: el cifrado es transparente","Las suscripciones por correo existentes","El free tier del topic"],
+  answer:0,
+  explanation:"AWS lo dice literalmente: un topic cifrado no funciona con Budgets sin permisos adicionales — hace falta una política de clave KMS que autorice a budgets.amazonaws.com. Cifrar el topic de alertas es la forma silenciosa de quedarte sin alertas.",
+  source:"../../reference/aws-sns.html" },
+
+];
+
+/* ───────────────────────── lógica de la app ───────────────────────── */
+
+const $ = (id) => document.getElementById(id);
+const STATS_KEY = "tfquiz-stats-v1";
+const THEME_KEY = "tfquiz-theme";
+
+function loadStats() {
+  try { return JSON.parse(localStorage.getItem(STATS_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveStats(stats) {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch (e) { /* sin persistencia */ }
+}
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* tema */
+(function initTheme() {
+  let pref = null;
+  try { pref = localStorage.getItem(THEME_KEY); } catch (e) {}
+  if (pref === "dark" || pref === "light") document.documentElement.setAttribute("data-theme", pref);
+  $("themeToggle").addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme");
+    const sysDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const next = (cur ? cur === "dark" : sysDark) ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+  });
+})();
+
+/* estado de la sesión */
+let selected = new Set(Object.keys(TOPICS));
+let roundSize = 10;
+let round = [];      // preguntas de la ronda actual
+let idx = 0;         // índice de la pregunta actual
+let answered = false;
+let hits = [];       // por pregunta: true/false
+let currentOrder = []; // orden barajado de opciones de la pregunta actual
+
+function poolFor(sel) { return QUESTIONS.filter(q => sel.has(q.topic)); }
+
+function renderStart() {
+  const stats = loadStats();
+  const list = $("topicList");
+  list.innerHTML = "";
+  for (const key of Object.keys(TOPICS)) {
+    const t = TOPICS[key];
+    const n = QUESTIONS.filter(q => q.topic === key).length;
+    const st = stats[key];
+    const acc = st && st.total ? Math.round(100 * st.ok / st.total) + "% de acierto (" + st.total + " resp.)" : "sin historial";
+    const lab = document.createElement("label");
+    lab.className = "topic-chip" + (selected.has(key) ? " on" : "");
+    lab.innerHTML = '<input type="checkbox" ' + (selected.has(key) ? "checked" : "") + '>' +
+      '<span><span class="t-label">' + t.label + '</span> · ' + n + ' preguntas' +
+      '<span class="t-hint">' + t.hint + '</span>' +
+      '<span class="t-stats">' + acc + '</span></span>';
+    lab.querySelector("input").addEventListener("change", (ev) => {
+      if (ev.target.checked) selected.add(key); else selected.delete(key);
+      lab.classList.toggle("on", ev.target.checked);
+      updatePoolInfo();
+    });
+    list.appendChild(lab);
+  }
+  document.querySelectorAll(".sizebtn").forEach(b => {
+    b.classList.toggle("on", Number(b.dataset.size) === roundSize);
+    b.onclick = () => {
+      roundSize = Number(b.dataset.size);
+      document.querySelectorAll(".sizebtn").forEach(x => x.classList.toggle("on", x === b));
+      updatePoolInfo();
+    };
+  });
+  $("btnAll").onclick = () => { selected = new Set(Object.keys(TOPICS)); renderStart(); };
+  $("btnNone").onclick = () => { selected = new Set(); renderStart(); };
+  updatePoolInfo();
+}
+
+function updatePoolInfo() {
+  const n = poolFor(selected).length;
+  const take = roundSize === 0 ? n : Math.min(roundSize, n);
+  $("poolInfo").textContent = n === 0
+    ? "Elige al menos un tema."
+    : n + " preguntas disponibles con esta selección · la ronda tendrá " + take + ".";
+  $("btnStart").disabled = n === 0;
+}
+
+function show(view) {
+  ["viewStart", "viewQuiz", "viewResults"].forEach(v => $(v).classList.toggle("hidden", v !== view));
+}
+
+function startRound() {
+  const pool = shuffle(poolFor(selected));
+  round = roundSize === 0 ? pool : pool.slice(0, roundSize);
+  idx = 0; hits = [];
+  show("viewQuiz");
+  renderQuestion();
+}
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderQuestion() {
+  const q = round[idx];
+  answered = false;
+  $("qProgress").textContent = "Pregunta " + (idx + 1) + " de " + round.length;
+  $("qBar").style.width = (100 * idx / round.length) + "%";
+  currentOrder = q.type === "tf" ? q.options.map((_, i) => i) : shuffle(q.options.map((_, i) => i));
+  let h = '<div class="quiz-card">';
+  h += '<p class="quiz-kicker"><span class="k-topic">' + TOPICS[q.topic].label + '</span>' +
+       '<span>' + (q.type === "tf" ? "verdadero o falso" : q.type === "code" ? "lee el código" : "elige una") + '</span></p>';
+  h += '<p class="quiz-q">' + esc(q.question) + '</p>';
+  if (q.code) h += '<pre>' + esc(q.code) + '</pre>';
+  h += '<ul class="quiz-opts">';
+  currentOrder.forEach((optIdx, pos) => {
+    h += '<li><button type="button" data-opt="' + optIdx + '">' +
+         '<span class="keyhint">' + (pos + 1) + '</span><span>' + esc(q.options[optIdx]) + '</span></button></li>';
+  });
+  h += '</ul><div class="feedback hidden" id="fb"></div>';
+  h += '<div class="nextrow hidden" id="nextRow"><button class="primary" id="btnNext" type="button">' +
+       (idx + 1 === round.length ? "Ver resultado" : "Siguiente") + ' ⏎</button></div>';
+  h += '</div>';
+  $("qCard").innerHTML = h;
+  document.querySelectorAll("#qCard .quiz-opts button").forEach(b => {
+    b.addEventListener("click", () => answer(Number(b.dataset.opt)));
+  });
+}
+
+function answer(optIdx) {
+  if (answered) return;
+  answered = true;
+  const q = round[idx];
+  const ok = optIdx === q.answer;
+  hits.push(ok);
+  const stats = loadStats();
+  stats[q.topic] = stats[q.topic] || { ok: 0, total: 0 };
+  stats[q.topic].total++;
+  if (ok) stats[q.topic].ok++;
+  saveStats(stats);
+  document.querySelectorAll("#qCard .quiz-opts button").forEach(b => {
+    const i = Number(b.dataset.opt);
+    b.disabled = true;
+    if (i === q.answer) b.classList.add("correct");
+    else if (i === optIdx) b.classList.add("wrong");
+    else b.classList.add("faded");
+  });
+  const fb = $("fb");
+  fb.classList.remove("hidden");
+  fb.innerHTML = (ok ? '<b class="v-ok">Correcto.</b> ' : '<b class="v-no">No.</b> ') +
+    esc(q.explanation) +
+    '<a class="src" href="' + q.source + '">→ fuente: ' + sourceName(q.source) + '</a>';
+  $("nextRow").classList.remove("hidden");
+  $("btnNext").onclick = next;
+  $("btnNext").focus();
+}
+
+function sourceName(path) {
+  const f = path.split("/").pop().split("#")[0];
+  return f.replace(/\.html$|\.md$/, "");
+}
+
+function next() {
+  idx++;
+  if (idx >= round.length) return renderResults();
+  renderQuestion();
+}
+
+function renderResults() {
+  show("viewResults");
+  const okTotal = hits.filter(Boolean).length;
+  $("rScore").textContent = okTotal + " de " + round.length + " (" + Math.round(100 * okTotal / round.length) + "%)";
+  const per = {};
+  round.forEach((q, i) => {
+    per[q.topic] = per[q.topic] || { ok: 0, total: 0 };
+    per[q.topic].total++;
+    if (hits[i]) per[q.topic].ok++;
+  });
+  let h = "<tr><th>Tema</th><th>Aciertos</th><th>%</th></tr>";
+  for (const k of Object.keys(per)) {
+    const p = per[k];
+    h += "<tr><td>" + TOPICS[k].label + '</td><td class="num">' + p.ok + " / " + p.total +
+         '</td><td class="num">' + Math.round(100 * p.ok / p.total) + "%</td></tr>";
+  }
+  $("rTable").innerHTML = h;
+  $("btnAgain").onclick = startRound;
+  $("btnBack").onclick = () => { renderStart(); show("viewStart"); };
+}
+
+/* teclado: 1-4 responde, Enter avanza */
+document.addEventListener("keydown", (ev) => {
+  if ($("viewQuiz").classList.contains("hidden")) return;
+  if (ev.key === "Enter" && answered) { ev.preventDefault(); next(); return; }
+  const n = Number(ev.key);
+  if (!answered && n >= 1 && n <= currentOrder.length) {
+    answer(currentOrder[n - 1]);
+  }
+});
+
+$("btnStart").addEventListener("click", startRound);
+renderStart();
+</script>
+</body>
+</html>
