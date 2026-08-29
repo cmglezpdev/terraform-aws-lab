@@ -1,11 +1,4 @@
-import type { ShortCode } from "../domain/short-code.ts";
-import type { TargetUrl } from "../domain/target-url.ts";
-
-
-export interface Link {
-    code: ShortCode;
-    url: TargetUrl;
-}
+import type { Link } from "../domain/link.ts";
 
 export interface LinkRepository {
     save(link: Link): Promise<void>;

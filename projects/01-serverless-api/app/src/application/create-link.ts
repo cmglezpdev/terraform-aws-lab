@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { generateShortCode, type ShortCode } from "../domain/short-code.ts";
-import { parseTargetUrl, MAX_URL_LENGTH, type TargetUrl } from "../domain/target-url.ts";
+import { generateShortCode } from "../domain/short-code.ts";
+import { parseTargetUrl, MAX_URL_LENGTH } from "../domain/target-url.ts";
 import { CodeCollisionError, type LinkRepository } from "./link-repository.ts";
+import type { Link } from "../domain/link.ts";
 
 const MAX_ATTEMPTS = 3;
 
@@ -9,11 +10,6 @@ const MAX_ATTEMPTS = 3;
 const createLinkInput = z.object({
     url: z.string().max(MAX_URL_LENGTH),
 });
-
-export interface Link {
-    code: ShortCode;
-    url: TargetUrl;
-}
 
 export async function createLink(payload: unknown, repository: LinkRepository): Promise<Link> {
     const { url } = createLinkInput.parse(payload);

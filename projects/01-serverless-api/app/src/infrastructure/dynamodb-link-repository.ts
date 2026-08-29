@@ -1,5 +1,6 @@
 import { ConditionalCheckFailedException, PutItemCommand, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { CodeCollisionError, type Link, type LinkRepository } from "../application/link-repository.ts";
+import { CodeCollisionError, type LinkRepository } from "../application/link-repository.ts";
+import type { Link } from "../domain/link.ts";
 
 
 export class DynamoDbLinkRepository implements LinkRepository {

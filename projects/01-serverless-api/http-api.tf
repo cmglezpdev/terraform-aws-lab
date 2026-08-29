@@ -21,6 +21,15 @@ resource "aws_apigatewayv2_integration" "create_link" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_integration" "get_link" {
+  api_id           = aws_apigatewayv2_api.shortener.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.get_link.arn
+
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+}
+
 # The route: Which petitions can be made to the gate?
 resource "aws_apigatewayv2_route" "create_link" {
   api_id    = aws_apigatewayv2_api.shortener.id
@@ -28,11 +37,26 @@ resource "aws_apigatewayv2_route" "create_link" {
   target    = "integrations/${aws_apigatewayv2_integration.create_link.id}"
 }
 
+resource "aws_apigatewayv2_route" "get_link" {
+  api_id    = aws_apigatewayv2_api.shortener.id
+  route_key = "GET /{code}"
+  target    = "integrations/${aws_apigatewayv2_integration.get_link.id}"
+}
+
+
 # The permission: The function can be invoked by the gate.
 resource "aws_lambda_permission" "http_api_create_link" {
   statement_id  = "AllowInvokeFromHttpApi"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.create_link.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.shortener.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "http_api_get_link" {
+  statement_id  = "AllowInvokeFromHttpApi"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.get_link.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.shortener.execution_arn}/*/*"
 }

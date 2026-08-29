@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { createLink } from "./application/create-link.ts";
-import { InvalidTargetUrlError } from "./domain/errors.ts";
-import { CodeCollisionError } from "./application/link-repository.ts";
-import { DynamoDbLinkRepository } from "./infrastructure/dynamodb-link-repository.ts";
+import { createLink } from "../application/create-link.ts";
+import { InvalidTargetUrlError } from "../domain/errors.ts";
+import { CodeCollisionError } from "../application/link-repository.ts";
+import { DynamoDbLinkRepository } from "../infrastructure/dynamodb-link-repository.ts";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 // API Gateway v1 event

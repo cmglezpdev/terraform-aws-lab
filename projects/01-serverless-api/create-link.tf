@@ -16,14 +16,14 @@ data "aws_iam_policy_document" "lambda_assume_role" {
 }
 
 resource "aws_iam_role" "create_link" {
-  name               = local.function_name
+  name               = local.create_link_function_name
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 }
 
 # --- Logs: el grupo y la llave para escribir en él --------------
 
 resource "aws_cloudwatch_log_group" "create_link" {
-  name              = "/aws/lambda/${local.function_name}"
+  name              = "/aws/lambda/${local.create_link_function_name}"
   retention_in_days = 7
 }
 
@@ -63,16 +63,16 @@ resource "aws_iam_role_policy" "create_link_put" {
 data "archive_file" "create_link" {
   type = "zip"
   # source_dir  = "${path.module}/app/dist" # this carries with the source map and it's not needed
-  source_file = "${path.module}/app/dist/index.mjs"
+  source_file = "${path.module}/app/dist/create-link.mjs"
   output_path = "${path.module}/build/create_link.zip"
 }
 
 resource "aws_lambda_function" "create_link" {
-  function_name = local.function_name
+  function_name = local.create_link_function_name
   role          = aws_iam_role.create_link.arn
 
   runtime       = "nodejs24.x"
-  handler       = "index.handler"
+  handler       = "create-link.handler"
   architectures = ["arm64"]
 
   filename         = data.archive_file.create_link.output_path

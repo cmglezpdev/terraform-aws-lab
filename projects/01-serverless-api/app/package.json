@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "prebuild": "rm -rf dist",
-    "build": "esbuild src/index.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/index.mjs",
+    "build": "esbuild src/handlers/create-link.ts src/handlers/get-link.ts --bundle --minify --sourcemap --platform=node --target=node24 --format=esm --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outdir=dist --out-extension:.js=.mjs",
+    "smoke": "node smoke.mjs",
     "test": "node --test 'src/**/*.test.ts'",
     "test:watch": "node --test --watch 'src/**/*.test.ts'"
   },

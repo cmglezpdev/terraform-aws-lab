@@ -2,8 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { createLink } from "./create-link.ts";
-import { CodeCollisionError, type Link, type LinkRepository } from "./link-repository.ts";
+import { CodeCollisionError, type LinkRepository } from "./link-repository.ts";
 import { InvalidTargetUrlError } from "../domain/errors.ts";
+import type { Link } from "../domain/link.ts";
 
 /** Fake en memoria: mismo contrato, cero AWS. `collisions` hace fallar los N primeros saves. */
 class FakeLinkRepository implements LinkRepository {
