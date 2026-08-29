@@ -15,3 +15,9 @@ output "table_name" {
   value       = aws_dynamodb_table.links.name
   type        = string
 }
+
+output "http_api_url" {
+  description = "public base URL of the HTTP API"
+  value       = aws_apigatewayv2_api.shortener.api_endpoint
+  type        = string
+}
