@@ -86,6 +86,7 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **`for_each`** / **clave de instancia** — introducidos en [lección 10](./lessons/0010-el-refactor-invisible.html)
 - **Bloque `moved`** / **mudanza** — introducidos en [lección 10](./lessons/0010-el-refactor-invisible.html)
 - **Refactor invisible** (plan a cero: solo mudanzas, nada que añadir ni destruir) — introducido en [lección 10](./lessons/0010-el-refactor-invisible.html)
+- **Service Authorization Reference** / **Access level** (List / Read / Write / Tagging / Permissions management) — introducidos en la [ficha de IAM](./reference/aws-iam.html) durante la práctica 01
 
 ## AWS
 

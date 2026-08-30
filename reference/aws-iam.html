@@ -221,6 +221,97 @@ las perchas donde cuelgas esas políticas.</p>
   entrevistas.</p>
 </div>
 
+<h2>Dónde se buscan las acciones</h2>
+
+<p>Cada acción que puedes escribir en el elemento <code>Action</code> de una política está
+documentada en un único sitio: la <strong>Service Authorization Reference</strong> —
+<a href="https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html">Actions,
+resources, and condition keys for AWS services</a>. Una página por servicio con la lista
+completa de sus acciones, sus recursos y sus condition keys. La URL sigue el patrón
+<code>list_&lt;prefijo&gt;.html</code>, con el mismo prefijo que usas en las políticas:
+<a href="https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html">list_dynamodb</a>,
+<a href="https://docs.aws.amazon.com/service-authorization/latest/reference/list_lambda.html">list_lambda</a>,
+<a href="https://docs.aws.amazon.com/service-authorization/latest/reference/list_s3.html">list_s3</a>.
+Guarda el índice: es la página de AWS que más vas a reconsultar escribiendo least
+privilege.</p>
+
+<p>En la tabla <strong>Actions</strong> de cada página, las tres columnas que importan:</p>
+
+<ul>
+  <li><strong>Access level</strong> — clasifica cada acción en uno de los cinco niveles de la
+  tabla de abajo. Es el criterio objetivo: <em>no adivines el nivel por el prefijo del
+  nombre</em> (<code>Get*</code>, <code>List*</code>, <code>Describe*</code> siguen a la API
+  de cada servicio, no a esta clasificación); mira la columna.</li>
+  <li><strong>Resource types</strong> — si trae un tipo de recurso, la acción admite un ARN en
+  <code>Resource</code>; el asterisco marca los obligatorios. Si la columna está
+  <strong>vacía</strong>, la acción no admite permisos a nivel de recurso — ver la trampa.</li>
+  <li><strong>Condition keys</strong> — las claves que puedes usar en <code>Condition</code>
+  con esa acción. No incluye las globales (<code>aws:SourceAccount</code> y compañía), que
+  van aparte.</li>
+</ul>
+
+<h3>Los cinco access levels</h3>
+
+<table>
+  <thead><tr><th>Nivel</th><th>Qué permite</th><th>Ejemplos</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>List</strong></td>
+      <td>Enumerar recursos para saber si existen. Literal de la doc: <em>«can list objects
+      but cannot see the contents of a resource»</em>.</td>
+      <td><code>s3:ListBucket</code></td>
+    </tr>
+    <tr>
+      <td><strong>Read</strong></td>
+      <td>Leer el contenido y los atributos de un recurso, sin poder editarlos.</td>
+      <td><code>s3:GetObject</code>, <code>s3:GetBucketLocation</code></td>
+    </tr>
+    <tr>
+      <td><strong>Write</strong></td>
+      <td>Crear, borrar o modificar recursos.</td>
+      <td><code>s3:CreateBucket</code>, <code>s3:PutObject</code>, <code>s3:DeleteBucket</code></td>
+    </tr>
+    <tr>
+      <td><strong>Tagging</strong></td>
+      <td>Solo cambiar tags. Una acción que <em>además</em> hace otra cosa (como
+      <code>iam:CreateRole</code>, que puede etiquetar al crear) cuenta como Write.</td>
+      <td><code>iam:TagRole</code>, <code>iam:UntagRole</code></td>
+    </tr>
+    <tr>
+      <td><strong>Permissions management</strong></td>
+      <td>Conceder o quitar acceso: el nivel a vigilar. AWS recomienda restringir y monitorizar
+      toda política que lo incluya.</td>
+      <td><code>s3:PutBucketPolicy</code>, casi todo <code>iam:*</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout win">
+  <span class="callout-title">El método para least privilege</span>
+  <p>Decide primero el <strong>nivel máximo</strong> que quieres conceder («este rol solo
+  List y Read») y filtra la tabla Actions por la columna Access level, en vez de ir
+  adivinando nombres de acciones de memoria. La consola usa exactamente esta clasificación
+  en los <em>policy summaries</em> para resumirte qué concede una política — si ahí aparece
+  un nivel que no querías dar, la política dice más de lo que crees.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Resource types vacío no es opcional</span>
+  <p>Si la columna Resource types está vacía, esa acción exige <code>"Resource": "*"</code>.
+  Ponerle un ARN «para acotar» no acota: la doc dice literalmente <em>«If you specify a
+  resource that is not valid for the action, any request to use that action fails, and the
+  statement's Effect does not apply»</em> — la sentencia entera deja de aplicar y lo que ves
+  es un <code>AccessDenied</code> sin ninguna pista de por qué. Por eso las políticas bien
+  escritas separan sentencias: una con ARN para las acciones que lo admiten, y otra con
+  <code>Resource: "*"</code> para las que no.</p>
+</div>
+
+<p class="small">Fuentes:
+<a href="https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html">Service
+Authorization Reference</a> y
+<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_understand-policy-summary-access-level-summaries.html">Access
+levels in policy summaries</a>, leídas el 2026-08-30.</p>
+
 <h2>Cómo funciona por dentro</h2>
 
 <h3>El orden de evaluación</h3>
@@ -580,6 +671,7 @@ resource <b class="s">"aws_iam_role_policy_attachment"</b> <b class="s">"lambda_
     <a href="./aws-s3.html">Referencia: S3</a>
     <a href="../GLOSSARY.md">Glosario</a>
     <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html">Doc oficial: best practices</a>
+    <a href="https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html">Doc oficial: catálogo de acciones</a>
   </div>
   <div class="ask">
     <b>Pregúntame.</b> Cuando te salga un <code>AccessDenied</code> que no entiendas, pégame
