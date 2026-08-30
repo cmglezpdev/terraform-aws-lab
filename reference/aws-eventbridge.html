@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon EventBridge</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon EventBridge</h1>
+  <p class="deck">El enrutador de eventos: los servicios de AWS (y tu código) publican
+  «ha pasado esto» en un bus, tus reglas leen cada evento por dentro, y las que casan lo
+  entregan a sus destinos. Nadie llama a nadie: el que publica no sabe quién escucha, y
+  el que escucha decide solo qué le interesa. Ese desconocimiento mutuo es el producto.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Integración / enrutado de eventos</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — un bus con reglas en reposo cuesta 0,00 USD</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_cloudwatch_event_rule</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/02-event-driven">proyecto 02</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un bus de eventos gestionado con enrutado por contenido. Tres piezas:
+el <strong>bus</strong> recibe eventos (JSON con sobre fijo: <code>source</code>,
+<code>detail-type</code>, <code>detail</code>); las <strong>reglas</strong> comparan cada
+evento contra un <strong>patrón</strong> (otro JSON que describe qué campos y qué valores
+te interesan); y cada regla que casa entrega el evento a sus <strong>targets</strong> —
+una Lambda, una cola SQS, un log group, otra API… <a
+href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-targets.html">más de
+veinte tipos</a>. Existe porque la alternativa — que cada servicio llame directamente a
+cada interesado — acopla al emisor con la lista completa de receptores, y esa lista cambia
+más que el emisor.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Los filtros de tu correo: todo mensaje entra por la misma bandeja, cada filtro mira
+  remitente y asunto por dentro, y el que casa reenvía a su carpeta. El remitente no sabe
+  qué filtros tienes, y añadir un filtro nuevo no toca a los demás. Donde se rompe: tu
+  correo aplica <em>un</em> filtro y para; EventBridge evalúa <strong>todas las reglas en
+  paralelo</strong> y dispara todas las que casen — no hay «primera coincidencia», no hay
+  prioridad, no hay orden.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Reaccionar a lo que AWS ya cuenta</h3><p>Tu caso: S3 publica
+  «Object Created» en el bus por defecto, sin que escribas un solo aviso. Una regla lo
+  pesca y arranca el pipeline. Más de 250 servicios publican así, gratis.</p></div>
+  <div class="ref-card"><h3>Varios consumidores, cero choques</h3><p>El equipo de datos
+  quiere indexar cada CSV y el tuyo procesarlo. Con EventBridge cada uno suscribe su regla
+  sin tocar el bucket ni pisarse la configuración — la notificación clásica de S3 es una
+  sola y alguien la machacaría.</p></div>
+  <div class="ref-card"><h3>Desacoplar módulos de un sistema</h3><p>El servicio de pedidos
+  publica «pedido pagado»; facturación, almacén y email escuchan cada uno por su cuenta.
+  Añadir el cuarto consumidor mañana no toca el código del emisor.</p></div>
+  <div class="ref-card"><h3>Ingerir eventos de SaaS</h3><p>Datadog, Stripe o GitHub
+  (partners) publican directamente en un bus de tu cuenta, sin webhooks que mantener ni
+  endpoints públicos que proteger.</p></div>
+  <div class="ref-card"><h3>Auditar sin instrumentar</h3><p>Una regla sobre eventos de
+  CloudTrail te avisa cuando alguien crea una clave de acceso o borra un bucket. El emisor
+  es la propia AWS; tú solo describes qué te alarma.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Tres clases de bus, y una familia de parientes con nombre propio que comparten marca
+pero se contratan (y facturan) aparte.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Bus</th><th>Quién publica</th><th>Ingesta</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Por defecto</strong> (<code>default</code>)</td>
+      <td>Los servicios AWS de tu cuenta</td>
+      <td>Gratis</td>
+      <td>Reaccionar a S3, CloudTrail, EC2… Existe ya en tu cuenta: no se crea ni se destruye.</td></tr>
+    <tr><td><strong>Custom</strong></td>
+      <td>Tu código, con <code>PutEvents</code></td>
+      <td>1,00 USD/millón</td>
+      <td>Eventos de dominio propios («pedido pagado») separados del ruido de AWS.</td></tr>
+    <tr><td><strong>Partner</strong></td>
+      <td>Un SaaS asociado (Stripe, Datadog…)</td>
+      <td>1,00 USD/millón</td>
+      <td>Sustituir webhooks que tendrías que alojar y autenticar tú.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Los parientes: <strong>Scheduler</strong> (crons gestionados, sustituye a las viejas
+reglas de <code>schedule_expression</code>), <strong>Pipes</strong> (conexión punto a punto
+con filtro y transformación entre un origen y un destino, sin bus), <strong>API
+destinations</strong> (targets HTTPS externos con autenticación gestionada), y
+<strong>Archive/Replay</strong> (grabar eventos y reproducirlos). Los verás en la tabla de
+costes; ninguno hace falta para el proyecto 02.</p>
+
+<h2>Cómo funciona por dentro</h2>
+<p>El modelo mental mínimo para no cometer errores:</p>
+<ul>
+  <li><strong>El patrón es un subconjunto del evento.</strong> Un evento casa si contiene
+  todos los campos del patrón con alguno de los valores listados — cada lista es un OR,
+  campos distintos son AND. Además de valores exactos hay <a
+  href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns-content-based-filtering.html">operadores
+  de contenido</a>: <code>prefix</code>, <code>suffix</code>, <code>wildcard</code>,
+  <code>anything-but</code>, <code>numeric</code>, <code>exists</code>, <code>cidr</code>.</li>
+  <li><strong>Todas las reglas evalúan, todas las que casan disparan.</strong> No hay orden
+  de prioridad ni «primera coincidencia». Una regla nueva jamás rompe a las existentes —
+  por eso escala a equipos.</li>
+  <li><strong>Entrega <em>at-least-once</em>, asíncrona y sin orden garantizado.</strong>
+  Puede llegar un duplicado y pueden llegar desordenados. Si tu consumidor no es
+  idempotente, el problema es del consumidor.</li>
+  <li><strong>Reintentos con backoff exponencial por target</strong>: hasta 24 horas
+  (86 400 s) y hasta 185 intentos, ambos configurables a la baja por target (<a
+  href="https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_RetryPolicy.html">RetryPolicy</a>).
+  Lo que agota los reintentos <strong>se pierde</strong>, salvo que el target tenga
+  <a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html">DLQ</a>:
+  una cola SQS estándar, <em>por target</em>, donde cae el evento con el código de error.
+  Ojo: los fallos de permisos o de target inexistente van a la DLQ <em>sin</em> reintentos
+  — reintentarlos no los arreglaría.</li>
+  <li><strong>No es un buffer.</strong> El bus no retiene: entrega o descarta. Si el
+  consumidor necesita absorber picos o procesar a su ritmo, el target debe ser una cola
+  (SQS) y que el consumidor lea de ella — exactamente el diseño del proyecto 02.</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el 2026-08-30 contra la <a
+href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSEvents/current/us-east-1/index.json">Price
+List API</a> y la <a href="https://aws.amazon.com/eventbridge/pricing/">página de
+precios</a>, región <code>us-east-1</code>. Los eventos se facturan en trozos de 64 KB:
+un evento de 200 KB cuenta como cuatro.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Precio</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td>Eventos de servicios AWS → bus por defecto</td><td><strong>0,00 USD</strong></td>
+      <td>«AWS management events are ingested by the event bus for free» — todo el proyecto 02 vive aquí</td></tr>
+    <tr><td>Entrega a targets de la misma cuenta</td><td>0,00 USD</td><td>La invocación del target no se factura</td></tr>
+    <tr><td>Eventos custom (<code>PutEvents</code>)</td><td>1,00 USD/millón</td><td>Ingesta; por trozos de 64 KB</td></tr>
+    <tr><td>Eventos partner</td><td>1,00 USD/millón</td><td>Ingesta</td></tr>
+    <tr><td>Invocación cross-account (custom/partner)</td><td>0,05 USD/millón</td><td>Bus a bus entre cuentas</td></tr>
+    <tr><td>Invocación cross-account (eventos AWS)</td><td>1,00 USD/millón</td><td>Reenviar eventos de gestión a otra cuenta</td></tr>
+    <tr><td>API destinations</td><td>0,20 USD/millón</td><td>Invocaciones a endpoints HTTPS externos</td></tr>
+    <tr><td>Pipes</td><td>0,40 USD/millón</td><td>Por petición</td></tr>
+    <tr><td>Scheduler</td><td>0 hasta 14 M/mes, luego 1,00 USD/millón</td><td>Invocaciones programadas</td></tr>
+    <tr><td>Archive</td><td>0,10 USD/GB procesado + 0,023 USD/GB-mes</td><td>Replay se cobra como eventos custom</td></tr>
+    <tr><td>Schema discovery</td><td>0 hasta 5 M/mes, luego 0,10 USD/millón</td><td>Solo si activas el descubridor</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout cost">
+  <span class="callout-title">Tu factura del proyecto 02</span>
+  <p>Eventos de S3 al bus por defecto, entregados a targets de tu cuenta: <strong>las dos
+  filas gratis</strong>. Puedes subir un millón de CSV y EventBridge facturará 0,00 USD.
+  Nada en este servicio cobra por hora: un bus con cien reglas dormidas cuesta exactamente
+  cero, y se puede dejar desplegado sin pensarlo.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a
+href="https://docs.aws.amazon.com/general/latest/gr/ev.html">Service endpoints and
+quotas</a>, consultada el 2026-08-30. Valores de <code>us-east-1</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Targets por regla</td><td><strong>5</strong></td><td><strong>No</strong> — para más, apunta a SNS/SQS y reparte desde ahí</td></tr>
+    <tr><td>Reglas por bus</td><td>300</td><td>Sí</td></tr>
+    <tr><td>Buses por cuenta</td><td>100</td><td>Sí</td></tr>
+    <tr><td>Tamaño del patrón</td><td>2 048 caracteres</td><td>Sí, hasta 4 096</td></tr>
+    <tr><td>Tamaño de un evento</td><td>256 KB</td><td>No — para más, el evento lleva la referencia y S3 lleva el dato</td></tr>
+    <tr><td><code>PutEvents</code></td><td>10 000/s</td><td>Sí</td></tr>
+    <tr><td>Invocaciones a targets</td><td>18 750/s</td><td>Sí — al superarlo no se pierde nada: se retrasa</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="callout trap">
+  <span class="callout-title">La confusión cara</span>
+  <p>EventBridge <strong>enruta</strong>; no encola, no ordena, no absorbe picos. El error
+  típico es usarlo como si retuviera: el bus entrega a quien esté y descarta lo que agota
+  reintentos. Si el consumidor puede caerse, ir lento o necesitar reproceso, entre el bus y
+  el consumidor va una cola — el bus decide <em>quién</em> recibe; la cola decide
+  <em>cuándo</em> se procesa.</p>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Si necesitas…</th><th>Usa</th><th>Porque</th></tr></thead>
+  <tbody>
+    <tr><td>Absorber picos, procesar al ritmo del consumidor, reintentar tú</td>
+      <td>SQS</td><td>Una cola retiene hasta 14 días; el bus no retiene nada</td></tr>
+    <tr><td>Fan-out masivo y simple del mismo mensaje (push, email, SMS)</td>
+      <td>SNS</td><td>Millones de suscriptores por topic; EventBridge tiene 5 targets por regla</td></tr>
+    <tr><td>Orden estricto, replay por posición, streaming de volumen</td>
+      <td>Kinesis</td><td>EventBridge no garantiza orden y su replay es de pago y grueso</td></tr>
+    <tr><td>Un único consumidor de eventos de un bucket, sin filtros de contenido</td>
+      <td>Notificación clásica de S3</td><td>Menos piezas; pero es única por bucket y solo filtra prefijo/sufijo</td></tr>
+    <tr><td>Petición-respuesta síncrona</td>
+      <td>API Gateway / invocación directa</td><td>El bus es asíncrono: nadie espera la respuesta de un evento</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<p>La trampa empieza en el nombre: EventBridge se llamó <em>CloudWatch Events</em> hasta
+2019, y el provider conserva los nombres viejos — los recursos son
+<code>aws_cloudwatch_event_rule</code> y <code>aws_cloudwatch_event_target</code>, sin
+«bridge» por ningún sitio.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">la pareja regla + target</span></div>
+<pre><code>resource "aws_cloudwatch_event_rule" "csv_uploaded" {
+  name        = "csv-uploaded"
+  description = "Un CSV nuevo en el bucket de subidas"
+  # sin event_bus_name: usa el bus por defecto
+
+  event_pattern = jsonencode({
+    source      = ["aws.s3"]
+    detail-type = ["Object Created"]
+    detail = {
+      bucket = { name = [aws_s3_bucket.uploads.bucket] }
+      object = { key = [{ suffix = ".csv" }] }
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "to_queue" {
+  rule = aws_cloudwatch_event_rule.csv_uploaded.name
+  arn  = aws_sqs_queue.work.arn
+
+  dead_letter_config {
+    arn = aws_sqs_queue.dlq.arn
+  }
+}</code></pre>
+</div>
+<p>Trampas conocidas, en orden de dolor:</p>
+<ul>
+  <li><strong>S3 no publica a EventBridge hasta que se lo pidas</strong>:
+  <code>aws_s3_bucket_notification</code> con <code>eventbridge = true</code>. Y ese
+  recurso es <strong>único por bucket</strong>: un segundo produce diff perpetuo, y aplicar
+  uno machaca lo que hubiera. Con <code>eventbridge = true</code> el bucket manda
+  <em>todos</em> sus tipos de evento — el filtrado fino no va en el bucket, va en las
+  reglas.</li>
+  <li><strong>El target no lleva el permiso puesto.</strong> Que la regla apunte a una cola
+  no autoriza a EventBridge a escribir en ella: hace falta la <strong>política de
+  recurso</strong> del destino (<code>aws_sqs_queue_policy</code> con principal
+  <code>events.amazonaws.com</code>; para un log group,
+  <code>aws_cloudwatch_log_resource_policy</code>). Sin ella no hay error de
+  <code>apply</code>: hay silencio.</li>
+  <li><strong><code>event_pattern</code> es un string JSON</strong> — escríbelo con
+  <code>jsonencode()</code>, nunca con un heredoc: el heredoc invita a comas de más que
+  solo revientan en el <code>apply</code>.</li>
+  <li><strong><code>is_enabled</code> está deprecado</strong>; lo actual es
+  <code>state = "ENABLED"</code> / <code>"DISABLED"</code>. Casi todos los ejemplos de
+  internet llevan el viejo.</li>
+  <li><strong>La DLQ se declara en el target</strong> (<code>dead_letter_config</code>),
+  no en la regla — y la cola DLQ necesita su propia política de recurso para que
+  EventBridge pueda escribirle los fracasos.</li>
+</ul>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · elegir la pieza</p>
+  <p class="quiz-q">Proyecto 02: cada CSV subido debe acabar en una cola de trabajo, y es
+  plausible que mañana otro equipo quiera indexarlos también. ¿Por qué EventBridge entre S3
+  y SQS, y no la notificación clásica de S3 directa a la cola?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La notificación clásica es una configuración única del bucket: el segundo consumidor la pisa o negocia con el primero. Con el bus, cada consumidor es una regla independiente y el bucket no se toca nunca más.">Añadir otro consumidor no toca el bucket: cada equipo suscribe su regla</button></li>
+    <li><button data-correct="false" data-why="Sí sabe: la notificación clásica filtra por prefijo y sufijo de la clave desde siempre. Lo que no tiene es multi-consumidor sin choques ni los operadores ricos (anything-but, numeric, wildcard) del bus.">La notificación clásica no puede filtrar por sufijo de clave; EventBridge sí</button></li>
+    <li><button data-correct="false" data-why="S3 puede entregar notificaciones clásicas directamente a una cola SQS sin ningún bus delante — es una de sus tres salidas nativas junto a SNS y Lambda. El motivo real es organizativo, no técnico.">SQS no acepta mensajes de S3 sin un bus de eventos delante</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · coste</p>
+  <p class="quiz-q">Tu pipeline enruta 100 000 eventos de S3 al mes por el bus por defecto
+  hacia una cola de tu misma cuenta. ¿Qué factura EventBridge?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Los eventos de servicios AWS entran al bus por defecto gratis, y la entrega a targets de la misma cuenta tampoco se factura. Este pipeline puede procesar un millón de CSV con factura cero de EventBridge.">0,00 USD: evento de servicio AWS con entrega incluida</button></li>
+    <li><button data-correct="false" data-why="Serían custom si tu código los publicara con PutEvents. Los publica S3 como servicio de AWS, y esa ingesta al bus por defecto es explícitamente gratuita en la página de precios.">0,10 USD: son eventos custom a dólar el millón</button></li>
+    <li><button data-correct="false" data-why="La invocación de targets solo se factura entre cuentas distintas (o hacia API destinations). Dentro de la misma cuenta, la entrega está incluida y no aparece en la factura.">0,20 USD: la entrega al target también se factura</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · el modelo</p>
+  <p class="quiz-q">Dos reglas del mismo bus casan con el mismo evento. ¿Qué hace
+  EventBridge?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Todas las reglas evalúan cada evento y todas las que casan entregan a sus targets. Es la propiedad que permite que equipos distintos suscriban el mismo bucket sin coordinarse: una regla nueva jamás afecta a las existentes.">Dispara las dos: cada regla evalúa aparte, sin orden de prioridad</button></li>
+    <li><button data-correct="false" data-why="No existe tal orden: las reglas no tienen prioridad ni posición, y ninguna «consume» el evento impidiendo que otra lo vea. Ese modelo de primera coincidencia es el de los filtros de correo, no el del bus.">Dispara la primera creada: las reglas se evalúan por orden estricto</button></li>
+    <li><button data-correct="false" data-why="Nada que validar: que varias reglas casen con el mismo evento es el caso de uso principal del servicio, no un conflicto. Cada una existe para un consumidor distinto y todas reciben su copia.">Rechaza el evento: dos reglas iguales son un error de configuración</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el límite duro</p>
+  <p class="quiz-q">Una regla tuya necesita avisar a seis destinos, y el tope es cinco
+  targets por regla. ¿Qué haces?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es el patrón recomendado: la regla entrega a un topic SNS (o una cola) y el abanico real vive ahí, donde escala a millones. También valdría duplicar la regla con el mismo patrón — funciona, pero duplica configuración que mantener.">Un solo target SNS y que el fan-out lo haga él</button></li>
+    <li><button data-correct="false" data-why="Targets por regla es de las pocas cuotas de EventBridge marcadas como no ajustables — la página de cuotas lo dice explícitamente. Reglas por bus o tamaño de patrón sí se amplían; esta no.">Pedir a AWS la cuota: el tope de targets es ajustable</button></li>
+    <li><button data-correct="false" data-why="El límite es por regla, no por bus: un bus nuevo no te da más targets en la regla, te obliga además a reenviar los eventos hasta él. Añade piezas sin quitar la restricción que te dolía.">Crear un segundo bus custom y repartir los seis destinos allí</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-s3.html">Ficha: Amazon S3</a>
+    <a href="./aws-sns.html">Ficha: Amazon SNS</a>
+    <a href="../lessons/0011-la-senal.html">Lección 11: la señal</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is.html">EventBridge
+    User Guide</a> (empieza por <em>Event bus concepts</em>), la <a
+    href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventBridge.html">página de
+    S3 sobre EventBridge</a> con la lista completa de eventos que publica un bucket, y los
+    <a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns-content-based-filtering.html">operadores
+    de patrones</a>. Cualquier duda, pregúntame en la sesión.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

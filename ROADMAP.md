@@ -55,7 +55,8 @@ pago por uso y con tu volumen es prácticamente cero.
 | 08 | [La puerta pública](./lessons/0008-la-puerta-publica.html) | 01 | [API Gateway](./reference/aws-apigateway.html) |
 | 09 | [La segunda función](./lessons/0009-la-segunda-funcion.html) | 01 | — (`GET /{code}`, 301, puerto del consumidor) |
 | 10 | [El refactor invisible](./lessons/0010-el-refactor-invisible.html) | 01 | — (`for_each`, bloques `moved` · [referencia](./reference/terraform-refactor.html)) |
-| 11 | _Proyecto 02: el pipeline asíncrono_ (por diseñar) | 02 | S3, EventBridge, SQS |
+| 11 | [La señal](./lessons/0011-la-senal.html) | 02 | [EventBridge](./reference/aws-eventbridge.html) · [S3](./reference/aws-s3.html) |
+| 12 | _La cola: SQS + DLQ, `depends_on`_ (por diseñar) | 02 | SQS |
 
 La lección 06 se insertó el 2026-08-25, a petición suya, entre el cerebro y la memoria: capas,
 una dependencia real (`zod`) y tests. La memoria y la puerta corren un número cada una.
@@ -64,3 +65,7 @@ la sesión, así que la segunda Lambda y el `for_each` prometidos pasan a la 09 
 lección lo dice. La 09 (2026-08-29) volvió a partir: el `for_each` necesita que los gemelos
 `create-link.tf`/`get-link.tf` existan primero, y fundirlos sin destruir nada (bloques
 `moved`) es un tema entero. El proyecto 01 se completó con la 10 (2026-08-29): `for_each` + bloques `moved`, plan a cero. El **módulo local** prometido para el 01 se movió al proyecto 02 con motivo declarado en la propia lección: una estructura antes de su motivo es una manía de estilo (criterio de la lección 06); el módulo se gana su interfaz cuando el patrón cruce entre proyectos, y eso pasa en el 02. Si el 02 no lo justifica, se tacha y se dice por qué.
+El proyecto 02 arrancó el 2026-08-30 con la lección 11, que declara el corte del proyecto en su
+primera tabla: 11 la señal (S3 → EventBridge → espía), 12 la cola (SQS + DLQ, `depends_on`),
+13 el procesador (Lambda + el módulo local, si duele donde se predijo), 14 el aviso (SNS).
+Los números pueden correrse; el orden no.

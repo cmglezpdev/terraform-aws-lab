@@ -38,7 +38,8 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **State** — introducido en [lección 01](./lessons/0001-el-primer-apply.html)
 - **Drift** — introducido en [lección 01](./lessons/0001-el-primer-apply.html)
 - **Dirección de recurso** — introducido en [lección 01](./lessons/0001-el-primer-apply.html); anatomía completa con clave de instancia en [lección 10](./lessons/0010-el-refactor-invisible.html)
-- **Dependencia implícita** — pendiente, proyecto 01
+- **Dependencia implícita** / **Grafo de dependencias** — introducidos en [lección 11](./lessons/0011-la-senal.html)
+- **Bus de eventos** / **Regla** / **Patrón de eventos** / **Target** — introducidos en [lección 11](./lessons/0011-la-senal.html); ficha en [aws-eventbridge.html](./reference/aws-eventbridge.html)
 - **Fan-out** — introducido en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html)
 - **Política de recurso** — introducido en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html)
 - **Confused deputy** — introducido en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html)

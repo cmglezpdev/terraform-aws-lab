@@ -407,3 +407,38 @@ clase con dos puertos), y el fix del paso 0 lo encontró y comiteó solo. Tres c
 - Pendiente nuevo de la lección: la pregunta del cierre (`GET /stats/{code}`) — cuando
   traiga la respuesta, mirar si vio el conflicto clave-del-mapa/ruta y la precedencia de
   rutas de la 09.
+
+## Lección 11 — la señal (2026-08-30, LR-0016)
+
+- **Abre el proyecto 02** con el corte declarado en la primera tabla (11 señal, 12 cola,
+  13 procesador + módulo local si duele, 14 aviso). «Los números pueden correrse; el orden
+  no.» El módulo local conserva su cláusula de salida.
+- **El espía primero**: el primer target es un log group, no la cola — el JSON capturado es
+  el contrato y será el fixture de los tests de la 13. **Pedírselo cuando traiga la
+  salida y guardarlo.** Motivado con el bug de su humo de la 07 (prueba contra evento
+  imaginado).
+- **Frase para reutilizar**: *el bus enruta, no retiene* — la durabilidad es de la cola.
+  Y la pareja dato (durable en S3) / señal (efímera en el bus): la pregunta del cierre
+  (Lambda caída 6 h, 20 CSV) mide exactamente esa distinción; si responde «se pierden los
+  CSV», frenar ahí. Su respuesta decide cómo se abre la 12.
+- **`depends_on` plantado con nombre para la 12** enseñando el hueco del grafo (política
+  del log group ↔ target, sin arista) y por qué HOY es benigno. No gastarlo en un caso
+  postizo. Sexto «fallo silencioso»: target sin política de recurso = apply limpio +
+  silencio. El `:*` del ARN del log group (lección 05) reaparece anunciado.
+- **Política del 00**: statement nuevo `ProjectBuckets` (`arn:aws:s3:::event-driven-*` y
+  `/*`) + `events:*` en CourseServices — frontera por prefijo de nombre, no `s3:*` global.
+  El bucket usa `data.aws_caller_identity` para unicidad sin exponer el ID en repo público.
+- **Verificado 2026-08-30**: HCL completo con `validate`/`fmt` en 1.15.8 + provider 6.62.0
+  (`jsonencode` con `detail-type` comprobado en `terraform console`); precios EventBridge
+  contra Price List API (eventos de servicios AWS al bus default: gratis — sin SKU de
+  ingesta; custom 1 USD/M en trozos de 64 KB); 5 targets/regla NO ajustable; RetryPolicy
+  24 h / 185. `is_enabled` deprecado → `state`: tercera entrega de «internet dice lo
+  viejo».
+- **La ficha de EventBridge** (`reference/aws-eventbridge.html`) avisa: los recursos se
+  llaman `aws_cloudwatch_event_*` (herencia CloudWatch Events), y
+  `aws_s3_bucket_notification` es único por bucket y machaca lo que hubiera.
+- La verificación tiene mitad negativa obligatoria (el `.txt` que NO suena, con
+  `sleep 60`): cuarta entrega de «la ausencia no grita».
+- Pendientes que la lección lista en su cierre y no hay que dejar caducar: post-mortem del
+  state (03), MFA del usuario terraform, `GET /stats/{code}` (10), y sus dos divergencias
+  del 01 por defender (302 vs 301; `CodeCollisionError` → ¿400 o 500?).

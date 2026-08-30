@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 11 · La señal</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 11 · Proyecto <code>02-event-driven</code></p>
+  <h1>La señal</h1>
+  <p class="deck">Empieza el proyecto 02: subes un CSV a un bucket y, sin que nadie llame a
+  nadie, acaba llegándote un email con el resultado. Hoy se construye solo la primera
+  frase de esa cadena — <strong>S3 diciendo «ha pasado algo» y alguien escuchándolo</strong>.
+  El que escucha no es todavía el pipeline: es un espía que anota cada aviso en un log, para
+  que veas con tus ojos el JSON exacto contra el que se escribirá todo lo demás. Servicio
+  nuevo: EventBridge. Idea nueva de Terraform: el grafo de dependencias que llevas diez
+  lecciones construyendo sin saberlo.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD — los eventos de S3 al bus por defecto no se facturan</span>
+    <span><b>Terraform</b> dependencia implícita · <code>jsonencode</code> · el grafo</span>
+    <span><b>Node</b> ni una línea — el TypeScript vuelve con el procesador</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+<p>Tres cierres, de memoria, antes de tocar el teclado. Los tres reaparecen hoy.</p>
+
+<details class="recall">
+  <summary>El mapa IAM quedó cerrado en la lección 08 con tres patas. ¿Cuáles, y qué
+  responde cada una?</summary>
+  <p><strong>Identidad</strong> (las políticas del rol: qué puede hacer quien actúa),
+  <strong>confianza</strong> (<code>assume_role_policy</code>: quién puede ponerse el
+  uniforme), y <strong>recurso</strong> (la política pegada al objeto:
+  <code>aws_lambda_permission</code>, la política del topic SNS). Hoy la tercera pata
+  reaparece con un disfraz nuevo: EventBridge no asume ningún rol para escribir en un log
+  group — es el log group el que tiene que dejarle pasar.</p>
+</details>
+
+<details class="recall">
+  <summary>Lección 05: ¿qué le faltaba al <code>arn</code> que exporta
+  <code>aws_cloudwatch_log_group</code>, y por qué dolió?</summary>
+  <p>El sufijo <code>:*</code> — el provider lo quita a propósito, y
+  <code>logs:PutLogEvents</code> actúa sobre los streams <em>dentro</em> del grupo, así que
+  la política que escribimos sin él no autorizaba nada y el síntoma fue silencio. Hoy vas a
+  escribir otra política sobre un log group. Ya sabes qué vigilar.</p>
+</details>
+
+<details class="recall">
+  <summary>La política <code>terraform-course</code> del proyecto 00 tiene tres statements
+  solo para S3. ¿Por qué no le bastó uno?</summary>
+  <p>Porque el bucket y sus objetos son recursos distintos con ARNs distintos:
+  <code>arn:aws:s3:::bucket</code> es el bucket, <code>arn:aws:s3:::bucket/*</code> son los
+  objetos, y las acciones de uno no valen sobre el otro. Hoy amplías esa política — y vas a
+  necesitar los dos ARNs otra vez.</p>
+</details>
+
+<h2>El proyecto 02, entero, antes de cortarlo</h2>
+
+<p>Lo que vas a tener al final del proyecto:</p>
+
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">el pipeline asíncrono</span></div>
+<pre><code>  tú                                                              tú otra vez
+   │  aws s3 cp datos.csv …                                            ▲
+   ▼                                                                   │ email
+ ┌────────┐  evento   ┌─────────────┐  regla   ┌─────┐  lee  ┌────────┐│
+ │   S3   │──────────▶│ EventBridge │─────────▶│ SQS │◀──────│ Lambda │┴─▶ SNS
+ │ uploads│ «Object   │ bus default │ casa el  │cola │       │procesa │
+ └────────┘  Created» └─────────────┘ patrón   └──┬──┘       └───┬────┘
+                                                  │              │ escribe
+                                               ┌──▼──┐       ┌───▼────┐
+                                               │ DLQ │       │DynamoDB│
+                                               └─────┘       └────────┘</code></pre>
+</div>
+
+<p>Ninguna flecha es una llamada: cada pieza ignora quién está al otro lado. S3 no sabe que
+existe la cola; la Lambda no sabe quién subió el fichero. Ese desacoplamiento es el tema del
+proyecto entero — y es también lo que lo hace imposible de meter en una sesión. El corte,
+declarado como siempre:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Lección</th><th>Pieza</th><th>Lo nuevo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>11 — hoy</strong></td><td><strong>La señal</strong>: S3 → EventBridge → un espía</td>
+      <td>EventBridge, patrones, el grafo de dependencias</td></tr>
+    <tr><td>12</td><td>La cola: SQS + DLQ como target real</td><td><code>depends_on</code> de verdad, política de recurso de SQS</td></tr>
+    <tr><td>13</td><td>El procesador: la Lambda que lee la cola</td><td>event source mapping — y el <strong>módulo local</strong>, si duele donde predijimos</td></tr>
+    <tr><td>14</td><td>El aviso: SNS cierra el ciclo con el email</td><td>reutilizar lo del proyecto 00 desde otro state</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Los números pueden correrse — ya pasó dos veces en el proyecto 01 — pero el
+orden no: cada pieza necesita ver funcionando a la anterior.</p>
+
+<div class="callout why">
+  <span class="callout-title">¿Por qué un espía y no directamente la cola?</span>
+  <p>Porque todavía no has visto un evento. Todo lo que escribas después — el patrón que
+  filtra, el código que saca el nombre del fichero, los tests con eventos falsos — se
+  escribe contra la forma exacta de ese JSON, y esa forma hoy es un acto de fe sacado de la
+  documentación. El espía convierte la fe en un fichero de log que puedes leer, guardar y
+  usar como contrato. Es la versión barata de una lección que ya viviste: tu prueba de humo
+  de la 07 «funcionaba» contra un evento imaginado, y el evento real trajo otra cosa.</p>
+</div>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía de un servicio</span>
+    <h2>Amazon EventBridge</h2>
+  </header>
+  <div class="anatomy-body">
+    <h3>Qué es</h3>
+    <p>Un bus de eventos con enrutado por contenido: los servicios de AWS (y tu código)
+    publican JSON en el bus, tus <strong>reglas</strong> comparan cada evento contra un
+    <strong>patrón</strong>, y cada regla que casa lo entrega a sus <strong>targets</strong>.
+    Todas las reglas evalúan en paralelo y todas las que casan disparan — no hay prioridad
+    ni «primera coincidencia»: una regla nueva jamás rompe a las existentes, y por eso diez
+    equipos pueden escuchar el mismo bucket sin coordinarse. A cambio, el bus <strong>no
+    retiene nada</strong>: entrega con reintentos o descarta. No es una cola.</p>
+
+    <h3>Los tipos que existen</h3>
+    <p>Tres clases de bus. El <strong>por defecto</strong> ya existe en tu cuenta y recibe
+    los eventos de los servicios AWS — el proyecto entero vive ahí. El <strong>custom</strong>
+    es para eventos de tu propio código (<code>PutEvents</code>, «pedido pagado»), separados
+    del ruido de AWS. El <strong>partner</strong> recibe eventos de SaaS asociados (Stripe,
+    Datadog) sin que alojes webhooks. Aparte, con marca compartida: Scheduler (crons),
+    Pipes (punto a punto) y Archive/Replay — ninguno hace falta hoy.</p>
+
+    <h3>Cuánto cuesta</h3>
+    <p>Lo tuyo: <strong>0,00 USD</strong>. Los eventos de servicios AWS entran al bus por
+    defecto gratis, y la entrega a targets de tu misma cuenta tampoco se factura — un millón
+    de CSV subidos, factura cero. Pagan otros usos: eventos custom y partner a 1,00 USD por
+    millón (en trozos de 64 KB), API destinations a 0,20, Pipes a 0,40. Nada cobra por hora:
+    un bus con cien reglas dormidas cuesta exactamente cero. Verificado el 2026-08-30 contra
+    la Price List API.</p>
+
+    <p class="small">Garantías de entrega, reintentos y DLQ, los límites (5 targets por
+    regla, no ajustable), cuándo NO usarlo y las trampas de Terraform:
+    <a href="../reference/aws-eventbridge.html">ficha completa de EventBridge</a>.</p>
+  </div>
+</section>
+
+<h2>Paso 0 — la política del 00, antes de estrenar servicio</h2>
+
+<p>El precedente de la lección 07 ya es regla de la casa: cada servicio nuevo se anuncia
+antes en la política del usuario <code>terraform</code>. Hoy son dos cambios en
+<code>projects/00-foundations/iam.tf</code>: la acción nueva, y un statement entero para los
+buckets de proyecto — porque tu <code>s3:*</code> actual solo alcanza al bucket de state.</p>
+
+<ol class="steps">
+
+<li>
+<p>En el statement <code>CourseServices</code>, añade <code>"events:*"</code> a la lista de
+<code>actions</code>. Y debajo de los tres statements del state, uno nuevo:</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">00-foundations/iam.tf</span></div>
+<pre><code>  statement {
+    sid     = "ProjectBuckets"
+    actions = ["s3:*"]
+    resources = [
+      "arn:aws:s3:::event-driven-*",
+      "arn:aws:s3:::event-driven-*/*",
+    ]
+  }</code></pre>
+</div>
+<p>Los dos ARNs del tercer recuerdo: el primero es cualquier bucket cuyo nombre empiece por
+<code>event-driven-</code>; el segundo, los objetos de dentro. El prefijo en el nombre hace
+de frontera: el usuario del curso puede hacer lo que quiera con los buckets del proyecto 02
+y sigue sin poder tocar ningún otro bucket de la cuenta — el de state incluido, que
+conserva sus statements finos de siempre.</p>
+</li>
+
+<li>
+<p>Sesión, identidad, y a aplicar — desde el proyecto 00:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/00-foundations</span></div>
+<pre><code>aws sts get-caller-identity   # ¿usuario terraform? (aws login si caducó)
+
+terraform plan   # espera: 1 to change — la política, en el sitio
+terraform apply</code></pre>
+</div>
+<p>Un solo <code>~ update</code> sobre <code>aws_iam_policy.terraform_course</code>. Si el
+plan propone algo más, párate y léelo.</p>
+</li>
+
+</ol>
+
+<h2>Paso 1 — el proyecto nuevo y el bucket que habla</h2>
+
+<ol class="steps">
+
+<li>
+<p>Estructura, calcada del hábito del 01 — un directorio nuevo, su backend, y el reparto
+por componentes que pediste en la 07:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/</span></div>
+<pre><code>mkdir -p projects/02-event-driven
+cd projects/02-event-driven</code></pre>
+</div>
+<p><code>backend.tf</code> y <code>versions.tf</code> son los del proyecto 01 con una sola
+diferencia — la <code>key</code>. Relee la política del state antes de inventártela: tiene
+una opinión (<code>*/terraform.tfstate</code>), y ya sabes qué error da si no la
+respetas.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">backend.tf</span></div>
+<pre><code>terraform {
+  backend "s3" {
+    bucket       = "tf-state-learning-course-terraform"
+    key          = "02-event-driven/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+  }
+}</code></pre>
+</div>
+<p>Y un <code>main.tf</code> mínimo, como en el 01: los <code>locals</code> y la identidad
+de la cuenta.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">main.tf</span></div>
+<pre><code>data "aws_caller_identity" "current" {}
+
+locals {
+  prefix = "event-driven"
+}</code></pre>
+</div>
+<p>Ese <code>data</code> ya lo usaste en <code>alerts.tf</code> del proyecto 00: es un
+<strong>data source</strong> — consulta, no crea. Aquí resuelve un problema concreto: los
+nombres de bucket son globales en todo AWS, así que <code>event-driven-uploads</code> a
+secas puede estar cogido por cualquiera. El ID de cuenta lo hace único — y como se consulta
+en cada <code>plan</code>, el número nunca aparece en el código de un repo público.</p>
+</li>
+
+<li>
+<p>El bucket de subidas, con su aviso a EventBridge — fichero <code>uploads.tf</code>:</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">uploads.tf</span></div>
+<pre><code>resource "aws_s3_bucket" "uploads" {
+  bucket = "${local.prefix}-uploads-${data.aws_caller_identity.current.account_id}"
+
+  # Bucket de pruebas: el destroy se lleva los CSV que queden dentro.
+  # En un bucket con datos de verdad, este argumento no existe.
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_notification" "uploads" {
+  bucket      = aws_s3_bucket.uploads.id
+  eventbridge = true
+}</code></pre>
+</div>
+<p>Dos cosas del segundo recurso, las dos con historia:</p>
+<ul>
+  <li><strong>Es único por bucket.</strong> No representa «un aviso»: representa <em>la</em>
+  configuración de notificaciones del bucket, entera. Un segundo
+  <code>aws_s3_bucket_notification</code> sobre el mismo bucket — tuyo o de otro equipo en
+  otro state — machaca al primero y produce un diff perpetuo. Con
+  <code>eventbridge = true</code> esa pelea desaparece: el bucket manda <em>todo</em> al
+  bus una sola vez, y cada consumidor filtra en su propia regla, fuera del bucket.</li>
+  <li><strong>No hay filtro aquí.</strong> Los <code>.csv</code>, el prefijo, el tipo de
+  evento — nada de eso se elige en el bucket. El filtrado vive en el paso siguiente, y esa
+  separación es el argumento entero de EventBridge.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Paso 2 — la regla que lee sobres por dentro</h2>
+
+<ol class="steps">
+
+<li>
+<p>Fichero <code>csv-uploaded.tf</code>. Primero la regla, que es dos cosas: a qué bus
+escucho, y qué patrón me interesa.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">csv-uploaded.tf</span></div>
+<pre><code>resource "aws_cloudwatch_event_rule" "csv_uploaded" {
+  name        = "${local.prefix}-csv-uploaded"
+  description = "Un CSV nuevo en el bucket de subidas"
+  # Sin event_bus_name: escucha el bus por defecto, que es
+  # a donde S3 publica. No se crea ningún bus.
+
+  event_pattern = jsonencode({
+    source      = ["aws.s3"]
+    detail-type = ["Object Created"]
+    detail = {
+      bucket = { name = [aws_s3_bucket.uploads.bucket] }
+      object = { key = [{ suffix = ".csv" }] }
+    }
+  })
+}</code></pre>
+</div>
+<p>Lo primero: el recurso se llama <code>aws_cloudwatch_event_rule</code>, sin «bridge» por
+ningún sitio. EventBridge fue <em>CloudWatch Events</em> hasta 2019 y el provider conserva
+el apellido viejo — no estás usando el servicio equivocado.</p>
+<p>El patrón se lee como una pregunta al sobre: ¿lo publica S3? ¿es una creación de objeto?
+¿en <em>mi</em> bucket? ¿y la clave termina en <code>.csv</code>? Cada lista es un OR, los
+campos entre sí son AND, y <code>{ suffix = … }</code> es uno de los
+<a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns-content-based-filtering.html">operadores
+de contenido</a> — hay <code>prefix</code>, <code>wildcard</code>, <code>anything-but</code>,
+<code>numeric</code>. La notificación clásica de S3 nunca supo hacer esto último.</p>
+<div class="callout tf">
+  <span class="callout-title"><code>jsonencode</code>, no heredoc</span>
+  <p><code>event_pattern</code> es un string JSON. Escribirlo con <code>&lt;&lt;EOF</code>
+  funciona hasta que una coma de más te revienta en el <code>apply</code>; con
+  <code>jsonencode()</code> escribes HCL — comas libres, referencias como
+  <code>aws_s3_bucket.uploads.bucket</code> dentro — y la sintaxis JSON deja de ser
+  problema tuyo. Es el mismo motivo por el que las políticas IAM del curso usan
+  <code>aws_iam_policy_document</code> y no un bloque de texto.</p>
+</div>
+</li>
+
+<li>
+<p>Ahora el espía: un log group al que EventBridge entregará cada evento que case. Sigue en
+<code>csv-uploaded.tf</code> — todo lo que ES la señal, junto:</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">csv-uploaded.tf (sigue)</span></div>
+<pre><code>resource "aws_cloudwatch_log_group" "spy" {
+  name              = "/aws/events/${local.prefix}-csv-uploaded"
+  retention_in_days = 14
+}
+
+data "aws_iam_policy_document" "spy" {
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.spy.arn}:*"]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com", "delivery.logs.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_resource_policy" "spy" {
+  policy_name     = "${local.prefix}-spy"
+  policy_document = data.aws_iam_policy_document.spy.json
+}
+
+resource "aws_cloudwatch_event_target" "spy" {
+  rule = aws_cloudwatch_event_rule.csv_uploaded.name
+  arn  = aws_cloudwatch_log_group.spy.arn
+}</code></pre>
+</div>
+<p>Cuatro recursos que ya sabes leer, porque cada uno rima con algo del proyecto 01:</p>
+<ul>
+  <li><strong>El target no lleva rol.</strong> Para escribir en un log group, EventBridge
+  no se pone ningún uniforme: llama él mismo, y es el log group quien debe dejarle pasar.
+  Tercera pata del mapa IAM — <code>aws_cloudwatch_log_resource_policy</code> es a los logs
+  lo que <code>aws_lambda_permission</code> fue a la función. La misma clase de política,
+  otro disfraz del recurso.</li>
+  <li><strong>El <code>:*</code> está de vuelta.</strong> La política autoriza sobre los
+  streams de dentro del grupo, y el <code>arn</code> del log group viene sin el sufijo — la
+  trampa central de la lección 05, misma forma, mismo arreglo. Esta vez la has visto
+  venir.</li>
+  <li><strong>El nombre empieza por <code>/aws/events/</code></strong> — la convención de
+  los log groups que reciben de EventBridge, la misma que usa la consola. Y los 14 días de
+  retención: es un espía, no un archivo.</li>
+  <li><strong>Sin la política no hay error: hay silencio.</strong> El <code>apply</code>
+  triunfa, la regla casa, EventBridge intenta entregar, el log group le cierra la puerta, y
+  ningún componente considera que eso sea problema tuyo que reportar. Sexta entrega del
+  hilo «fallo silencioso» — y ya llevas suficientes para olerlo antes de verlo.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>El grafo que llevas diez lecciones escribiendo</h2>
+
+<p>Antes de aplicar, una pregunta: ¿en qué orden va a crear Terraform estos seis recursos?
+Tú no lo has dicho en ningún sitio — no hay un «primero esto, luego aquello» en ningún
+fichero. Y sin embargo el orden existe y es correcto. Míralo:</p>
+
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">las flechas son referencias en tu HCL</span></div>
+<pre><code>aws_s3_bucket.uploads ◀─── aws_s3_bucket_notification.uploads
+        ▲
+        └────────────────── aws_cloudwatch_event_rule.csv_uploaded
+                                      ▲
+aws_cloudwatch_log_group.spy ◀──┐     │
+        ▲                       ├── aws_cloudwatch_event_target.spy
+        │                       │
+data.aws_iam_policy_document.spy◀── aws_cloudwatch_log_resource_policy.spy</code></pre>
+</div>
+
+<p>Cada flecha es una expresión que ya escribiste: el patrón de la regla contiene
+<code>aws_s3_bucket.uploads.bucket</code>, así que la regla no puede calcularse antes de que
+el bucket exista — Terraform lo deduce y ordena. Eso es una <strong>dependencia
+implícita</strong>, y el conjunto es el <strong>grafo</strong>: la estructura real sobre la
+que trabajan <code>plan</code> y <code>apply</code>. Todo lo que no depende entre sí, además,
+se crea en paralelo — por eso los apply del proyecto 01 nunca fueron uno-a-uno.</p>
+
+<p>Ahora mira el hueco. La política del log group y el target <strong>no se referencian
+entre sí</strong>: no hay flecha, y por tanto no hay orden — Terraform puede crear el target
+antes que la política que lo hace funcionar. Hoy da igual, y conviene entender exactamente
+por qué: la política no es requisito para <em>crear</em> el target, solo para que la
+<em>entrega</em> funcione — y la primera entrega ocurrirá minutos después, cuando subas el
+CSV de prueba, con todo ya en su sitio. Pero guárdate la pregunta: ¿qué pasa cuando dos
+recursos se necesitan <em>de verdad</em> y no hay ninguna referencia que lo diga? Esa
+situación existe, tiene nombre — <code>depends_on</code> — y la lección 12 se la encuentra
+de frente con la cola.</p>
+
+<h2>Paso 3 — aplicar y espiar</h2>
+
+<ol class="steps">
+
+<li>
+<p>Un <code>outputs.tf</code> corto — el nombre del bucket lo vas a usar en el minuto
+siguiente:</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">outputs.tf</span></div>
+<pre><code>output "uploads_bucket" {
+  description = "Bucket donde se suben los CSV"
+  value       = aws_s3_bucket.uploads.bucket
+}
+
+output "spy_log_group" {
+  description = "Log group donde el espía anota cada evento"
+  value       = aws_cloudwatch_log_group.spy.name
+}</code></pre>
+</div>
+</li>
+
+<li>
+<p>Formato, validación, plan — y lee el plan con la pregunta del grafo en la cabeza:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/02-event-driven</span></div>
+<pre><code>terraform init
+terraform fmt
+terraform validate
+terraform plan    # espera: 6 to add, 0 to change, 0 to destroy
+terraform apply</code></pre>
+</div>
+<p>Seis a crear: bucket, notificación, regla, log group, política, target. (El
+<code>data</code> no cuenta: consulta, no crea.)</p>
+</li>
+
+<li>
+<p>La verificación de verdad, en positivo y en negativo. Primero el positivo:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">el CSV que dispara</span></div>
+<pre><code>BUCKET=$(terraform output -raw uploads_bucket)
+
+printf 'code,url\nabc123,https://example.com\n' > /tmp/prueba.csv
+aws s3 cp /tmp/prueba.csv "s3://$BUCKET/entrada/prueba.csv"
+
+aws logs tail "$(terraform output -raw spy_log_group)" --since 5m</code></pre>
+</div>
+<p>En unos segundos, el espía anota. Lo que ves es <strong>el contrato</strong> — léelo
+entero, que para esto lo montamos:</p>
+<div class="code">
+  <div class="code-label"><span>JSON</span><span class="tag">el evento, anotado</span></div>
+<pre><code>{
+  "version": "0",
+  "detail-type": "Object Created",      ← lo que casó tu patrón
+  "source": "aws.s3",                   ← y esto
+  "account": "999999999999",
+  "region": "us-east-1",
+  "resources": ["arn:aws:s3:::event-driven-uploads-…"],
+  "detail": {
+    "bucket": { "name": "event-driven-uploads-…" },   ← y esto
+    "object": {
+      "key": "entrada/prueba.csv",      ← y el sufijo de esto
+      "size": 42,
+      "etag": "…",
+      "sequencer": "…"
+    },
+    "reason": "PutObject"               ← qué API creó el objeto
+  }
+}</code></pre>
+</div>
+<p><code>detail.object.key</code> y <code>detail.bucket.name</code> son las dos coordenadas
+que la Lambda de la lección 13 usará para ir a buscar el fichero — porque fíjate en lo que
+<em>no</em> hay: el contenido. El evento es el aviso, no la carga; los 256 KB de tope lo
+impiden y el diseño lo desaconseja. El dato se queda en S3 y el evento lleva la
+referencia.</p>
+</li>
+
+<li>
+<p>Y el negativo — la mitad de la verificación que casi todo el mundo se salta. El patrón
+promete filtrar; un filtro se demuestra con lo que <strong>no</strong> pasa:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">el que NO debe sonar</span></div>
+<pre><code>printf 'esto no es un csv\n' > /tmp/prueba.txt
+aws s3 cp /tmp/prueba.txt "s3://$BUCKET/entrada/prueba.txt"
+
+sleep 60
+aws logs tail "$(terraform output -raw spy_log_group)" --since 2m</code></pre>
+</div>
+<p>Solo debe aparecer el evento del CSV de antes — el <code>.txt</code> llegó al bus (el
+bucket manda todo) y <strong>tu regla no casó</strong>. Igual que el
+<code>lookups.length === 0</code> de la lección 09: el no-efecto también se verifica, y aquí
+el minuto de espera es parte de la prueba — un sistema asíncrono no te da un 404 que
+enseñar; la ausencia hay que salir a buscarla.</p>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que S3 publica al bus y <strong>tu patrón filtra en las dos direcciones</strong>:
+    el <code>.csv</code> apareció en el log y el <code>.txt</code> no.</li>
+    <li>Que tienes el <strong>contrato real</strong> — el JSON del evento, con las
+    coordenadas (<code>bucket.name</code>, <code>object.key</code>) contra las que se
+    escribirá el consumidor. Guárdalo: es el fixture de los tests de la 13.</li>
+    <li>Que sabes leer la tercera pata del mapa IAM en un servicio nuevo: el log group
+    necesitó política de recurso, y supiste por qué antes de que fallara.</li>
+    <li>Que el orden del <code>apply</code> no es magia: es el grafo de tus propias
+    referencias, y sabes encontrar tanto las flechas como los huecos.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong>Que no se pierda nada.</strong> El bus entrega o descarta: si el target
+    falla, reintenta hasta 24 h y después el evento <em>desaparece</em>. No hay DLQ, no hay
+    buffer, nadie procesa. La durabilidad es exactamente el tema de la lección 12.</li>
+    <li><strong>Que el espía sea el pipeline.</strong> Es un instrumento de medida; la cola
+    lo sustituirá como target real (el espía puede quedarse — dos reglas no se estorban, y
+    esa es justo la gracia del bus).</li>
+    <li><strong>El coste de S3 no es literalmente cero</strong>: céntimos por PUT y por
+    GB-mes. Con CSVs de prueba, redondea a cero — pero es «casi cero por uso», no «gratis
+    por diseño» como el bus.</li>
+  </ul>
+</div>
+
+<p class="small">El proyecto queda desplegado: en reposo, cero. Los CSV de prueba se los
+llevará el <code>force_destroy</code> el día del derribo.</p>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Otro equipo, desde su propio repo y su propio state, aplica un
+  <code>aws_s3_bucket_notification</code> sobre <em>tu</em> bucket de subidas para avisar
+  directamente a una Lambda suya. ¿Qué pasa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El recurso no representa «un aviso» sino la configuración completa de notificaciones del bucket: el apply de ellos borra tu eventbridge = true, y tu siguiente plan lo detecta como drift y lo repone — machacándolos a ellos. La salida correcta es que ellos también usen el bus, con su propia regla.">Machaca la configuración: el último apply gana y eventbridge desaparece</button></li>
+    <li><button data-correct="false" data-why="No conviven: la configuración de notificaciones de un bucket es una sola, y cada recurso aws_s3_bucket_notification declara la versión completa. Dos states peleándose por ella producen un diff perpetuo — exactamente la guerra que EventBridge existe para evitar.">Conviven sin problema: cada notificación del bucket es un recurso</button></li>
+    <li><button data-correct="false" data-why="Ni validate ni plan pueden verlo: son states distintos de repos distintos, y ninguno sabe que el otro existe. Terraform solo compara su propio state con AWS — la colisión aparece como drift misterioso, nunca como error de validación.">Terraform lo impide: el validate ya detecta el recurso duplicado</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">¿Por qué la lección puso un log group como primer target, en vez de ir
+  directa a la cola o a la Lambda?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Todo lo que viene — el código del procesador, sus tests, el patrón afinado — se escribe contra la forma exacta del evento, y esa forma ahora es un log que leíste, no un ejemplo de la documentación. La lección 07 ya te enseñó qué pasa cuando la prueba se escribe contra un evento imaginado.">Para ver el contrato: el consumidor se escribe contra ese JSON</button></li>
+    <li><button data-correct="false" data-why="Puede perfectamente: SQS es target directo de una regla, sin intermediarios — y será exactamente el montaje de la lección 12. El espía no está por necesidad técnica sino por método: primero se mira el dato, luego se escribe quien lo consume.">Porque EventBridge no puede entregar a SQS sin una Lambda delante</button></li>
+    <li><button data-correct="false" data-why="Al revés: el log group te exigió una política de recurso entera (aws_cloudwatch_log_resource_policy) para dejar pasar a EventBridge. Casi ningún target funciona sin su permiso — esa es la tercera pata del mapa IAM, no una excepción.">Porque los logs son el único target que no necesita permisos</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">En el patrón de la regla sustituyes
+  <code>aws_s3_bucket.uploads.bucket</code> por el nombre del bucket escrito a mano. El
+  <code>plan</code> sale limpio — «no changes». ¿Qué has perdido?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La referencia era la flecha del grafo: sin ella, en un despliegue desde cero Terraform puede crear la regla antes que el bucket (a EventBridge no le importa: casaría contra un bucket inexistente, sin error). Y si el bucket se renombra, el patrón se queda apuntando al nombre viejo — en silencio.">El orden: ya nada obliga a crear el bucket antes</button></li>
+    <li><button data-correct="false" data-why="Estable hasta que deje de serlo: un force_destroy y recreado con otro prefijo, un cambio de cuenta, un fork del proyecto — y el literal sigue apuntando al bucket viejo sin que ningún plan proteste. La referencia hacía ese error imposible, no improbable.">Nada real: el nombre del bucket es un valor estable</button></li>
+    <li><button data-correct="false" data-why="Sintácticamente valen sin problema: jsonencode acepta literales, referencias y mezclas de ambos. El plan limpio lo confirma — el JSON resultante es idéntico. Lo que se ha roto no se ve en la sintaxis: se ve en el grafo, que perdió una arista.">El patrón: los literales no valen dentro de un jsonencode</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Lección 12 — la cola.</strong> El espía anota, pero nadie guarda: si el
+  consumidor está caído, el evento reintenta y muere. Entre el bus y el trabajo va una cola
+  SQS con su cola de los muertos al lado — y ahí Terraform te debe una conversación
+  pendiente: qué hacer cuando dos recursos se necesitan de verdad y ninguna referencia lo
+  dice. La pregunta del grafo de hoy tiene nombre, y es <code>depends_on</code>.</p>
+  <p class="small">Pendientes que arrastramos: el <strong>post-mortem del state</strong>
+  (lección 03), el <strong>MFA del usuario <code>terraform</code></strong>, la respuesta de
+  <code>GET /stats/{code}</code> de la lección 10, y tus dos divergencias del proyecto 01
+  por defender (302 vs 301, <code>CodeCollisionError</code> → ¿400 o 500?).</p>
+  <div class="nav-links">
+    <a href="./0010-el-refactor-invisible.html">← Lección 10</a>
+    <a href="../reference/aws-eventbridge.html">Ficha: EventBridge</a>
+    <a href="../reference/aws-s3.html">Ficha: S3</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Tres cosas: el JSON completo que anotó el espía (es tu
+    contrato — lo vamos a diseccionar juntos); la salida del <code>tail</code> tras subir el
+    <code>.txt</code>, contándome qué demuestra; y la respuesta a esta, sin desplegar nada:
+    el evento del espía llegó aunque nadie lo procesara — si mañana la Lambda de la 13
+    estuviera caída seis horas mientras suben veinte CSV, ¿qué habría al despertar, con el
+    montaje de hoy y sin cola? Sé preciso: ¿dónde está cada uno de los veinte?
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
