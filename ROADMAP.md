@@ -9,8 +9,8 @@ Terraform nuevos, coste estimado por hora, y las decisiones de diseño con su po
 | # | Proyecto | Qué construyes | AWS | Terraform | Coste/h |
 |---|---|---|---|---|---|
 | 00 | `00-foundations` | La base de la cuenta: presupuesto con alarma **probada**, usuario para Terraform, backend remoto de state | IAM, Budgets, SNS, S3 | provider, resource, variable, output, backend S3 + `use_lockfile`, migración de state | ~0 USD |
-| 01 | `01-serverless-api` | Acortador de URLs: `POST /links` crea, `GET /{code}` redirige 301 | API Gateway HTTP, Lambda, DynamoDB, CloudWatch Logs | locals, `for_each`, `archive_file`, módulo local, IAM least-privilege | ~0 USD |
-| 02 | `02-event-driven` | Pipeline asíncrono: subes un CSV a S3 → se procesa → te llega un email | S3, EventBridge, SQS + DLQ, Lambda, SNS, DynamoDB | dependencias implícitas vs `depends_on`, `count` vs `for_each`, data sources | ~0 USD |
+| 01 | `01-serverless-api` | Acortador de URLs: `POST /links` crea, `GET /{code}` redirige 301 | API Gateway HTTP, Lambda, DynamoDB, CloudWatch Logs | locals, `for_each`, bloques `moved`, `archive_file`, IAM least-privilege | ~0 USD |
+| 02 | `02-event-driven` | Pipeline asíncrono: subes un CSV a S3 → se procesa → te llega un email | S3, EventBridge, SQS + DLQ, Lambda, SNS, DynamoDB | dependencias implícitas vs `depends_on`, `count` vs `for_each`, data sources, **módulo local** (movido aquí desde el 01) | ~0 USD |
 | 03 | `03-ai-gateway` | Tu propio "AI Gateway": endpoint que llama a Claude en Bedrock, con caché y rate limiting | Bedrock, Lambda Function URL (streaming), DynamoDB TTL, API Gateway usage plans | `terraform_data`, provisioners, gestión de secretos, límites del IaC | ~0 USD + tokens |
 | 04 | `04-vpc-three-tier` | Arquitectura de 3 capas real: ALB público → app privada → base de datos aislada | VPC, subnets, IGW, NAT, SG, ALB, ASG/ECS, RDS, Secrets Manager, SSM | módulos de la registry, `for_each` sobre AZs, `dynamic` blocks | **~0,15 USD/h** |
 | 05 | `05-edge-cdn` | Frontend estático global con TLS y caché en el borde | S3, CloudFront + OAC, ACM, Route 53 | providers con `alias` (multi-región), `lifecycle`, dependencias entre regiones | ~0 USD |
@@ -54,7 +54,8 @@ pago por uso y con tu volumen es prácticamente cero.
 | 07 | [La memoria del acortador](./lessons/0007-la-memoria-del-acortador.html) | 01 | [DynamoDB](./reference/aws-dynamodb.html) |
 | 08 | [La puerta pública](./lessons/0008-la-puerta-publica.html) | 01 | [API Gateway](./reference/aws-apigateway.html) |
 | 09 | [La segunda función](./lessons/0009-la-segunda-funcion.html) | 01 | — (`GET /{code}`, 301, puerto del consumidor) |
-| 10 | _El refactor invisible_ (pendiente) | 01 | — (`for_each`, bloques `moved`, ¿módulo local?) |
+| 10 | [El refactor invisible](./lessons/0010-el-refactor-invisible.html) | 01 | — (`for_each`, bloques `moved` · [referencia](./reference/terraform-refactor.html)) |
+| 11 | _Proyecto 02: el pipeline asíncrono_ (por diseñar) | 02 | S3, EventBridge, SQS |
 
 La lección 06 se insertó el 2026-08-25, a petición suya, entre el cerebro y la memoria: capas,
 una dependencia real (`zod`) y tests. La memoria y la puerta corren un número cada una.
@@ -62,4 +63,4 @@ La lección 08 se partió el 2026-08-28: la puerta y el cambio de protocolo del 
 la sesión, así que la segunda Lambda y el `for_each` prometidos pasan a la 09 — la propia
 lección lo dice. La 09 (2026-08-29) volvió a partir: el `for_each` necesita que los gemelos
 `create-link.tf`/`get-link.tf` existan primero, y fundirlos sin destruir nada (bloques
-`moved`) es un tema entero. El proyecto 01 se completa con la 10.
+`moved`) es un tema entero. El proyecto 01 se completó con la 10 (2026-08-29): `for_each` + bloques `moved`, plan a cero. El **módulo local** prometido para el 01 se movió al proyecto 02 con motivo declarado en la propia lección: una estructura antes de su motivo es una manía de estilo (criterio de la lección 06); el módulo se gana su interfaz cuando el patrón cruce entre proyectos, y eso pasa en el 02. Si el 02 no lo justifica, se tacha y se dice por qué.

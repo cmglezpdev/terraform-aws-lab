@@ -8,6 +8,7 @@ lecciones —que se leen una vez—, esto es lo que vuelves a abrir seis meses d
 | Documento | Qué contiene |
 |---|---|
 | [terraform-cli.html](./terraform-cli.html) | Comandos, símbolos del plan, bloques del lenguaje, meta-argumentos, backend S3, y qué hacer cuando algo falla |
+| [terraform-refactor.html](./terraform-refactor.html) | La dirección como identidad, `for_each` y sus trampas, bloques `moved` vs `state mv`, y la receta de seis pasos del refactor invisible |
 
 ## Cadena de herramientas
 

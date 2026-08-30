@@ -37,7 +37,7 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 
 - **State** — introducido en [lección 01](./lessons/0001-el-primer-apply.html)
 - **Drift** — introducido en [lección 01](./lessons/0001-el-primer-apply.html)
-- **Dirección de recurso** — introducido en [lección 01](./lessons/0001-el-primer-apply.html)
+- **Dirección de recurso** — introducido en [lección 01](./lessons/0001-el-primer-apply.html); anatomía completa con clave de instancia en [lección 10](./lessons/0010-el-refactor-invisible.html)
 - **Dependencia implícita** — pendiente, proyecto 01
 - **Fan-out** — introducido en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html)
 - **Política de recurso** — introducido en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html)
@@ -82,6 +82,9 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Política basada en recursos** — introducida en [lección 02](./lessons/0002-haz-que-la-alarma-suene.html) como «política de recurso»; nombrada como tercera clase y leída con `get-policy` en [lección 08](./lessons/0008-la-puerta-publica.html)
 - **Adaptador de protocolo** — introducido en [lección 08](./lessons/0008-la-puerta-publica.html)
 - **Throttling** — introducido en [lección 08](./lessons/0008-la-puerta-publica.html)
+- **`for_each`** / **clave de instancia** — introducidos en [lección 10](./lessons/0010-el-refactor-invisible.html)
+- **Bloque `moved`** / **mudanza** — introducidos en [lección 10](./lessons/0010-el-refactor-invisible.html)
+- **Refactor invisible** (plan a cero: solo mudanzas, nada que añadir ni destruir) — introducido en [lección 10](./lessons/0010-el-refactor-invisible.html)
 
 ## AWS
 

@@ -386,3 +386,24 @@ clase con dos puertos), y el fix del paso 0 lo encontró y comiteó solo. Tres c
   y ofrece explicarlas si las pide. Encajan de forma natural en el proyecto 02.
 - ~~`terraform init -reconfigure` frente a `-migrate-state`~~ — **hecho** en la lección 04,
   como tercer bloque de recuperación (LR-0006).
+
+## Lección 10 — el refactor invisible (2026-08-29, LR-0015)
+
+- **Proyecto 01 cerrado.** `for_each` sobre `local.functions` + 16 `moved`; vara: 0 a
+  añadir, 0 a destruir. Los literales del plan («has moved to», «Plan: 0 to add…») están
+  verificados ejecutando un experimento con `terraform_data` en local, no de memoria.
+- **El mapa usa SUS valores desplegados** (`read-links`/`ReadLinks`), no los de la lección
+  09 (`get-links`): su transcripción divergió y lo desplegado manda. Regla general al
+  escribir lecciones sobre SU código: leer sus ficheros antes, y mandarle verificar contra
+  AWS (`list-role-policies`), nunca contra mi texto.
+- **Sus dos accidentes de gemelos** (zip `create_link.zip` vs `get-link.zip`; `.arn` vs
+  `.invoke_arn` en `integration_uri`) se sirven como ejercicio de detección vía plan
+  (`2 to change` esperado), no como corrección mía. Si su plan difiere, pararse.
+- **`state mv` NO está deprecado** — no gastar el patrón «internet dice lo viejo» donde no
+  aplica: es la herramienta para mover entre states; `moved` gana solo para refactors
+  internos. Matiz repetible en entrevistas.
+- **Módulo local → proyecto 02**, con cláusula de salida en ROADMAP. `count` plantado
+  (quiz 3) para el 02.
+- Pendiente nuevo de la lección: la pregunta del cierre (`GET /stats/{code}`) — cuando
+  traiga la respuesta, mirar si vio el conflicto clave-del-mapa/ruta y la precedencia de
+  rutas de la 09.

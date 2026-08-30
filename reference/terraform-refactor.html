@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chuleta · El state y el refactor</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Documento de referencia · imprimible</p>
+  <h1>El state y el refactor: mover sin destruir</h1>
+  <p class="deck">Direcciones, <code>for_each</code>, bloques <code>moved</code> y la receta
+  completa del refactor invisible. Verificado ejecutándolo con Terraform 1.15 el 2026-08-29.
+  Fuente primaria: <a href="https://developer.hashicorp.com/terraform/language/modules/develop/refactoring">la
+  guía de refactoring de HashiCorp</a>.</p>
+</header>
+
+<main>
+
+<h2>La idea que ordena todo</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>La dirección es la identidad</h3>
+<pre><code>aws_lambda_function.fn["create-link"]
+└────────┬────────┘ └┬┘ └─────┬─────┘
+       tipo       nombre   clave de
+                           instancia</code></pre>
+    <p>El plan empareja <strong>por dirección</strong>, nunca por «configuración
+    equivalente»: lo que está en el código y no en el state se crea; lo que está en el state
+    y no en el código se destruye. Renombrar un recurso, pasarlo a <code>for_each</code> o
+    meterlo en un módulo cambia su dirección — y sin más información, eso es una demolición
+    con obra nueva.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Qué guarda el state</h3>
+    <p>El registro civil: cada dirección casada con su objeto real (ID, ARN, atributos).
+    Un refactor invisible cambia la mitad «dirección» del registro sin tocar la mitad
+    «objeto».</p>
+<pre><code>terraform state list        # todas las direcciones
+terraform state show DIR    # una, con sus atributos</code></pre>
+    <p class="small">Con backend S3 ambos comandos necesitan sesión (<code>aws login</code>).</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Las cuatro cosas que un plan puede contar</h3>
+    <table>
+      <tbody>
+        <tr><td><code>+</code> / <code>-</code></td><td>crear / destruir</td></tr>
+        <tr><td><code>~</code></td><td>modificar en sitio</td></tr>
+        <tr><td><code>-/+</code></td><td>destruir y recrear — el objeto muere</td></tr>
+        <tr><td><em>sin símbolo</em></td><td><code># X has moved to Y</code> — mudanza: a AWS no se le pide nada</td></tr>
+      </tbody>
+    </table>
+    <p>En un refactor puro, la línea final es la vara:
+    <code>Plan: 0 to add, 0 to change, 0 to destroy.</code></p>
+  </div>
+
+</div>
+
+<h2><code>for_each</code></h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>Sintaxis mínima</h3>
+<pre><code>locals {
+  functions = {
+    "create-link" = { route_key = "POST /links" }
+    "get-link"    = { route_key = "GET /{code}" }
+  }
+}
+
+resource "aws_lambda_function" "fn" {
+  for_each      = local.functions
+  function_name = "app-${each.key}"
+  # each.value.route_key, etc.
+}
+
+# referenciar una instancia concreta:
+aws_iam_role.fn[each.key].arn      # dentro de otro for_each
+aws_lambda_function.fn["get-link"] # desde fuera</code></pre>
+  </div>
+
+  <div class="ref-card">
+    <h3>Reglas y trampas</h3>
+    <ul>
+      <li>Acepta un <strong>mapa</strong> o un <strong>set de strings</strong> (lista →
+      <code>toset()</code>, no hay conversión implícita).</li>
+      <li>Las claves deben <a
+      href="https://developer.hashicorp.com/terraform/language/meta-arguments/for_each">conocerse
+      antes de tocar nada remoto</a>: <code>locals</code> sí; atributos que AWS devuelve en
+      el apply, no. Tampoco valores <em>sensitive</em>.</li>
+      <li><strong>La clave entra en la dirección</strong> → renombrarla es otra mudanza.
+      Elígela como un nombre de columna: para no tocarla.</li>
+      <li><code>depends_on</code> no admite <code>each</code>: apunta al recurso entero
+      (<code>aws_iam_role_policy.logs</code>, sin clave).</li>
+      <li>Borrar una clave del mapa destruye <em>todos</em> sus recursos. El mapa concentra
+      el poder: se revisa como un <code>rm -rf</code>.</li>
+    </ul>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>count</code>: el hermano posicional</h3>
+    <p>Identidad por <strong>índice</strong> (<code>[0]</code>, <code>[1]</code>…), no por
+    clave. Borra el primer elemento de la lista y todo se corre un puesto: cascada de
+    modificaciones y una destrucción al final. Regla del curso: <code>count</code> para
+    «N copias idénticas o un on/off» (<code>count = var.enabled ? 1 : 0</code>);
+    <code>for_each</code> para todo lo que tenga nombre propio.</p>
+  </div>
+
+</div>
+
+<h2>Bloques <code>moved</code></h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>Sintaxis <span class="tag">desde Terraform 1.1</span></h3>
+<pre><code>moved {
+  from = aws_iam_role.create_link
+  to   = aws_iam_role.fn["create-link"]
+}</code></pre>
+    <p>Direcciones sin comillas alrededor; la clave de instancia sí va entre comillas
+    (índices de <code>count</code>: <code>[0]</code>, sin ellas). Cubre renombrar, pasar a
+    <code>for_each</code>/<code>count</code> y mover a/entre módulos.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>Reglas</h3>
+    <ul>
+      <li>Solo <strong>resources</strong> (y módulos). Los data sources no se mudan: se
+      releen.</li>
+      <li>No convierte un resource en data source, ni cambia de tipo de recurso (salvo
+      excepciones del provider).</li>
+      <li>Se pueden <strong>encadenar</strong>: A→B en un commit, B→C en otro; Terraform
+      sigue la cadena.</li>
+      <li>Un <code>moved</code> ya aplicado es inerte. ¿Borrarlo? Depende de quién más
+      aplica: en un módulo publicado, <a
+      href="https://developer.hashicorp.com/terraform/language/modules/develop/refactoring">«removing
+      a moved block is a breaking change»</a> y se conservan para siempre; con un único
+      state y un único operador, se borra tras el apply y el siguiente <code>plan</code>
+      (<em>No changes</em>) lo certifica.</li>
+    </ul>
+  </div>
+
+  <div class="ref-card">
+    <h3><code>moved</code> vs <code>terraform state mv</code></h3>
+    <table>
+      <tbody>
+        <tr><td><strong><code>moved</code></strong></td><td>declarativo, viaja en el commit,
+        se revisa en PR, el plan lo ensaya antes de hacerlo, lo ejecuta igual cualquiera que
+        aplique</td></tr>
+        <tr><td><strong><code>state mv</code></strong></td><td>imperativo, edita el state por
+        fuera, sin ensayo ni revisión. <em>No está deprecado</em>: sigue siendo la
+        herramienta para lo que <code>moved</code> no expresa (p. ej. mover recursos entre
+        states distintos)</td></tr>
+      </tbody>
+    </table>
+    <p class="small">Casi todo internet enseña <code>state mv</code> para refactors — es
+    anterior a la 1.1. Mismo patrón que el lock con DynamoDB: lo viejo funciona, pero ya no
+    es la forma.</p>
+  </div>
+
+</div>
+
+<h2>La receta del refactor invisible</h2>
+
+<div class="ref-grid">
+
+  <div class="ref-card">
+    <h3>Los seis pasos</h3>
+    <ol>
+      <li><code>terraform state list</code> — anota las direcciones viejas.</li>
+      <li>Escribe el destino (mapa en <code>locals</code> + recursos con
+      <code>for_each</code>).</li>
+      <li>Un <code>moved</code> por recurso: <code>from</code> = dirección vieja tal como
+      sale en el state; <code>to</code> = nueva con su clave.</li>
+      <li><code>plan</code> y léelo entero: N mudanzas sin símbolo,
+      <strong>0 a añadir, 0 a destruir</strong>. Cada <code>~</code> restante es una
+      diferencia real que el refactor sacó a la luz — nómbrala o no apliques.</li>
+      <li><code>apply</code>, y las pruebas: <code>state list</code> (solo direcciones
+      nuevas), segundo <code>plan</code> (<em>No changes</em>), y el humo de la
+      aplicación.</li>
+      <li>Borra los <code>moved</code> si nadie más aplica este state; consérvalos si el
+      módulo tiene más usuarios.</li>
+    </ol>
+  </div>
+
+  <div class="ref-card">
+    <h3>Autocorrección</h3>
+    <p>Un <code>moved</code> que falta o está mal escrito <strong>no rompe nada</strong>:
+    reaparece en el plan como pareja destruir/crear, señalándose solo. El plan es el
+    corrector — por eso el refactor de IaC no se revisa leyendo el código, se revisa leyendo
+    el plan.</p>
+  </div>
+
+  <div class="ref-card">
+    <h3>El refactor como detector</h3>
+    <p>Fundir gemelos obliga a elegir un valor único por atributo — y cada <code>~</code>
+    inesperado del plan es una divergencia que llevaba tiempo ahí (un nombre de fichero, una
+    ARN equivalente-pero-distinta). Un <code>diff</code> normalizado con <code>sed</code>
+    no puede verlas: borra justo los errores que viven en los nombres. El plan compara
+    identidades contra el state refrescado; a ese no hay <code>sed</code> que lo engañe.</p>
+  </div>
+
+</div>
+
+<div class="next">
+  <div class="nav-links">
+    <a href="./terraform-cli.html">Chuleta: Terraform CLI y HCL</a>
+    <a href="../lessons/0010-el-refactor-invisible.html">Lección 10: el refactor invisible</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

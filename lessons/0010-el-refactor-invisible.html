@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lección 10 · El refactor invisible</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Lección 10 · Proyecto <code>01-serverless-api</code></p>
+  <h1>El refactor invisible</h1>
+  <p class="deck">La lección 09 lo dejó escrito: los gemelos van a divergir. Malas noticias —
+  ya lo han hecho, y no lo sabes. Hoy <code>create-link.tf</code> y <code>get-link.tf</code>
+  se funden en un solo fichero con <code>for_each</code>, y lo hacen con la vara más alta que
+  existe en Terraform: <strong>AWS no debe enterarse</strong>. Cero a crear, cero a destruir.
+  La técnica que lo hace posible se llama bloque <code>moved</code>, y saber usarla —y saber
+  por qué hace falta— es de lo más rentable del curso en una entrevista. Con esto, el
+  proyecto 01 se cierra.</p>
+  <div class="meta">
+    <span><b>Tiempo</b> 40 min</span>
+    <span><b>Coste</b> 0,00 USD — ningún recurso nuevo; el mejor <code>apply</code> del curso es el que no hace nada</span>
+    <span><b>Terraform</b> <code>for_each</code> · bloques <code>moved</code> · <code>state list</code></span>
+    <span><b>Node</b> ni una línea — hoy <code>app/</code> no se toca</span>
+  </div>
+</header>
+
+<main>
+
+<h2>Primero, recupera</h2>
+<p>Tres cierres, de memoria, antes de tocar el teclado.</p>
+
+<details class="recall">
+  <summary>La quiz de la lección 09 te dejó asomado: reescribes las dos funciones con
+  <code>for_each</code> y no haces nada más. ¿Qué propone <code>terraform plan</code>, y
+  por qué?</summary>
+  <p>Destruirlo todo y crearlo de nuevo. Terraform no compara configuraciones
+  «equivalentes»: compara <strong>direcciones</strong>. <code>aws_lambda_function.create_link</code>
+  y <code>aws_lambda_function.fn["create-link"]</code> son direcciones distintas; el state
+  solo conoce la primera, así que una «sobra» y la otra «falta». Hoy vas a ver ese plan con
+  tus ojos — y a curarlo.</p>
+</details>
+
+<details class="recall">
+  <summary>Lección 03: ¿qué guarda exactamente el state de cada recurso?</summary>
+  <p>El emparejamiento entre la <strong>dirección</strong> en tu código y el
+  <strong>objeto real</strong> en AWS (su ID, su ARN, sus atributos). No es una copia de tu
+  código ni una copia de AWS: es el registro civil que los casa. Hoy vas a cambiar la mitad
+  «dirección» de ese registro sin tocar la mitad «objeto» — eso es, literalmente, la lección
+  entera.</p>
+</details>
+
+<details class="recall">
+  <summary>En un plan: ¿qué anuncian <code>~</code>, <code>-/+</code> y la pareja
+  <code>+</code>/<code>-</code>?</summary>
+  <p><code>~</code> es actualizar en el sitio; <code>-/+</code> es destruir y recrear (el
+  objeto muere); <code>+</code> y <code>-</code> crean y destruyen a secas. Hoy conocerás
+  una quinta cosa que <strong>no lleva símbolo</strong>: la mudanza. Aparece como un
+  comentario — y esa diferencia tipográfica es toda una declaración de intenciones.</p>
+</details>
+
+<div class="callout win">
+  <span class="callout-title">Hoy AWS es un espectador</span>
+  <p>Ningún servicio nuevo, ningún permiso nuevo, ninguna línea de TypeScript — la primera
+  lección del proyecto 01 que no abre <code>app/</code>. Todo lo que pasa hoy pasa en dos
+  sitios: tu código HCL y tu state. Si al final del día AWS se ha enterado de algo más que
+  dos retoques cosméticos, algo ha ido mal.</p>
+</div>
+
+<h2>Paso 0 — los gemelos ya divergieron</h2>
+
+<ol class="steps">
+
+<li>
+<p>Sesión e identidad, como siempre, y el state a la vista:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">projects/01-serverless-api</span></div>
+<pre><code>aws sts get-caller-identity   # ¿usuario terraform? (aws login si caducó)
+
+terraform state list</code></pre>
+</div>
+<p>Unas veinticuatro líneas, entre <code>resources</code> y <code>data sources</code>. Esa
+columna de texto es <strong>la mitad izquierda del registro civil</strong>: cada línea es una
+dirección, y cada dirección apunta a un objeto real en AWS. Fíjate en cuántas contienen
+<code>create_link</code> o <code>get_link</code> — todas esas se mudan hoy.</p>
+</li>
+
+<li>
+<p>Ahora, la acusación del deck. Pon a los gemelos frente a frente, con los nombres
+normalizados para que solo hable lo que de verdad difiere:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">el careo</span></div>
+<pre><code>diff --unified=0 \
+  &lt;(sed -E 's/create[-_]link/fn/g' create-link.tf) \
+  &lt;(sed -E 's/get[-_]link/fn/g'    get-link.tf)</code></pre>
+</div>
+<p>Clasifica cada diferencia que veas en una de dos cajas: <strong>negocio</strong> (existe
+por una razón y debe sobrevivir al refactor) o <strong>accidente</strong> (no debería
+existir). Hazlo por escrito antes de abrir el desplegable.</p>
+
+<details class="recall">
+  <summary>Cuando tengas tu lista, abre.</summary>
+  <p>Negocio: <code>PutItem</code> contra <code>GetItem</code>, los <code>sid</code>
+  (<code>PutLinks</code>/<code>ReadLinks</code>) y los nombres de política
+  (<code>put-links</code>/<code>read-links</code>). Eso es <em>lo que cada función es</em>,
+  y va a vivir en un mapa. El bloque <code>data "aws_iam_policy_document"
+  "lambda_assume_role"</code> solo aparece en un gemelo porque ya lo compartían — bien.
+  ¿Y los accidentes? Aquí la trampa: <strong>este diff no puede verlos</strong>. El
+  <code>sed</code> que normaliza los nombres también normaliza los errores que viven en los
+  nombres. Hay al menos dos accidentes reales escondidos en tu proyecto ahora mismo — uno en
+  los gemelos, otro en <code>http-api.tf</code> — y no te voy a decir cuáles. Te va a hacer
+  falta un detector más honesto que un <code>diff</code>, y lo tienes: el <code>plan</code>
+  del paso 4. Sigue.</p>
+</details>
+</li>
+
+</ol>
+
+<h2>La dirección es la identidad</h2>
+
+<p>Todo lo de hoy cuelga de una sola idea. En Terraform, un recurso no «es» su configuración
+ni «es» el objeto de AWS: es su <strong>dirección</strong> — la ruta que ves en
+<code>state list</code>. Anatomía completa, con la novedad de hoy incluida:</p>
+
+<div class="code">
+  <div class="code-label"><span>anatomía de una dirección</span></div>
+<pre><code>aws_lambda_function.fn["create-link"]
+└────────┬────────┘ └┬┘ └─────┬─────┘
+      tipo         nombre   clave de instancia
+                            (solo si hay for_each — cada clave
+                             del mapa crea una instancia con
+                             su propia dirección)</code></pre>
+</div>
+
+<p>Cuando calculas un plan, Terraform empareja por dirección: lo que está en el código y no
+en el state, se crea; lo que está en el state y no en el código, se destruye. <a
+href="https://developer.hashicorp.com/terraform/language/meta-arguments/for_each">Un
+<code>for_each</code> sobre un mapa</a> crea una instancia por clave, y la clave pasa a
+formar parte de la dirección — por eso renombrar recursos, o pasarlos a <code>for_each</code>,
+le parece a Terraform una demolición seguida de una obra nueva: <em>las direcciones viejas
+desaparecieron y las nuevas no constan</em>.</p>
+
+<p>La cura es declararle la mudanza. El <a
+href="https://developer.hashicorp.com/terraform/language/moved">bloque <code>moved</code></a>
+le dice al plan que dos direcciones nombran el mismo objeto:</p>
+
+<div class="code">
+  <div class="code-label"><span>sintaxis</span><span class="tag">desde Terraform 1.1</span></div>
+<pre><code>moved {
+  from = aws_lambda_function.create_link
+  to   = aws_lambda_function.fn["create-link"]
+}</code></pre>
+</div>
+
+<p>Fíjate en lo que es: <strong>código</strong>. Viaja en el commit, se revisa en la PR, y
+cualquiera que aplique después de ti ejecuta la misma mudanza. Existe una alternativa
+imperativa — <code>terraform state mv</code>, un comando que edita el state a mano — y casi
+todos los tutoriales viejos de internet te enseñarán esa, porque los bloques
+<code>moved</code> llegaron en la 1.1. No está deprecada (a diferencia del lock con
+DynamoDB): sigue siendo la herramienta para casos que <code>moved</code> no expresa, como
+mover recursos <em>entre states distintos</em>. Pero para un refactor dentro de tu propia
+configuración, la forma declarativa gana por lo mismo que Terraform gana a clicar en la
+consola: queda escrito, se revisa y se repite.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Solo recursos, y las claves conocidas de antemano</span>
+  <p>Dos letras pequeñas. Los <code>data sources</code> no se mudan: no son objetos tuyos,
+  son consultas — se releen y ya. Y <a
+  href="https://developer.hashicorp.com/terraform/language/meta-arguments/for_each">las
+  claves de un <code>for_each</code> deben conocerse antes de tocar nada remoto</a>
+  (<em>«all values … must be known before Terraform performs any remote resource
+  operations»</em>): un mapa escrito en <code>locals</code> vale; uno construido con
+  atributos que AWS devuelve en el <code>apply</code>, no.</p>
+</div>
+
+<h2>Paso 1 — el mapa: qué hace distinta a cada función</h2>
+
+<p>Del careo del paso 0 salió la lista de diferencias de negocio. Eso, y solo eso, es el
+mapa. Reemplaza tus <code>locals</code> en <code>main.tf</code>:</p>
+
+<div class="code">
+  <div class="code-label"><span>main.tf</span><span class="tag">reemplaza entero</span></div>
+<pre><code>locals {
+  name = "url-shortener"
+
+  # Una entrada por función. La clave trabaja triple: es el nombre del bundle
+  # (app/dist/&lt;clave&gt;.mjs), el sufijo del function_name y la dirección en el state.
+  functions = {
+    "create-link" = {
+      route_key     = "POST /links"
+      table_policy  = "put-links"
+      table_sid     = "PutLinks"
+      table_actions = ["dynamodb:PutItem"]
+    }
+    "get-link" = {
+      route_key     = "GET /{code}"
+      table_policy  = "read-links"
+      table_sid     = "ReadLinks"
+      table_actions = ["dynamodb:GetItem"]
+    }
+  }
+}</code></pre>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La clave es para siempre (más o menos)</span>
+  <p>Elegir <code>"create-link"</code> como clave no es estética: acaba de convertirse en
+  parte de la <em>dirección</em> de nueve recursos. Si dentro de un año la renombras a
+  <code>"create"</code>, habrás vuelto a cambiar direcciones — y tocará otra ronda de
+  <code>moved</code> o una demolición. Las claves de un <code>for_each</code> se eligen como
+  los nombres de columna de una base de datos: pensando en no volver a tocarlas. Que aquí
+  además coincidan con el nombre del bundle (<code>create-link.mjs</code>) y el sufijo de la
+  función desplegada no es casualidad — es lo que mantiene el mapa en doce líneas.</p>
+</div>
+
+<p>Y comprueba contra tus propios ficheros: <code>table_policy</code> y
+<code>table_sid</code> tienen que decir <strong>lo que dicen tus gemelos</strong>, no lo que
+diga esta lección. Estos nombres están desplegados en IAM; inventar unos nuevos aquí sería
+un cambio real, no un refactor. <code>aws iam list-role-policies --role-name
+url-shortener-get-link</code> es el árbitro si dudas.</p>
+
+<h2>Paso 2 — un fichero donde había dos</h2>
+
+<p>Borra los gemelos y escribe su fusión. La estructura interna es <em>exactamente</em> la
+de siempre — identidad, logs, datos, artefacto, función — contada una vez:</p>
+
+<div class="code">
+  <div class="code-label"><span>terminal</span></div>
+<pre><code>git rm create-link.tf get-link.tf</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>functions.tf</span><span class="tag">nuevo</span></div>
+<pre><code># Todo lo que ES una función del acortador: identidad, logs, su llave de la
+# tabla, el artefacto y la función. Antes eran dos ficheros gemelos; ahora es
+# una sola historia contada una vez, con las diferencias en local.functions.
+
+# --- Identidad: quién puede ponerse el uniforme -----------------
+
+data "aws_iam_policy_document" "lambda_assume_role" {
+  statement {
+    sid     = "LambdaServiceCanAssume"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "fn" {
+  for_each           = local.functions
+  name               = "${local.name}-${each.key}"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+# --- Logs: el grupo y la llave para escribir en él --------------
+
+resource "aws_cloudwatch_log_group" "fn" {
+  for_each          = local.functions
+  name              = "/aws/lambda/${local.name}-${each.key}"
+  retention_in_days = 7
+}
+
+data "aws_iam_policy_document" "fn_logs" {
+  for_each = local.functions
+
+  statement {
+    sid       = "WriteOwnLogs"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.fn[each.key].arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "logs" {
+  for_each = local.functions
+  name     = "write-own-logs"
+  role     = aws_iam_role.fn[each.key].id
+  policy   = data.aws_iam_policy_document.fn_logs[each.key].json
+}
+
+# --- Datos: la llave de cada función sobre la tabla -------------
+
+data "aws_iam_policy_document" "fn_table" {
+  for_each = local.functions
+
+  statement {
+    sid       = each.value.table_sid
+    actions   = each.value.table_actions
+    resources = [aws_dynamodb_table.links.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "table" {
+  for_each = local.functions
+  name     = each.value.table_policy
+  role     = aws_iam_role.fn[each.key].id
+  policy   = data.aws_iam_policy_document.fn_table[each.key].json
+}
+
+# --- El artefacto y la función ----------------------------------
+
+data "archive_file" "fn" {
+  for_each    = local.functions
+  type        = "zip"
+  source_file = "${path.module}/app/dist/${each.key}.mjs"
+  output_path = "${path.module}/build/${each.key}.zip"
+}
+
+resource "aws_lambda_function" "fn" {
+  for_each      = local.functions
+  function_name = "${local.name}-${each.key}"
+  role          = aws_iam_role.fn[each.key].arn
+
+  runtime       = "nodejs24.x"
+  handler       = "${each.key}.handler"
+  architectures = ["arm64"]
+
+  filename         = data.archive_file.fn[each.key].output_path
+  source_code_hash = data.archive_file.fn[each.key].output_base64sha256
+
+  memory_size = 128
+  timeout     = 5
+
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.links.name
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.fn,
+    aws_iam_role_policy.logs,
+    aws_iam_role_policy.table,
+  ]
+}</code></pre>
+</div>
+
+<p>Tres lecturas antes de seguir. Una: <code>each.key</code> alimenta todo lo que era
+simétrico entre gemelos (nombres, rutas de fichero, handler) y <code>each.value</code> todo
+lo que era negocio (la llave de la tabla). Dos: <code>write-own-logs</code> queda literal
+porque <em>ya era idéntico</em> en los dos gemelos — un nombre repetido no es una diferencia.
+Tres: el <code>depends_on</code> apunta a los recursos <em>enteros</em>
+(<code>aws_iam_role_policy.logs</code>, sin clave): dentro de <code>depends_on</code> no
+existe <code>each</code>, y declarar la dependencia contra el grupo completo es correcto y
+suficiente.</p>
+
+<h2>Paso 3 — el libro de mudanzas</h2>
+
+<p>Si ahora corrieras <code>plan</code>, verías la demolición de la quiz: nueve a destruir,
+nueve a crear. No lo hagas todavía — escribe primero las mudanzas. Un fichero nuevo,
+<code>moved.tf</code>, que se lee como el libro de registro de una mudanza real:</p>
+
+<div class="code">
+  <div class="code-label"><span>moved.tf</span><span class="tag">nuevo — te doy 4, faltan 6</span></div>
+<pre><code># El libro de mudanzas: cada bloque le cuenta a Terraform que un objeto que ya
+# existe en AWS cambió de dirección en el código. Sin esto, el plan propondría
+# destruirlo todo y recrearlo.
+
+moved {
+  from = aws_iam_role.create_link
+  to   = aws_iam_role.fn["create-link"]
+}
+
+moved {
+  from = aws_iam_role.get_link
+  to   = aws_iam_role.fn["get-link"]
+}
+
+moved {
+  from = aws_cloudwatch_log_group.create_link
+  to   = aws_cloudwatch_log_group.fn["create-link"]
+}
+
+moved {
+  from = aws_cloudwatch_log_group.get_link
+  to   = aws_cloudwatch_log_group.fn["get-link"]
+}
+
+# … y ahora tú: las cuatro políticas de rol y las dos funciones.
+# El destino de las políticas: aws_iam_role_policy.logs["…"] y
+# aws_iam_role_policy.table["…"]. Los data sources NO se mudan.</code></pre>
+</div>
+
+<p>Escribe los seis que faltan de memoria del patrón, no copiando: <code>from</code> es la
+dirección vieja tal como sale hoy en <code>state list</code>; <code>to</code> es la nueva
+con su clave. Y sin miedo a equivocarte — aquí está la elegancia del asunto: <strong>el
+<code>plan</code> es tu corrector</strong>. Un <code>moved</code> que falte o esté mal
+escrito no rompe nada: reaparece como una pareja destruir/crear en el plan, señalándose a sí
+mismo.</p>
+
+<h2>Paso 4 — la puerta y los outputs, sin red</h2>
+
+<p>Queda la otra mitad del copia-pega: en <code>http-api.tf</code>, el enchufe, la ruta y el
+permiso existen por duplicado, y en <code>outputs.tf</code> hay referencias a direcciones
+que ya no existen (<code>terraform validate</code> te lo va a gritar — úsalo de brújula).
+Esta parte es tuya, con tres pistas direccionales y ninguna solución:</p>
+
+<ul>
+  <li>El patrón es idéntico al del paso 2: <code>for_each = local.functions</code>, y la
+  única diferencia de negocio entre los pares ya está en el mapa (<code>route_key</code>).
+  La API y el stage no se tocan: siempre fueron únicos.</li>
+  <li>Cada pareja fundida son dos bloques <code>moved</code> más en el libro. Cuenta al
+  terminar: el libro completo debe tener dieciséis.</li>
+  <li>Para los outputs que eran de una sola función, la forma idiomática de devolverlos
+  todos es una <a
+  href="https://developer.hashicorp.com/terraform/language/expressions/for">expresión
+  <code>for</code></a>: <code>{ for k, fn in aws_lambda_function.fn : k =&gt;
+  fn.function_name }</code>. Los outputs no son infraestructura — cambiarlos no le cuesta
+  nada a AWS.</li>
+</ul>
+
+<h2>Paso 5 — el plan como detector de mentiras</h2>
+
+<ol class="steps">
+
+<li>
+<p>Primero los jueces baratos, luego el caro:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span></div>
+<pre><code>terraform validate && terraform fmt -check
+
+terraform plan</code></pre>
+</div>
+</li>
+
+<li>
+<p>Y ahora léelo entero, línea a línea, contra esta vara:</p>
+<div class="code">
+  <div class="code-label"><span>lo que buscas</span><span class="tag">la firma de una mudanza</span></div>
+<pre><code>  # aws_lambda_function.create_link has moved to aws_lambda_function.fn["create-link"]
+    resource "aws_lambda_function" "fn" {
+        id = "url-shortener-create-link"
+        # (… unchanged attributes hidden)
+    }</code></pre>
+</div>
+<p>Sin símbolo. La mudanza es un comentario, no una acción — Terraform te está diciendo «a
+AWS no le voy a pedir nada sobre esto». Debe haber dieciséis, una por bloque del libro. La
+cifra final que persigues:</p>
+<div class="code">
+  <div class="code-label"><span>el objetivo</span></div>
+<pre><code>Plan: 0 to add, ? to change, 0 to destroy.</code></pre>
+</div>
+<p><strong>Cero a añadir y cero a destruir son innegociables</strong>: si aparece cualquier
+destrucción, un <code>moved</code> falta o está mal, y no se aplica hasta entenderlo. ¿Y esa
+interrogación? Ahí están los accidentes que el <code>diff</code> del paso 0 no podía ver.
+Cada <code>~ update</code> que te encuentres es una diferencia real entre tus gemelos que el
+refactor acaba de sacar a la luz. Nómbralas — qué atributo, por qué divergía, qué cuesta
+unificarlo — antes de abrir el desplegable.</p>
+
+<details class="recall">
+  <summary>Los accidentes que yo encontré leyendo tu código, para contrastar.</summary>
+  <p>Dos. Uno: los zips. Tu <code>create-link</code> empaquetaba en
+  <code>build/create_link.zip</code> (guion bajo, herencia de la lección 05) y tu
+  <code>get-link</code> en <code>build/get-link.zip</code> (guion, tu transcripción de la
+  09 — que decía <code>get_link.zip</code>, por cierto). El <code>${each.key}.zip</code>
+  unifica a guion, así que <code>filename</code> cambia en una función: <code>~ update</code>
+  inofensivo — mismo <code>source_code_hash</code>, mismo código; solo cambia la ruta local
+  del artefacto (y el provider resube el zip al cambiar de nombre). Dos:
+  <code>integration_uri</code>. Tu enchufe de <code>get-link</code> usaba
+  <code>aws_lambda_function.get_link.arn</code> y el de <code>create-link</code>,
+  <code>invoke_arn</code>. Las dos formas funcionan — tu 301 desde el móvil es la prueba
+  empírica de la primera — pero eran <em>distintas sin motivo</em>: la definición de
+  accidente. Unificar a <code>invoke_arn</code> actualiza la integración en el aire, sin
+  corte. Resultado esperado: <code>Plan: 0 to add, 2 to change, 0 to destroy</code>, más el
+  cambio en los outputs. Si tu cuenta difiere, no sigas por inercia: cada línea tiene que
+  tener nombre y apellido antes del <code>apply</code>.</p>
+</details>
+</li>
+
+</ol>
+
+<div class="callout why">
+  <span class="callout-title">Por qué el diff juró en falso y el plan no puede</span>
+  <p>El <code>diff</code> del paso 0 comparaba <em>texto</em>, y tu normalización con
+  <code>sed</code> — necesaria para comparar gemelos — borraba justo la clase de error que
+  vive en los nombres. El <code>plan</code> compara <em>tu código contra el state
+  refrescado</em>: no hay <code>sed</code> que lo engañe, porque no compara textos sino
+  identidades y atributos. Es la misma lección del humo de la 09 con otro traje: la
+  herramienta de verificación tiene que cubrir el contrato entero, y aquí el contrato entero
+  es «el estado final descrito es el desplegado». Guárdala en la caja de entrevistas: <em>el
+  refactor de IaC no se revisa leyendo el código, se revisa leyendo el plan</em>.</p>
+</div>
+
+<h2>Paso 6 — aplica, y demuestra la invisibilidad</h2>
+
+<ol class="steps">
+
+<li>
+<p><code>terraform apply</code>. La línea final debe decir exactamente lo que el plan
+prometió — con tus dos accidentes, <code>0 added, 2 changed, 0 destroyed</code>. Las
+dieciséis mudanzas no computan: mudarse no es cambiar.</p>
+</li>
+
+<li>
+<p>Las tres pruebas de la invisibilidad, en orden de cercanía:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span><span class="tag">la demostración</span></div>
+<pre><code>terraform state list | grep -E 'create|get'
+# solo direcciones nuevas: …fn["create-link"], …fn["get-link"] — las viejas no existen
+
+terraform plan
+# No changes. Your infrastructure matches the configuration.
+
+API_URL=$(terraform output -raw http_api_url)
+curl -s -X POST "$API_URL/links" -H 'content-type: application/json' \
+  -d '{"url": "https://developer.hashicorp.com/terraform/language/moved"}' -o ok.json \
+  -w 'HTTP %{http_code}\n'
+curl -sL -o /dev/null -w '%{http_code} tras %{num_redirects} redirección\n' \
+  "$API_URL/$(node -p 'require("./ok.json").code')"
+# 200 tras 1 redirección — el acortador ni se enteró</code></pre>
+</div>
+</li>
+
+<li>
+<p>Último acto: el libro de mudanzas ya cumplió. En cuanto el <code>apply</code> pasó, el
+state solo conoce las direcciones nuevas — los <code>moved</code> son historia. ¿Se borran?
+Depende de <strong>quién más aplica este state</strong>. La doc de HashiCorp es tajante para
+módulos publicados: <a
+href="https://developer.hashicorp.com/terraform/language/modules/develop/refactoring">«Removing
+a moved block is a breaking change»</a> — cualquiera que venga del estado viejo vería la
+demolición en vez de la mudanza, así que ahí se conservan para siempre. Aquí el state es uno
+y quien aplica eres tú: bórralos, y que el <code>plan</code> lo jure:</p>
+<div class="code">
+  <div class="code-label"><span>terminal</span></div>
+<pre><code>git rm moved.tf
+terraform plan   # No changes — la mudanza vive ya en el state, no en el código</code></pre>
+</div>
+<p>(El historial del refactor no se pierde: queda en git, que para eso está.)</p>
+</li>
+
+<li>
+<p>Cierra la sesión:</p>
+<ul class="checklist" data-key="l10-verify">
+  <li>El careo del paso 0 salió por escrito: negocio a un lado, y la sospecha de accidentes al otro.</li>
+  <li>Escribiste 12 de los 16 <code>moved</code> sin copiar, y el <code>plan</code> validó el libro entero.</li>
+  <li>El plan: 16 mudanzas sin símbolo, 0 a añadir, 0 a destruir — y cada <code>~</code> con nombre y apellido.</li>
+  <li>Los dos accidentes (zip con guion bajo, <code>arn</code> vs <code>invoke_arn</code>) quedaron identificados y unificados.</li>
+  <li><code>state list</code> solo enseña direcciones nuevas; el segundo <code>plan</code> dice <em>No changes</em>.</li>
+  <li>El acortador acorta igual que ayer: 200 tras 1 redirección.</li>
+  <li><code>moved.tf</code> borrado tras el apply, con el criterio dicho en voz alta: state único, un solo operador.</li>
+  <li>El proyecto 01 cabe en la cabeza: <code>main.tf</code> (el mapa), <code>functions.tf</code>, <code>http-api.tf</code>, <code>dynamodb.tf</code>.</li>
+</ul>
+</li>
+
+</ol>
+
+<h2>Qué has demostrado hoy</h2>
+
+<div class="callout win">
+  <span class="callout-title">Esto lo demuestra</span>
+  <ul>
+    <li>Que sabes hacer el refactor más delicado de Terraform — cambiar direcciones de
+    recursos vivos — <strong>sin que AWS se entere</strong>, y demostrarlo con el plan, no
+    jurarlo.</li>
+    <li>Que distingues las tres cosas que un plan puede contar: cambios (<code>~</code>,
+    <code>-/+</code>), mudanzas (el comentario sin símbolo) y nada — y que sabes cuál de las
+    tres exige pararse.</li>
+    <li>Que los gemelos ya no pueden divergir: toda diferencia de negocio vive en un mapa de
+    doce líneas, y añadir una tercera función es una entrada de mapa y un bundle, no
+    doscientas líneas a mano.</li>
+    <li>Que un refactor es también un <strong>detector de accidentes</strong>: dos
+    divergencias invisibles al diff salieron a la luz porque unificar obliga a elegir.</li>
+    <li>Que el proyecto 01 está terminado: crea, redirige, con least privilege verificado,
+    humo permanente, y un HCL sin duplicación que sabes defender pieza a pieza.</li>
+  </ul>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y esto no lo demuestra</span>
+  <ul>
+    <li><strong><code>for_each</code> no te protege de borrar una clave.</strong> Quita
+    <code>"get-link"</code> del mapa y el plan propondrá destruir sus nueve recursos — con
+    toda la razón. El mapa concentra el poder: revísalo con el mismo respeto que un
+    <code>rm -rf</code>.</li>
+    <li><strong>El módulo local prometido no está aquí</strong> — aplazado con motivo, abajo.</li>
+    <li><strong><code>count</code> existe y no lo has usado.</strong> Es el hermano
+    posicional de <code>for_each</code>: identidad por índice, no por clave — con
+    consecuencias que la quiz 3 te deja mordidas. En el proyecto 02 lo verás de frente.</li>
+    <li><strong>La puerta sigue abierta y sin CORS</strong>, como ayer y a sabiendas:
+    authorizer en el proyecto 03.</li>
+  </ul>
+</div>
+
+<p class="small">El proyecto queda desplegado: en reposo, cero. El día del derribo:
+<code>terraform destroy</code>.</p>
+
+<div class="callout why">
+  <span class="callout-title">El módulo local, aplazado por última vez — y con final feliz</span>
+  <p>El roadmap prometía «módulo local» en el proyecto 01, y el proyecto 01 se cierra sin
+  él. El motivo es el mismo criterio de la lección 06 con el DDD: <strong>una estructura
+  antes de su motivo es una manía de estilo</strong>. <code>for_each</code> ya eliminó la
+  duplicación <em>dentro</em> del proyecto; un módulo se gana su interfaz cuando el patrón
+  cruza <em>entre</em> proyectos — y eso ocurre exactamente en el 02, que necesita otra vez
+  «una Lambda con su rol, sus logs y su llave». Ahí, extraer el módulo será resolver un
+  dolor que estarás sintiendo, no obedecer un roadmap. Fecha fijada, como con el DDD: si el
+  proyecto 02 no lo justifica, se tacha del roadmap y se dice por qué.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3</p>
+  <p class="quiz-q">Seis meses después decides que la clave <code>"get-link"</code> del mapa
+  debería llamarse <code>"redirect"</code>. Cambias la clave y nada más. ¿Qué propone
+  <code>terraform plan</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="La configuración resultante es equivalente, pero Terraform no compara configuraciones: compara direcciones, y fn[&quot;redirect&quot;] no consta en el state. La clave del mapa es parte de la identidad.">Nada — los recursos que resultan del mapa son los mismos</button></li>
+    <li><button data-correct="true" data-why="Exacto: la clave vive dentro de la dirección de las nueve piezas de esa función, así que renombrarla es otra mudanza — moved de fn[&quot;get-link&quot;] a fn[&quot;redirect&quot;] — o una demolición. Por eso las claves se eligen para no tocarlas.">Destruir todo lo de <code>get-link</code> y crearlo como <code>redirect</code></button></li>
+    <li><button data-correct="false" data-why="Ningún error: el plan es perfectamente legal, igual que en la quiz de la lección 09. Legal y desastroso a la vez — esa combinación es exactamente lo que los bloques moved existen para desarmar.">Un error, porque la función desplegada se llama <code>get-link</code></button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3</p>
+  <p class="quiz-q">Este refactor tenía una alternativa: <code>terraform state mv</code>, dos
+  comandos y listo. ¿Por qué el curso eligió los bloques <code>moved</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="No lo está — a diferencia del lock con DynamoDB, state mv sigue siendo la herramienta correcta para lo que moved no expresa (mover recursos entre states distintos, por ejemplo). Lo viejo aquí no es el comando: es usarlo para refactors ordinarios.">Porque <code>state mv</code> está deprecado desde Terraform 1.1</button></li>
+    <li><button data-correct="true" data-why="Eso es: la mudanza declarada es código — viaja en el commit, se revisa en la PR, la ejecuta igual cualquiera que aplique después, y el plan la enseña antes de hacerla. El comando edita el state por fuera, sin revisión ni ensayo. Mismo argumento por el que Terraform le gana a la consola.">Porque la mudanza queda en el código: revisable, repetible y ensayada por el plan</button></li>
+    <li><button data-correct="false" data-why="Funciona perfectamente con for_each — acepta direcciones con clave entre comillas igual que moved. La diferencia no es de capacidad para este caso, sino de dónde queda registrada la operación y quién puede revisarla antes.">Porque <code>state mv</code> no sabe escribir direcciones con clave de <code>for_each</code></button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3</p>
+  <p class="quiz-q">Proyecto 02, avance: tres colas creadas con <code>count = 3</code> sobre
+  una lista, y borras el <strong>primer</strong> elemento. ¿Qué propone el plan?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="Eso haría for_each con un mapa, porque la identidad es la clave y las demás no se ven afectadas. Con count la identidad es la posición: [0], [1], [2] — y acabas de cambiar qué hay en cada posición.">Destruir la cola <code>[0]</code> y dejar las otras dos en paz</button></li>
+    <li><button data-correct="true" data-why="Exacto: con count la dirección es el índice. Al borrar el primero, todo se corre un puesto — la [0] pasa a describir lo que era la [1], la [1] lo que era la [2], y la [2] sobra. Terraform propone modificar (o recrear) las supervivientes y destruir la última. Identidad posicional: el precio de count.">Modificar en cascada <code>[0]</code> y <code>[1]</code>, y destruir <code>[2]</code></button></li>
+    <li><button data-correct="false" data-why="El plan siempre tiene una propuesta — legal, como siempre, aunque sorprendente. No hay error: hay una cascada de corrimientos, porque con count la identidad de cada instancia es su posición en la lista, no su contenido.">Un error, porque los índices dejarían de ser consecutivos</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Lo que viene</h3>
+  <p><strong>Proyecto 02 — el pipeline asíncrono.</strong> Subes un CSV a un bucket y te
+  llega un email con el resultado: S3 avisa a EventBridge, EventBridge encola en SQS, una
+  Lambda procesa con su cola de los muertos al lado, SNS remata. Terraform nuevo de verdad:
+  dependencias implícitas contra <code>depends_on</code>, <code>count</code> contra
+  <code>for_each</code> (la quiz 3 ya te dejó el aviso), data sources — y el módulo local,
+  extraído en el momento en que duplicar «una Lambda con su rol» empiece a doler de nuevo.</p>
+  <p class="small">Pendientes que arrastramos: el <strong>post-mortem del state</strong> de
+  la lección 03, el <strong>MFA del usuario <code>terraform</code></strong>, CI para los
+  tests (proyecto 07), y durable execution (proyecto 03).</p>
+  <div class="nav-links">
+    <a href="./0009-la-segunda-funcion.html">← Lección 09</a>
+    <a href="../reference/terraform-refactor.html">Referencia: el state y el refactor</a>
+    <a href="../reference/terraform-cli.html">Referencia: Terraform CLI</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+    <a href="../ROADMAP.md">Roadmap</a>
+  </div>
+  <div class="ask">
+    <b>Pégame la salida.</b> Tres cosas: tu clasificación negocio/accidente del paso 0 (antes
+    de abrir el desplegable — sé honesto); el trozo del plan con una mudanza y un
+    <code>~ update</code>, contándome quién es cada uno; y la línea final del apply. Y la
+    pregunta para pensar, sin desplegarla: mañana producto pide una tercera función,
+    <code>GET /stats/{code}</code>, que lee de la tabla y devuelve JSON en vez de 301 —
+    ¿cuántos ficheros tocas, qué entra en el mapa, y qué propone el plan? Hay una decisión
+    del mapa de hoy que esa función pondría en apuros. Encuéntrala.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
