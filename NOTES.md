@@ -442,3 +442,20 @@ clase con dos puertos), y el fix del paso 0 lo encontró y comiteó solo. Tres c
 - Pendientes que la lección lista en su cierre y no hay que dejar caducar: post-mortem del
   state (03), MFA del usuario terraform, `GET /stats/{code}` (10), y sus dos divergencias
   del 01 por defender (302 vs 301; `CodeCollisionError` → ¿400 o 500?).
+
+### Preguntas suyas tras publicarse la 11 (2026-08-30) — antes de hacer la lección
+
+- **Retó el diseño**: «¿EventBridge es obligatorio o S3 puede ir directo a SQS y añadir el
+  bus cuando haga falta?» Se le concedió lo legítimo (no es obligatorio; con un consumidor,
+  directo es defendible) y la ficha ganó un callout con el intercambio honesto — criterio:
+  «si los consumidores son y serán uno, directo; si son "hoy uno, mañana quién sabe", bus»
+  — incluido el coste real de migrar después. No venderle el bus como necesidad técnica.
+- **Preguntó la semántica de entrega con N escuchantes** (¿se reintenta por los ocho o
+  hasta que uno lo tenga?) — exactamente la pregunta correcta; señal muy buena. Respuesta
+  ampliada en la ficha: entrega por pareja regla×target, copias independientes, reintentos
+  independientes (24 h / 185 máx., por target), pérdida por target, y la distinción de las
+  dos DLQ (la del target de EventBridge ≠ la redrive de SQS) que prepara la lección 12.
+- Pidió explícitamente que el detalle fuera **a la referencia, no a la lección** — el marco
+  de LR-0011 («material duro a la ficha») lo tiene interiorizado él ya.
+- La ficha ganó además la familia en detalle (custom/partner explicados con caso de uso,
+  tabla de parientes: Scheduler, Pipes, API destinations, Archive/Replay, Schema registry).

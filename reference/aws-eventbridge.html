@@ -91,12 +91,68 @@ pero se contratan (y facturan) aparte.</p>
   </tbody>
 </table>
 </div>
-<p>Los parientes: <strong>Scheduler</strong> (crons gestionados, sustituye a las viejas
-reglas de <code>schedule_expression</code>), <strong>Pipes</strong> (conexión punto a punto
-con filtro y transformación entre un origen y un destino, sin bus), <strong>API
-destinations</strong> (targets HTTPS externos con autenticación gestionada), y
-<strong>Archive/Replay</strong> (grabar eventos y reproducirlos). Los verás en la tabla de
-costes; ninguno hace falta para el proyecto 02.</p>
+<h3>Las tres clases de evento, con más detalle</h3>
+<p><strong>Eventos de servicios AWS</strong> — los del proyecto 02. Los publican los
+propios servicios (S3, EC2, CloudTrail, más de 250) al bus por defecto, automáticamente y
+gratis. Tú no escribes ni una línea del lado emisor: solo reglas.</p>
+<p><strong>Eventos custom</strong> — los tuyos. Tu código llama a
+<code>PutEvents</code> con el JSON que quieras: tú eliges <code>source</code>
+(p. ej. <code>acortador.links</code>), <code>detail-type</code> («link creado») y
+<code>detail</code>. Es como conviertes <em>tu</em> aplicación en emisora: la Lambda del
+acortador podría publicar «link creado» y que analítica, caché y auditoría suscriban cada
+una su regla sin que el acortador sepa que existen. Se suelen publicar a un bus custom
+(para separar tu dominio del ruido de AWS) y cuestan 1,00 USD por millón — a tu escala,
+céntimos.</p>
+<p><strong>Eventos partner</strong> — los de un SaaS asociado. Stripe, Datadog, GitHub,
+Auth0… crean una <em>partner event source</em> en su lado, tú la asocias a un bus partner
+en tu cuenta, y sus eventos («pago recibido», «alerta disparada») te llegan como los de
+AWS. Lo que sustituyen: el endpoint HTTPS público que tendrías que alojar, autenticar y
+vigilar para recibir sus webhooks. 1,00 USD por millón.</p>
+
+<h3>Los parientes con marca compartida</h3>
+<p>Comparten el nombre EventBridge pero son productos aparte, con su propio recurso
+Terraform y su propia línea en la factura. Conocerlos evita comprar el que no toca:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Pariente</th><th>Qué es</th><th>Cuándo lo querrías</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Scheduler</strong></td>
+      <td>Crons gestionados: dispara un target a una hora, cada N minutos, o una sola vez —
+      con zona horaria y ventanas flexibles. Es el sustituto moderno de las reglas con
+      <code>schedule_expression</code>.</td>
+      <td>«Cada noche a las 03:00, lanza la Lambda de limpieza.» Sin servidor que mantenga
+      el cron.</td>
+      <td>0 hasta 14 M invocaciones/mes; luego 1,00 USD/M</td></tr>
+    <tr><td><strong>Pipes</strong></td>
+      <td>Tubería punto a punto: <em>un</em> origen (SQS, Kinesis, un stream de DynamoDB…)
+      → filtro opcional → enriquecimiento opcional (una Lambda que completa el dato) →
+      <em>un</em> destino. Sin bus, sin fan-out.</td>
+      <td>Conectar dos piezas concretas con filtro/transformación sin escribir la Lambda
+      pegamento que solo mueve datos de A a B.</td>
+      <td>0,40 USD/M peticiones</td></tr>
+    <tr><td><strong>API destinations</strong></td>
+      <td>Targets HTTPS <em>fuera</em> de AWS, con la autenticación (API key, OAuth, Basic)
+      guardada y gestionada, y límite de ritmo por destino.</td>
+      <td>«Cuando pase X, llama al webhook de Slack / a la API de mi ERP» — sin exponer
+      credenciales en tu código.</td>
+      <td>0,20 USD/M invocaciones</td></tr>
+    <tr><td><strong>Archive / Replay</strong></td>
+      <td>Grabadora del bus: archiva los eventos que casen un patrón y luego los reproduce
+      contra tus reglas, en bloque, para un rango de tiempo.</td>
+      <td>Desplegaste un consumidor roto el martes; el jueves lo arreglas y reprocesas lo
+      del martes. (Grueso: reproduce el rango entero, no «el evento 4713».)</td>
+      <td>0,10 USD/GB procesado + 0,023 USD/GB-mes; el replay se cobra como eventos custom</td></tr>
+    <tr><td><strong>Schema registry</strong></td>
+      <td>Catálogo de las formas de los eventos, con descubridor automático opcional que
+      infiere esquemas del tráfico real.</td>
+      <td>Equipos grandes documentando contratos de eventos. Tu espía de la lección 11 es
+      la versión artesanal y gratuita.</td>
+      <td>Registro gratis; discovery 0 hasta 5 M/mes, luego 0,10 USD/M</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Ninguno hace falta para el proyecto 02. Precios verificados el 2026-08-30,
+<code>us-east-1</code>.</p>
 
 <h2>Cómo funciona por dentro</h2>
 <p>El modelo mental mínimo para no cometer errores:</p>
@@ -124,6 +180,49 @@ costes; ninguno hace falta para el proyecto 02.</p>
   <li><strong>No es un buffer.</strong> El bus no retiene: entrega o descarta. Si el
   consumidor necesita absorber picos o procesar a su ritmo, el target debe ser una cola
   (SQS) y que el consumidor lea de ella — exactamente el diseño del proyecto 02.</li>
+</ul>
+
+<h3>La entrega es por pareja regla×target, no por evento</h3>
+<p>La pregunta que todo el mundo se hace tarde o temprano: si un evento tiene ocho
+escuchantes, ¿se entrega «hasta que alguno lo coja»? <strong>No. No hay competición, no hay
+primero, no hay «ya lo tiene alguien».</strong> Cada regla que casa entrega a cada uno de
+sus targets una copia propia del evento, y cada una de esas entregas es una invocación
+independiente con su propio contador de reintentos y su propia DLQ. El caso concreto —
+un evento, tres colas (cada una procesará algo distinto):</p>
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">tres entregas independientes, no una carrera</span></div>
+<pre><code>                      ┌─▶ cola A   ✓ entregado al primer intento
+  evento ──▶ regla ───┼─▶ cola B   ✓ entregado al primer intento
+                      └─▶ cola C   ✗ falla → reintenta con backoff
+                                     (hasta 24 h / 185 intentos)
+                                     ├─ acaba entrando → C lo recibe tarde, A y B ni se enteran
+                                     └─ se agota → a la DLQ del target C
+                                        (y sin DLQ: perdido SOLO para C)</code></pre>
+</div>
+<ul>
+  <li><strong>Que A y B lo reciban no descuenta nada a C.</strong> El éxito o fracaso de
+  una entrega no afecta a las demás: los reintentos de C corren aunque A y B terminaran en
+  milisegundos. La prueba de que es así está en la propia API: <code>RetryPolicy</code> y
+  <code>DeadLetterConfig</code> son atributos <a
+  href="https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_Target.html">del
+  <em>target</em></a>, no de la regla ni del evento.</li>
+  <li><strong>Los números</strong>: por defecto hasta <strong>24 horas</strong> de edad
+  máxima del evento y hasta <strong>185 intentos</strong> con backoff exponencial — lo que
+  se agote primero. Ambos se bajan por target (<code>retry_policy</code> en el
+  <code>aws_cloudwatch_event_target</code>); subirlos no se puede, son los máximos.</li>
+  <li><strong>Lo que se pierde, se pierde por target.</strong> Si C agota reintentos sin
+  DLQ, el evento desaparece <em>para C</em> — A y B lo procesaron y nadie te avisa de la
+  asimetría salvo la métrica <code>FailedInvocations</code> de CloudWatch.</li>
+  <li><strong>Con SQS de target, fallar es raro</strong> — la cola es un servicio regional
+  altamente disponible, y la causa realista de fallo es la política de recurso ausente (que
+  no se arregla reintentando: va directa a la DLQ, sin intentos). Los reintentos largos
+  existen sobre todo para targets que se atragantan: Lambdas con throttling, API
+  destinations caídas.</li>
+  <li><strong>Ojo: hay dos DLQ distintas y no se tocan.</strong> La DLQ del
+  <em>target</em> (de EventBridge) recoge eventos que <strong>no consiguieron entrar</strong>
+  en la cola. La DLQ de la <em>cola</em> (la <code>redrive_policy</code> de SQS, lección 12)
+  recoge mensajes que entraron pero que el consumidor <strong>no consiguió procesar</strong>.
+  Frontera distinta, fracaso distinto, cola distinta.</li>
 </ul>
 
 <h2>Cuánto cuesta</h2>
@@ -203,6 +302,34 @@ quotas</a>, consultada el 2026-08-30. Valores de <code>us-east-1</code>.</p>
       <td>API Gateway / invocación directa</td><td>El bus es asíncrono: nadie espera la respuesta de un evento</td></tr>
   </tbody>
 </table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La pregunta legítima: ¿y si S3 mandara directo a la cola?</span>
+  <p>Puede. La notificación clásica de S3 entrega directamente a SQS, SNS o Lambda, sin bus
+  por medio — EventBridge <strong>no es obligatorio</strong>, y con un solo consumidor el
+  montaje directo es perfectamente defendible: una pieza menos. Lo que se compra al meter
+  el bus, puesto en limpio:</p>
+  <ul>
+    <li><strong>Consumidores futuros sin tocar el bucket.</strong> La configuración clásica
+    es única por bucket: el segundo consumidor la edita (y en Terraform, desde otro state,
+    la <em>machaca</em>). Con el bus, un consumidor nuevo es una regla nueva en su propio
+    repo, y el bucket no se vuelve a tocar jamás.</li>
+    <li><strong>La migración posterior no es gratis.</strong> «Empiezo directo y añado el
+    bus cuando haga falta» implica, ese día, tocar la configuración del bucket, mover el
+    filtrado a reglas y re-verificar el consumidor existente — bajo presión, porque el
+    motivo de la migración suele ser que el segundo consumidor ya está esperando. Añadirlo
+    de entrada costó aquí 0,00 USD y unas quince líneas.</li>
+    <li><strong>Filtros de contenido.</strong> La clásica filtra por prefijo y sufijo de la
+    clave; el bus filtra además por cualquier campo del evento
+    (<code>reason</code>, tamaño, <code>anything-but</code>, rangos numéricos…).</li>
+    <li><strong>La misma señal, más targets.</strong> El espía de la lección 11 convive con
+    la cola de la 12 sin que ninguno sepa del otro. Con la clásica, cada añadido es otra
+    edición del recurso único.</li>
+  </ul>
+  <p>El criterio de decisión, en una frase: <strong>si el número de consumidores es y será
+  uno, directo; si es «hoy uno, mañana quién sabe», bus.</strong> Un pipeline de eventos es
+  casi por definición lo segundo — pero es un juicio, no un dogma.</p>
 </div>
 
 <h2>En Terraform</h2>
