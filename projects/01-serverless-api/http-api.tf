@@ -12,52 +12,39 @@ resource "aws_apigatewayv2_stage" "default" {
 }
 
 # The plugin: The gate knows how to invoke the function.
-resource "aws_apigatewayv2_integration" "create_link" {
+
+resource "aws_apigatewayv2_integration" "fn" {
+  for_each = local.functions
+
   api_id           = aws_apigatewayv2_api.shortener.id
   integration_type = "AWS_PROXY"
-  integration_uri  = aws_lambda_function.create_link.invoke_arn
-
-  integration_method     = "POST"
-  payload_format_version = "2.0"
-}
-
-resource "aws_apigatewayv2_integration" "get_link" {
-  api_id           = aws_apigatewayv2_api.shortener.id
-  integration_type = "AWS_PROXY"
-  integration_uri  = aws_lambda_function.get_link.arn
+  integration_uri  = aws_lambda_function.fn[each.key].invoke_arn
 
   integration_method     = "POST"
   payload_format_version = "2.0"
 }
 
 # The route: Which petitions can be made to the gate?
-resource "aws_apigatewayv2_route" "create_link" {
-  api_id    = aws_apigatewayv2_api.shortener.id
-  route_key = "POST /links"
-  target    = "integrations/${aws_apigatewayv2_integration.create_link.id}"
-}
 
-resource "aws_apigatewayv2_route" "get_link" {
+resource "aws_apigatewayv2_route" "fn" {
+  for_each = local.functions
+
   api_id    = aws_apigatewayv2_api.shortener.id
-  route_key = "GET /{code}"
-  target    = "integrations/${aws_apigatewayv2_integration.get_link.id}"
+  route_key = each.value.route_key
+  target    = "integrations/${aws_apigatewayv2_integration.fn[each.key].id}"
 }
 
 
 # The permission: The function can be invoked by the gate.
-resource "aws_lambda_permission" "http_api_create_link" {
+
+resource "aws_lambda_permission" "fn" {
+  for_each = local.functions
+
   statement_id  = "AllowInvokeFromHttpApi"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.create_link.function_name
+  function_name = aws_lambda_function.fn[each.key].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.shortener.execution_arn}/*/*"
 }
 
-resource "aws_lambda_permission" "http_api_get_link" {
-  statement_id  = "AllowInvokeFromHttpApi"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.get_link.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.shortener.execution_arn}/*/*"
-}
 
