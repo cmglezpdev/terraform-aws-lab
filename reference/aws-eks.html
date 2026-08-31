@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon EKS</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon EKS</h1>
+  <p class="deck">Kubernetes gestionado. AWS te alquila un <em>control plane</em> —el API server
+  y el etcd, replicados en tres zonas— por <strong>0,10 USD la hora</strong>, y tú pones todo lo
+  demás: los nodos, la red de los pods, el balanceador, los permisos y las actualizaciones. Es el
+  único servicio de este curso que <strong>empieza a cobrar en el <code>apply</code> y no para
+  hasta el <code>destroy</code></strong>, tenga un pod o ninguno.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Cómputo / orquestación de contenedores</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (el control plane vive en 3 AZ)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost hour">por hora</span> — el más caro del curso en reposo</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><strong>No.</strong> El cluster vacío ya cuesta
+      <code>0,10 USD/h</code> ≈ <strong>73 USD/mes</strong>. Con nodos, NAT y ALB, el proyecto 06
+      ronda <code>0,21 USD/h</code></dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_eks_cluster</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/06-eks-platform">proyecto 06</a> — el acortador
+      del proyecto 01, en Kubernetes</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<div class="callout trap">
+  <span class="callout-title">Antes de nada: esto es un cronómetro, no un interruptor</span>
+  <p>Lambda, DynamoDB, SQS, EventBridge y S3 cuestan <strong>0,00 USD</strong> cuando nadie los
+  usa. ECS con <code>desired_count = 0</code> también. <strong>EKS no tiene esa marcha.</strong>
+  No existe «escalar el cluster a cero»: mientras el <code>aws_eks_cluster</code> exista, el
+  contador corre. Un cluster olvidado un mes son <strong>73 USD</strong> de control plane a los
+  que se suman nodos, NAT Gateway y ALB. Este documento está escrito asumiendo que vas a hacer
+  <code>terraform destroy</code> al terminar la sesión.</p>
+</div>
+
+<h2>Qué es</h2>
+<p>Un <strong>Kubernetes gestionado</strong>: AWS opera por ti la mitad de arriba de un cluster
+—el <strong>API server</strong>, el <strong>etcd</strong> y los controladores del plano de
+control— replicada en tres zonas de disponibilidad, parcheada y con backups; y te deja la mitad
+de abajo entera. Lo que compras no es Kubernetes (eso es software libre y podrías instalarlo en
+tres EC2): lo que compras es que <em>nadie de tu equipo tenga que operar un etcd</em>.</p>
+<p>Dicho con precisión, porque la frontera es exactamente donde se toman las decisiones caras:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Lo gestiona AWS</th><th>Sigue siendo tuyo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Control plane</strong></td>
+      <td>API server, <code>etcd</code>, scheduler, controller manager. Multi-AZ, parcheado,
+      con backup. No lo ves ni puedes entrar. <strong>Se factura por hora.</strong></td>
+      <td>Nada — salvo elegir la versión de Kubernetes y decidir cuándo actualizarla, que es
+      <a href="#extended">una decisión de dinero</a>.</td></tr>
+    <tr><td><strong>Nodos</strong></td>
+      <td>Solo si usas <a href="#automode">Auto Mode</a> o Fargate. Con managed node groups,
+      AWS te da la AMI y el botón de actualizar; el resto lo llevas tú.</td>
+      <td>Las EC2 (que <strong>pagas como EC2</strong>), su tamaño, su número, sus parches y su
+      versión de <code>kubelet</code>.</td></tr>
+    <tr><td><strong>Red de los pods</strong></td>
+      <td>Publica y parchea el add-on <code>vpc-cni</code>.</td>
+      <td>La VPC, las subredes, <a href="#cni">el espacio de IPs</a> y la decisión de
+      <em>prefix delegation</em>.</td></tr>
+    <tr><td><strong>Entrada de tráfico</strong></td>
+      <td>Nada, salvo en Auto Mode.</td>
+      <td>Instalar el <a href="#lbc">AWS Load Balancer Controller</a> y pagar el ALB o NLB que
+      cree.</td></tr>
+    <tr><td><strong>Lo que corre dentro</strong></td>
+      <td>Nada. AWS no sabe qué es un Deployment tuyo.</td>
+      <td>Todo: Deployments, Services, Ingress, RBAC, límites de recursos, observabilidad.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Alquilar la <strong>torre de control</strong> de un aeropuerto, no el aeropuerto. AWS te
+  garantiza que la torre está encendida, replicada y atendida las 24 horas. Las pistas, los
+  aviones, el combustible, el personal de tierra y los pasajeros son tuyos — y los pagas aparte.
+  La torre cobra por hora <strong>aunque no aterrice un solo avión</strong>: por eso un cluster
+  vacío cuesta lo mismo que uno lleno.</p>
+  <p><strong>Dónde se rompe:</strong> una torre de control real no te obliga a reformar el
+  aeropuerto cada catorce meses. EKS sí — la versión de Kubernetes caduca, y no actualizarla
+  <a href="#extended">multiplica la factura por seis</a>.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>El equipo ya vive en Kubernetes</h3><p>El caso mayoritario y el
+  honesto. Hay charts de Helm, operadores, <code>kubectl</code> en los dedos de todo el mundo y
+  un pipeline que despliega manifiestos. EKS es «lo mismo, sin operar el control plane».</p></div>
+  <div class="ref-card"><h3>Dependes de un operador que solo existe en k8s</h3><p>Un operador de
+  Postgres, de Kafka, de Spark, de Airflow, un Prometheus con su stack. Software que se
+  distribuye como CRDs y controladores y que <strong>no tiene equivalente en ECS</strong>. Aquí
+  el ecosistema es el producto, no Kubernetes.</p></div>
+  <div class="ref-card"><h3>Multi-tenant con aislamiento por namespace</h3><p>Veinte equipos, un
+  cluster, cuotas de recursos y RBAC por namespace. ECS no tiene namespaces ni RBAC: tendrías
+  veinte clusters y veinte juegos de IAM.</p></div>
+  <div class="ref-card"><h3>Cargas de ML y GPU con scheduling fino</h3><p><em>Taints</em>,
+  <em>tolerations</em>, <em>topology spread</em>, colas de trabajos, plugins de dispositivo para
+  NVIDIA o Neuron. El scheduler de Kubernetes sabe cosas que el de ECS no.</p></div>
+  <div class="ref-card"><h3>Tu caso: las entrevistas</h3><p>El proyecto 06 existe por esto y
+  conviene decirlo sin rodeos. EKS, IRSA, node groups y el ALB Controller son <strong>vocabulario
+  de entrevista de System Design</strong>. Montarlo una vez, con la factura delante, es distinto
+  a haberlo leído.</p></div>
+</div>
+
+<h2 id="tipos">Los tipos que existen: cuatro formas de ejecutar un pod</h2>
+<p>Esta es la sección que decide tu factura. El <code>aws_eks_cluster</code> es siempre el mismo
+y siempre cuesta lo mismo; lo que cambia —y mucho— es <strong>quién pone la máquina debajo de
+los pods</strong>. Hay cuatro respuestas, y no son excluyentes: un cluster puede tener node
+groups y Fargate profiles a la vez.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Modo</th><th>Quién pone la máquina</th><th>Qué pagas encima del control plane</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Managed node group</strong><br><code>aws_eks_node_group</code></td>
+      <td>Tú declaras un Auto Scaling Group de EC2; AWS te da la AMI optimizada, el
+      <em>bootstrap</em> y un botón de actualizar. <strong>Ves las instancias</strong> en la
+      consola de EC2.</td>
+      <td><strong>Solo las EC2</strong> y sus discos EBS. EKS no cobra nada por gestionarlas.</td>
+      <td><strong>El del proyecto 06.</strong> Cuando quieres entender qué pasa, elegir el tipo
+      de instancia y que el <code>destroy</code> se lleve todo.</td></tr>
+    <tr><td><strong>Fargate profile</strong><br><code>aws_eks_fargate_profile</code></td>
+      <td>AWS. No hay nodo: cada pod es su propia micro-VM. Un <em>profile</em> dice qué
+      namespaces y etiquetas van a Fargate.</td>
+      <td>vCPU-segundo y GB-segundo <strong>por pod</strong>, mientras vive.</td>
+      <td>Pods sueltos, aislamiento fuerte por pod, o no querer ver una EC2 jamás. <strong>Trae
+      una lista larga de cosas que no puede hacer</strong> (más abajo).</td></tr>
+    <tr><td><strong>Karpenter</strong><br>(no es un recurso <code>aws_*</code>)</td>
+      <td>Tú instalas un controlador open-source —creado por AWS, hoy en la CNCF— que mira los
+      pods que no caben y <strong>llama directamente a la API de EC2</strong> para lanzar la
+      instancia exacta que hace falta.</td>
+      <td>Las EC2 que lance. El controlador es gratis; corre en tus propios nodos.</td>
+      <td>Producción con carga variable. Elige tipo, familia y AZ por pod pendiente, consolida
+      nodos infrautilizados y arranca en decenas de segundos en vez de minutos.</td></tr>
+    <tr><td><strong>EKS Auto Mode</strong> (2024)<br><code>compute_config</code> del cluster</td>
+      <td>AWS, entero: Karpenter, los nodos (Bottlerocket, sin SSH ni SSM, <strong>vida máxima
+      21 días</strong>), la CNI, CoreDNS, el EBS CSI, el pod identity agent y el balanceo — todo
+      como capacidades integradas, no como add-ons.</td>
+      <td>Las EC2 <strong>más un <em>management fee</em> por instancia y hora</strong> (≈12&nbsp;%
+      del precio on-demand). <a href="#coste">Cifras abajo.</a></td>
+      <td>Quieres Kubernetes sin operar la plataforma. El precio es perder el control fino: ni
+      AMI propia, ni CNI propia, ni SSH, ni Windows, ni security groups por pod.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuentes: <a href="https://docs.aws.amazon.com/eks/latest/userguide/eks-compute.html">Manage
+compute resources by using nodes</a> (tabla comparativa oficial) y <a
+href="https://docs.aws.amazon.com/eks/latest/userguide/automode.html">EKS Auto Mode</a>,
+consultadas el 2026-08-30. Existe además una quinta opción —<strong>self-managed nodes</strong>,
+tus propias EC2 con el agente— que soporta todo lo anterior a cambio de mucho más mantenimiento
+manual, y una sexta —<strong>Hybrid Nodes</strong>— para máquinas de tu propio datacenter, a
+0,020 USD/vCPU-hora en el primer tramo.</p>
+
+<h3>Lo que Fargate en EKS <em>no</em> puede hacer</h3>
+<p>La lista importa porque casi todo el mundo la descubre a mitad del despliegue. Fargate en EKS
+<strong>no</strong> soporta:</p>
+<ul>
+  <li><strong>DaemonSets.</strong> No hay nodo donde poner uno por nodo. Tu agente de logs o de
+  métricas tiene que convertirse en <em>sidecar</em> de cada pod.</li>
+  <li><strong>Contenedores privilegiados</strong>, <code>HostPort</code> ni
+  <code>HostNetwork</code>.</li>
+  <li><strong>GPU</strong>, <strong>procesadores Arm</strong> ni Bottlerocket. Solo Linux x86.</li>
+  <li><strong>Volúmenes EBS.</strong> EFS sí, y con <em>static provisioning</em> únicamente.</li>
+  <li><strong>Fargate Spot.</strong> Existe para ECS; <a
+  href="https://docs.aws.amazon.com/eks/latest/userguide/fargate.html">«Amazon EKS doesn't
+  support Fargate Spot»</a>. Ver la <a href="./aws-ecs.html">ficha de ECS</a>, donde sí es una
+  opción real.</li>
+  <li><strong>IMDS.</strong> Y por tanto <strong>tampoco EKS Pod Identity</strong>: los pods de
+  Fargate solo pueden recibir credenciales por <a href="#irsa">IRSA</a>.</li>
+  <li><strong>Subredes públicas.</strong> Solo privadas — con NAT Gateway, que es otra línea con
+  cronómetro.</li>
+</ul>
+<p>Y una trampa de facturación propia: los pods de un <code>Job</code> terminado <strong>siguen
+existiendo</strong> y, en Fargate, siguen costando. Se limpian con
+<code>ttlSecondsAfterFinished</code>.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión, y qué elegir en el proyecto 06</span>
+  <p><strong>En producción:</strong> managed node groups para la base estable, Karpenter para
+  todo lo demás, Auto Mode si el equipo no tiene a nadie que quiera ser <em>platform
+  engineer</em>, Fargate solo para pods sueltos que necesiten aislamiento de VM.</p>
+  <p><strong>En el proyecto 06 —aprender barato y con cronómetro— hay dos candidatos
+  defendibles y la elección es tuya:</strong></p>
+  <ul>
+    <li><strong>Managed node group con dos <code>t4g.small</code></strong>: son
+    <code>0,0336 USD/h</code> de EC2 y <strong>ves los nodos</strong> —
+    <code>kubectl get nodes</code> devuelve dos máquinas que existen, que puedes describir en
+    la consola y cuyo <code>destroy</code> es limpio. Es lo que más enseña, y es lo que preguntan
+    en las entrevistas.</li>
+    <li><strong>Auto Mode</strong>: menos líneas de Terraform y menos piezas que entender, pero
+    te oculta justamente lo que has venido a ver, cobra un <em>fee</em> por instancia encima de
+    la EC2, y exige access entries y <code>bootstrap_self_managed_addons = false</code>.</li>
+  </ul>
+  <p>El único que descartaría sin dudar para este proyecto es <strong>Fargate</strong>: la lista
+  de arriba te obliga a IRSA (no Pod Identity), te prohíbe DaemonSets y te fuerza a subredes
+  privadas con NAT. Aprenderías más excepciones que Kubernetes.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<h3 id="versiones">El ciclo de vida de las versiones, que es lo que menos se cuenta</h3>
+<p>Kubernetes publica una versión menor <strong>cada cuatro meses de media</strong> (unas tres al
+año) y EKS sigue ese calendario. Cada versión tiene después <strong>dos ventanas</strong>:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Ventana</th><th>Duración</th><th>Qué recibes</th><th>Precio del control plane</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Standard support</strong></td><td><strong>14 meses</strong> desde que sale en EKS</td>
+      <td>Parches de seguridad del control plane, AMIs optimizadas, add-ons al día</td>
+      <td><code>0,10 USD/h</code></td></tr>
+    <tr><td><strong>Extended support</strong></td><td><strong>12 meses más</strong> (26 en total)</td>
+      <td>Lo mismo: parches del control plane, de <code>vpc-cni</code>, <code>kube-proxy</code> y
+      CoreDNS, y de las AMIs de Amazon Linux, Bottlerocket y Windows</td>
+      <td><code>0,60 USD/h</code> — <strong>seis veces más</strong></td></tr>
+    <tr><td><em>Después</em></td><td>—</td>
+      <td>AWS <strong>actualiza tu control plane sin avisar</strong>, en cualquier momento tras la
+      fecha. Los nodos <em>no</em> se actualizan solos: te quedan con <em>version skew</em>.</td>
+      <td><code>0,10 USD/h</code> de la versión nueva</td></tr>
+  </tbody>
+</table>
+</div>
+<p>A 2026-08-30, en <strong>standard support</strong> están <code>1.36</code>, <code>1.35</code> y
+<code>1.34</code>; en <strong>extended</strong>, <code>1.33</code>, <code>1.32</code> y
+<code>1.31</code>. La <code>1.36</code> salió upstream el 22 de abril de 2026, llegó a EKS el 2
+de junio de 2026, deja standard support el 2 de agosto de 2027 y extended el 2 de agosto de
+2028.</p>
+
+<div class="callout cost" id="extended">
+  <span class="callout-title">La trampa de factura más citada de EKS: extended support</span>
+  <p><strong>Extended support está activado por defecto</strong> — la <em>upgrade policy</em> de
+  todo cluster nuevo y existente vale <code>EXTENDED</code> salvo que digas lo contrario. Eso
+  significa que si tu cluster cumple 14 meses en la misma versión, <strong>nadie lo apaga: la
+  línea de EKS pasa sola de 73 a 438 USD al mes por cluster</strong> y sigue así doce meses.
+  Multiplícalo por los clusters de dev, staging y pre-producción que nadie mira.</p>
+  <p><strong>Detalle de la factura, por si te toca leerla:</strong> el total es
+  <a href="https://aws.amazon.com/blogs/containers/amazon-eks-extended-support-for-kubernetes-versions-pricing">
+  <em>«a total of $0.60 per cluster per hour»</em></a>, pero en la Price List API aparece como
+  <strong>dos conceptos</strong> que se suman: <code>USE1-AmazonEKS-Hours:perCluster</code> a
+  0,10 USD/h y <code>USE1-AmazonEKS-Hours:extendedSupport</code> a 0,50 USD/h. Si buscas «0,60»
+  en el desglose no lo vas a encontrar.</p>
+  <p><strong>La lectura de ingeniería:</strong> «no actualizamos, que da miedo» dejó de ser una
+  decisión técnica. AWS le ha puesto precio, lo ha puesto alto y lo ha hecho automático. Puedes
+  desactivar extended support (<code>upgrade_policy { support_type = "STANDARD" }</code>), pero
+  entonces el auto-upgrade llega al final del mes 14 en lugar del 26. <strong>No existe la opción
+  de quedarse quieto.</strong></p>
+</div>
+
+<h3 id="identidad">Identidad dentro del cluster: las mismas tres preguntas, otro principal</h3>
+<p>Aquí no hay material nuevo. Es <a href="./aws-iam.html">la pregunta de tres partes</a> de
+siempre, con la analogía del uniforme intacta:</p>
+<ol>
+  <li><strong>¿Con qué identidad actúa?</strong> → un rol, siempre.</li>
+  <li><strong>¿Quién puede ponerse ese uniforme?</strong> → la política de confianza. Para Lambda
+  era <code>lambda.amazonaws.com</code>; para un task de ECS,
+  <code>ecs-tasks.amazonaws.com</code>. Aquí el que se lo pone no es un servicio de AWS sino
+  <strong>un <em>service account</em> de Kubernetes</strong>, y hay dos maneras de expresarlo.</li>
+  <li><strong>¿Sobre qué actúa?</strong> → la política de identidad. Idéntica a siempre.</li>
+</ol>
+<p>Lo único genuinamente nuevo de EKS es el paso 2, porque un service account no es un principal
+de IAM. Las dos respuestas:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th><strong>IRSA</strong> (2019)</th><th><strong>EKS Pod Identity</strong> (nov. 2023)</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Cómo se expresa la confianza</strong></td>
+      <td>El cluster publica un <strong>emisor OIDC</strong>; registras ese emisor como
+      <em>identity provider</em> en IAM; el rol confía en <code>sts:AssumeRoleWithWebIdentity</code>
+      desde ese emisor y ese <code>sub</code> concreto
+      (<code>system:serviceaccount:&lt;ns&gt;:&lt;sa&gt;</code>).</td>
+      <td>El rol confía en el principal de servicio
+      <strong><code>pods.eks.amazonaws.com</code></strong> con <code>sts:AssumeRole</code> y
+      <code>sts:TagSession</code>. Y ya.</td></tr>
+    <tr><td><strong>Dónde se declara el vínculo</strong></td>
+      <td><strong>Dentro del cluster</strong>: una anotación
+      <code>eks.amazonaws.com/role-arn</code> en el service account. Necesitas el provider
+      <code>kubernetes</code> o <code>kubectl</code>.</td>
+      <td><strong>Fuera del cluster</strong>: un recurso
+      <code>aws_eks_pod_identity_association</code>. Nada que tocar en Kubernetes.</td></tr>
+    <tr><td><strong>Reusar el rol en otro cluster</strong></td>
+      <td>Hay que <strong>editar la trust policy</strong> y añadir el emisor OIDC del cluster
+      nuevo.</td>
+      <td>Nada. Un principal, todos los clusters.</td></tr>
+    <tr><td><strong>Techos que te encuentras</strong></td>
+      <td>Un OIDC provider <strong>por cluster</strong> y IAM permite 100 por cuenta. La trust
+      policy son 2 048 caracteres ≈ <strong>4 relaciones</strong> (8 con ampliación). Tu código
+      llama a STS y puede recibir <em>throttling</em>.</td>
+      <td>5 000 asociaciones por cluster. Sin OIDC providers, sin trust policies que crezcan, sin
+      cuota de STS: la asunción la hace el servicio EKS Auth y el agente reparte.</td></tr>
+    <tr><td><strong>Dónde funciona</strong></td>
+      <td>EKS, EKS Anywhere, OpenShift on AWS y Kubernetes autogestionado en EC2. Y
+      <strong>Fargate</strong>.</td>
+      <td><strong>Solo EKS, y solo en nodos EC2 Linux.</strong> No en Fargate, no en Windows, no
+      en Outposts. Necesita el add-on <code>eks-pod-identity-agent</code> (un DaemonSet).</td></tr>
+    <tr><td><strong>Extra que solo tiene uno</strong></td>
+      <td>—</td>
+      <td><strong>Session tags</strong> con cluster, namespace y service account: permite un solo
+      rol con permisos efectivos distintos según etiquetas (ABAC).</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">Lo que dice AWS, y lo que dice internet</span>
+  <p>La documentación es explícita: <a
+  href="https://docs.aws.amazon.com/eks/latest/userguide/service-accounts.html"><em>«AWS
+  recommends using EKS Pod Identities to grant access to AWS resources to your pods whenever
+  possible»</em></a>. <strong>Y sin embargo la mayoría del material que vas a encontrar —tutoriales,
+  cursos, respuestas de StackOverflow, plantillas de Terraform copiadas— sigue enseñando solo
+  IRSA</strong>, porque IRSA lleva desde 2019 y Pod Identity desde finales de 2023. Si un ejemplo
+  te hace crear un <code>aws_iam_openid_connect_provider</code>, no está mal: está contando lo
+  viejo.</p>
+  <p><strong>Cuándo IRSA sigue siendo la respuesta correcta</strong>, que también hay que decirlo:
+  pods en Fargate, cargas que tienen que correr igual en EKS y fuera de EKS, y componentes de
+  terceros cuyos charts todavía solo documentan la anotación. El <a href="#lbc">AWS Load Balancer
+  Controller</a> es el caso típico.</p>
+</div>
+
+<h3 id="acceso">Acceso al cluster: quién puede hacer <code>kubectl</code></h3>
+<p>Un cluster de EKS tiene <strong>dos capas de permisos que se atraviesan en orden</strong> y que
+todo el mundo confunde:</p>
+<ol>
+  <li><strong>IAM</strong> decide si puedes llamar a la API de <em>EKS</em>
+  (<code>eks:DescribeCluster</code>, <code>eks:CreateNodegroup</code>…). Esto es el plano de
+  control de AWS.</li>
+  <li><strong>Kubernetes RBAC</strong> decide si puedes hacer <code>kubectl get pods</code>. Esto
+  vive dentro del cluster.</li>
+</ol>
+<p>El puente entre las dos —«este ARN de IAM equivale a este usuario de Kubernetes»— ha cambiado
+de sitio, y es de manual el caso de <em>internet cuenta lo viejo</em>:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>authentication_mode</code></th><th>Qué significa</th><th>Estado en 2026</th></tr></thead>
+  <tbody>
+    <tr><td><code>CONFIG_MAP</code></td>
+      <td>El puente es el <strong>ConfigMap <code>aws-auth</code></strong> del namespace
+      <code>kube-system</code>: un YAML dentro del cluster que mapea ARNs a grupos RBAC.</td>
+      <td><strong>El modo original y el que hay que dejar de usar.</strong> Editarlo mal te deja
+      fuera de tu propio cluster, no se audita en CloudTrail, y para tocarlo necesitas ya tener
+      acceso al cluster (el clásico problema del huevo y la gallina).</td></tr>
+    <tr><td><code>API_AND_CONFIG_MAP</code></td>
+      <td>Valen los dos a la vez, con prioridad para las access entries. Cada método guarda sus
+      entradas por separado.</td>
+      <td>El modo de <strong>migración</strong>. Es lo que pone <code>eksctl</code> por defecto.</td></tr>
+    <tr><td><code>API</code></td>
+      <td><strong>Access entries</strong>: el mapeo es un recurso de la API de AWS
+      (<code>aws_eks_access_entry</code>), con <em>access policies</em> gestionadas
+      (<code>AmazonEKSClusterAdminPolicy</code>, <code>AmazonEKSViewPolicy</code>…) y un
+      <em>access scope</em> que las limita a un namespace.</td>
+      <td><strong>Lo recomendado, y obligatorio con Auto Mode.</strong> Se declara en Terraform,
+      se audita en CloudTrail y no requiere tocar nada dentro del cluster.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Dos puertas de un solo sentido</span>
+  <p>La página de <a href="https://docs.aws.amazon.com/eks/latest/userguide/grant-k8s-access.html">Grant
+  IAM users and roles access to Kubernetes APIs</a> lo marca como <em>Important</em>, y son
+  decisiones que no se deshacen:</p>
+  <ul>
+    <li><strong>Una vez activas access entries, no se pueden desactivar.</strong></li>
+    <li><strong>Si no activas el ConfigMap al crear el cluster, no se puede activar
+    después.</strong> Todos los clusters anteriores a las access entries lo tienen activado.</li>
+  </ul>
+  <p>Traducción para Terraform: piensa el <code>authentication_mode</code> antes del primer
+  <code>apply</code>, porque no es un campo que puedas ir cambiando en los dos sentidos. Para un
+  cluster nuevo en 2026 la respuesta es <code>"API"</code>, salvo que tengas que convivir con
+  herramientas viejas.</p>
+</div>
+
+<h3 id="cni">Networking: cada pod es una IP de tu VPC</h3>
+<p>El add-on <strong><code>vpc-cni</code></strong> hace algo que suena inocente y tiene
+consecuencias enormes: <strong>cada pod recibe una IP secundaria real de tu subred</strong>, no
+una IP de una red superpuesta. Lo bueno: los security groups y las tablas de rutas funcionan
+igual que con cualquier otra cosa de la VPC, y no hay encapsulación que depurar. Lo malo:</p>
+<ul>
+  <li><strong>Los pods compiten por IPs con todo lo demás de la subred</strong>, y el número de
+  IPs por nodo lo fija el <em>tipo de instancia</em>: cada instancia soporta N interfaces de red
+  con M IPv4 cada una. La fórmula es
+  <code>max_pods = interfaces × (IPs_por_interfaz − 1) + 2</code>.</li>
+  <li><strong>El agotamiento de IPs es el pain point clásico de EKS</strong>, y no avisa: los
+  pods se quedan en <code>Pending</code> con un evento de la CNI y la subred parece
+  «medio vacía» en la consola.</li>
+</ul>
+<p>Con el nodo del proyecto 06, la cuenta sale incómoda:</p>
+<div class="code">
+  <div class="code-label"><span>cuenta</span><span class="tag">t4g.small · 3 ENIs × 4 IPv4</span></div>
+<pre><code>max_pods = 3 x (4 - 1) + 2 = 11 pods por nodo
+
+  de esos 11, se te van en kube-system:
+    aws-node   (DaemonSet de la CNI)    1
+    kube-proxy (DaemonSet)              1
+    coredns    (2 replicas, repartidas) 1
+                                       ---
+  te quedan ~8 pods tuyos por nodo. Con 2 nodos: ~16.</code></pre>
+</div>
+<p class="small">Límites de ENIs e IPs por instancia según <a
+href="https://github.com/aws/amazon-vpc-resource-controller-k8s/blob/master/pkg/aws/vpc/limits.go"><code>limits.go</code>
+del <code>amazon-vpc-resource-controller-k8s</code></a> — la tabla que usa el propio EKS —,
+consultada el 2026-08-30.</p>
+<p><strong>La mitigación se llama <em>prefix delegation</em></strong>
+(<code>ENABLE_PREFIX_DELEGATION=true</code> en la configuración de la CNI): en vez de asignar IPs
+sueltas, se asignan <strong>prefijos <code>/28</code></strong> —16 direcciones de golpe— a cada
+interfaz. Sube muchísimo la densidad de pods por nodo y, de paso, reduce las llamadas a la API de
+EC2, que es lo que ralentiza el arranque de pods en clusters grandes. El tope por defecto de pods
+por nodo sigue siendo <strong>110</strong> aunque cabrían más; se puede cambiar.</p>
+<p class="small"><strong>Dos avisos de la documentación</strong>: si el node group tiene varios
+tipos de instancia, se aplica <em>el menor</em> de sus máximos a todos los nodos del cluster; y
+una vez activados los prefijos <strong>no puedes bajar la versión del add-on por debajo de
+<code>1.9.0</code></strong> sin eliminar todos los nodos de todos los node groups. La transición
+recomendada es crear node groups nuevos, no hacer <em>rolling replacement</em>. Fuente: <a
+href="https://docs.aws.amazon.com/eks/latest/userguide/cni-increase-ip-addresses.html">Assign more
+IP addresses to Amazon EKS nodes with prefixes</a>.</p>
+
+<h3 id="lbc">Entrada de tráfico: el AWS Load Balancer Controller</h3>
+<p>Kubernetes tiene objetos abstractos para «expón esto» —<code>Ingress</code>,
+<code>Service type: LoadBalancer</code>— pero <strong>no trae quien los convierta en un
+balanceador de AWS</strong>. Eso lo hace un controlador que <strong>tú instalas</strong> (chart
+de Helm o manifiestos) y que se pasa la vida mirando la API de Kubernetes y llamando a la de
+ELB:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Objeto de Kubernetes</th><th>Lo que crea el controlador</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td><code>Ingress</code></td><td>Un <strong><a href="./aws-elb.html">ALB</a></strong></td>
+      <td>Configurado con anotaciones (<code>alb.ingress.kubernetes.io/...</code>): esquema,
+      certificado, health checks, reglas.</td></tr>
+    <tr><td><code>Service</code> de tipo <code>LoadBalancer</code></td><td>Un <strong>NLB</strong></td>
+      <td>Desde la versión 2.5 del controlador es el comportamiento por defecto, vía un
+      <em>mutating webhook</em> que pone
+      <code>spec.loadBalancerClass: service.k8s.aws/nlb</code>.</td></tr>
+    <tr><td><code>Gateway</code> (Gateway API)</td><td>Un <strong>ALB</strong></td>
+      <td>Desde la versión <strong>2.14.0</strong>. La Gateway API estandariza en el propio
+      objeto lo que en <code>Ingress</code> eran anotaciones propietarias.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Si no lo instalas, no se rompe: sale peor</span>
+  <p>Kubernetes lleva un <em>legacy cloud provider</em> para AWS que también sabe crear
+  balanceadores — y crea <strong>Classic Load Balancers</strong>, la generación anterior, que la
+  <a href="./aws-elb.html">ficha de ELB</a> desaconseja y que sigue costando
+  <code>0,025 USD/h</code>. La documentación es tajante: <a
+  href="https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html"><em>«If
+  you do not install the AWS Load Balancer Controller, Kubernetes will default to using the legacy
+  cloud provider»</em></a>. Es decir: el fallo no es un error en el <code>apply</code>, es un
+  balanceador obsoleto que aparece en tu factura sin que nadie lo pidiera.</p>
+  <p>Y el controlador necesita permisos de IAM sobre ELB, EC2 y WAF: es el ejemplo canónico de
+  <a href="#irsa">IRSA</a> en cualquier tutorial de EKS.</p>
+</div>
+
+<h3 id="addons">Add-ons: los cuatro que hacen que el cluster funcione</h3>
+<p>Un cluster de EKS recién creado no es Kubernetes vacío: AWS le instala <strong>versiones
+<em>self-managed</em></strong> de <code>vpc-cni</code>, <code>kube-proxy</code> y CoreDNS
+automáticamente. La palabra clave es <em>self-managed</em>: están, funcionan, y
+<strong>nadie los actualiza</strong>.</p>
+<p>Convertirlos en <strong>EKS add-ons gestionados</strong> (<code>aws_eks_addon</code>) cambia
+quién se ocupa: AWS valida cada versión contra tu versión de Kubernetes, publica parches de
+seguridad y te deja actualizarlos con un campo de Terraform en vez de con un chart. Los que
+importan:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>addon_name</code></th><th>Qué hace</th><th>Qué pasa si no lo gestionas</th></tr></thead>
+  <tbody>
+    <tr><td><code>vpc-cni</code></td><td>Da IPs de la VPC a los pods</td>
+      <td>Se queda en la versión que trajo el cluster. Sin él actualizado, no tienes prefix
+      delegation ni los arreglos de fugas de IPs.</td></tr>
+    <tr><td><code>coredns</code></td><td>DNS interno del cluster</td>
+      <td>Igual — y es el componente cuya versión hay que subir <em>antes</em> de actualizar
+      Kubernetes, no después.</td></tr>
+    <tr><td><code>kube-proxy</code></td><td>Reglas de red para los Services</td>
+      <td>Es el que más sufre el <em>version skew</em> con el control plane.</td></tr>
+    <tr><td><code>aws-ebs-csi-driver</code></td><td>Volúmenes EBS para pods con estado</td>
+      <td><strong>No viene instalado.</strong> Sin él, un <code>PersistentVolumeClaim</code> se
+      queda en <code>Pending</code> para siempre y nadie te dice por qué.</td></tr>
+    <tr><td><code>eks-pod-identity-agent</code></td><td>Reparte credenciales a los pods</td>
+      <td><strong>No viene instalado.</strong> Sin él, <a href="#identidad">Pod Identity</a> no
+      funciona — las asociaciones se crean y los pods siguen sin credenciales.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Con <a href="#automode">Auto Mode</a> los cinco sobran: esas capacidades corren
+en infraestructura de AWS y ni siquiera las ves en tu cuenta. Fuente: <a
+href="https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html">Amazon EKS add-ons</a>,
+consultada el 2026-08-30.</p>
+
+<h3>Novedad 2025: EKS Capabilities</h3>
+<p>Anunciado en re:Invent 2025 y ya GA. Son <strong>plataformas gestionadas que corren en
+infraestructura de AWS, fuera de tu cluster</strong>, y que aparecen dentro de él como CRDs. Tres
+a día de hoy: <strong>Argo CD</strong> (GitOps: despliegue continuo desde Git, detección de
+drift), <strong>ACK</strong> (crear recursos de AWS —S3, RDS, DynamoDB— desde manifiestos de
+Kubernetes) y <strong>KRO</strong> (componer recursos propios). Se pagan por hora de capacidad
+más por objeto: Argo CD 0,03 USD/h más 0,0015 USD por Application y hora; ACK y KRO 0,005 USD/h
+más 0,00005 USD por recurso y hora. <strong>Ninguna hace falta en el proyecto 06</strong>, pero es
+la respuesta a «¿y quién opera el Argo CD?» en una entrevista.</p>
+
+<h2 id="coste">Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en <code>us-east-1</code> contra la <a
+href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEKS/current/us-east-1/index.json">Price
+List API</a> (oferta <code>AmazonEKS</code>) y la <a href="https://aws.amazon.com/eks/pricing/">página
+de precios de EKS</a>. Los precios de EC2 salen del <a
+href="https://aws.amazon.com/ec2/pricing/on-demand/">mapa de precios on-demand</a> de la misma
+región y fecha. Cámbialos si han pasado meses.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Control plane</strong>, versión en standard support</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,10 USD/h</code> ≈ 73 USD/mes</td></tr>
+    <tr><td><strong>Control plane</strong>, versión en <a href="#extended">extended support</a></td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,60 USD/h</code> ≈ <strong>438 USD/mes</strong></td></tr>
+    <tr><td>Provisioned control plane, tramo XL / 2XL</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>1,65</code> / <code>3,40 USD/h</code></td></tr>
+    <tr><td>Provisioned control plane, tramo 4XL / 8XL</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>6,90</code> / <code>13,90 USD/h</code></td></tr>
+    <tr><td>Managed node groups — el servicio</td>
+      <td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — pagas las EC2 y sus EBS, no EKS</td></tr>
+    <tr><td><code>t4g.small</code> (2 vCPU, 2 GiB) — el nodo del proyecto 06</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,0168 USD/h</code> ≈ 12,26 USD/mes</td></tr>
+    <tr><td><code>t4g.medium</code> · <code>t3.medium</code> · <code>m5.large</code></td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,0336</code> · <code>0,0416</code> · <code>0,096 USD/h</code></td></tr>
+    <tr><td><strong>EKS Auto Mode</strong> — <em>management fee</em>, <code>t4g.medium</code></td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,00403 USD/h</code> <strong>encima</strong> de la EC2 (≈12&nbsp;%)</td></tr>
+    <tr><td>Auto Mode, <code>t3.medium</code> · <code>c6g.large</code> · <code>m5.large</code></td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,00499</code> · <code>0,00816</code> · <code>0,01152 USD/h</code></td></tr>
+    <tr><td><strong>Fargate</strong> en EKS — vCPU</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,04048 USD</code> por vCPU-hora</td></tr>
+    <tr><td><strong>Fargate</strong> en EKS — memoria</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,004445 USD</code> por GB-hora</td></tr>
+    <tr><td>Fargate — almacenamiento efímero</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,000111 USD</code> por GB-hora sobre los 20 GB incluidos</td></tr>
+    <tr><td>EKS Hybrid Nodes (primer tramo)</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,020 USD</code> por vCPU-hora; baja a 0,006 en volumen</td></tr>
+    <tr><td>EKS Capabilities — Argo CD</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,03 USD/h</code> + <code>0,0015 USD</code> por Application-hora</td></tr>
+    <tr><td>EKS Capabilities — ACK / KRO</td>
+      <td><span class="tag-cost hour">por hora</span></td><td><code>0,005 USD/h</code> + <code>0,00005 USD</code> por recurso-hora</td></tr>
+    <tr><td>Access entries, add-ons gestionados, Pod Identity, IRSA</td>
+      <td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Control plane logging (API server, audit, authenticator…)</td>
+      <td><span class="tag-cost usage">por uso</span></td><td>Sin línea propia en EKS: se paga como <a href="./aws-cloudwatch.html">ingesta de CloudWatch Logs</a>, y <code>audit</code> es <em>ruidoso</em></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout cost">
+  <span class="callout-title">La cuenta del cronómetro: qué cuesta una sesión del proyecto 06</span>
+  <p>Cluster con un managed node group de dos <code>t4g.small</code>, un NAT Gateway compartido
+  y un ALB creado por el Load Balancer Controller:</p>
+  <div class="code">
+    <div class="code-label"><span>cuenta</span><span class="tag">us-east-1, 2026-08-30</span></div>
+<pre><code>control plane EKS            1 x 0,1000  = 0,1000 USD/h
+2 x t4g.small (arm64)        2 x 0,0168  = 0,0336 USD/h
+NAT Gateway (uno, compartido)              0,0450 USD/h   <- ficha de VPC
+ALB + 2 IPv4 publicas        0,0225+0,010 = 0,0325 USD/h   <- ficha de ELB
+                                          ---------------
+                                    total ~ 0,2111 USD/h
+
+  sesion de 2 horas            ~ 0,42 USD   <- lo normal
+  un fin de semana olvidado    ~ 15,2 USD
+  un mes olvidado              ~ 154  USD
+
+  y si ademas la version esta en EXTENDED SUPPORT:
+  el control plane pasa de 0,10 a 0,60  ->  ~ 0,71 USD/h  ->  ~ 519 USD/mes</code></pre>
+  </div>
+  <p><strong>Dónde miente esta cuenta, por defecto:</strong> faltan los discos EBS de los nodos
+  (<code>disk_size</code> vale <strong>20 GiB por nodo</strong> por defecto en el provider, así que
+  son 40 GiB de gp3 — céntimos por hora, pero no cero; el precio exacto no lo he podido verificar
+  contra un endpoint primario, consúltalo en <a href="https://aws.amazon.com/ebs/pricing/">la página
+  de precios de EBS</a>), el tráfico de datos por el NAT Gateway a
+  <code>0,045 USD/GB</code> —que en un cluster que se descarga imágenes de contenedor no es
+  despreciable, ver la <a href="./aws-ecr.html#red">ficha de ECR</a>— y las LCU del ALB.</p>
+  <p><strong>Lo que hay que interiorizar:</strong> el control plane es el <strong>47&nbsp;%</strong>
+  de esa factura por hora y es el único trozo que <em>no puedes reducir</em>. Puedes apagar los
+  nodos, poner el node group a cero, borrar el ALB — el cluster seguirá cobrando 0,10 USD/h.
+  <strong>La única forma de dejar de pagar EKS es destruir el cluster.</strong> Ponte una alarma,
+  o mejor, un <a href="./aws-budgets.html">budget</a>.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/general/latest/gr/eks.html">Amazon
+EKS endpoints and quotas</a> y <a
+href="https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html">EKS Pod Identity</a>,
+consultadas el 2026-08-30. Valores por defecto de <code>us-east-1</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Pods por nodo</strong></td><td><strong>110</strong> por defecto, y antes de eso
+      lo que permitan las ENIs del tipo de instancia (<code>t4g.small</code>: <strong>11</strong>)</td>
+      <td>El tope de 110 sí; el de ENIs <strong>no</strong> — se sube con prefix delegation o con
+      una instancia mayor</td></tr>
+    <tr><td>Clusters por región</td><td>100</td><td>Sí</td></tr>
+    <tr><td>Managed node groups por cluster</td><td>30</td><td>Sí</td></tr>
+    <tr><td>Nodos por managed node group</td><td>450</td><td>Sí</td></tr>
+    <tr><td><strong>Access entries por cluster</strong></td><td>3 000</td><td><strong>No</strong></td></tr>
+    <tr><td>Asociaciones de EKS Pod Identity por cluster</td><td>5 000</td>
+      <td><strong>No</strong> — ni siquiera aparece en Service Quotas</td></tr>
+    <tr><td><strong>OIDC providers por cuenta</strong> (el techo real de IRSA)</td><td>100, límite de IAM</td>
+      <td>Es global de IAM. Uno por cluster: con más de 100 clusters e IRSA, chocas</td></tr>
+    <tr><td>Tamaño de una trust policy de IAM</td><td>2 048 caracteres ≈ <strong>4 relaciones</strong></td>
+      <td>Sí, hasta ~8 relaciones. Es el otro techo de IRSA</td></tr>
+    <tr><td>Security groups del control plane por cluster</td><td>4</td><td><strong>No</strong></td></tr>
+    <tr><td>Rangos CIDR de acceso al endpoint público</td><td>40</td><td><strong>No</strong></td></tr>
+    <tr><td>Fargate profiles por cluster</td><td>10</td><td>Sí</td></tr>
+    <tr><td>Selectores por Fargate profile · pares de etiquetas por selector</td><td>5 · 5</td><td>Sí</td></tr>
+    <tr><td>vCPU concurrentes de Fargate On-Demand</td><td><strong>6</strong></td>
+      <td>Sí — cuota <em>compartida con ECS</em>. Cuentas nuevas empiezan aquí y AWS la sube con el uso</td></tr>
+    <tr><td>Vida máxima de un nodo de Auto Mode</td><td>21 días</td><td>Solo a la baja</td></tr>
+    <tr><td>Caducidad del token de un service account</td><td>1 hora (90 días de gracia)</td>
+      <td><strong>No</strong> — SDKs viejos que no refrescan empiezan a fallar a los 90 días</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>El equipo ya sabe Kubernetes y tiene charts, operadores y pipelines que lo asumen.</li>
+    <li>Dependes de software que solo se distribuye como CRDs y controladores.</li>
+    <li>Necesitas RBAC y namespaces para repartir un cluster entre varios equipos.</li>
+    <li>Tu carga justifica un control plane de 73 USD/mes <em>antes</em> de contar los nodos.</li>
+    <li>Quieres aprenderlo para una entrevista — con cronómetro y <code>destroy</code>.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Eres una persona sola con un servicio. El control plane cuesta más que el servicio.</li>
+    <li>Tu carga son eventos esporádicos: pagas 24×7 por trabajo de segundos.</li>
+    <li>Quieres factura cero en reposo. <strong>Aquí no existe.</strong></li>
+    <li>Nadie del equipo va a mantener los add-ons ni a subir de versión cada catorce meses.</li>
+    <li>La razón es «Kubernetes es el estándar» y no sabes decir qué te da que ECS no.</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><a href="./aws-ecs.html"><strong>Amazon ECS</strong></a></td>
+      <td>Misma idea —mantener contenedores vivos—, ecosistema y factura distintos. <strong>ECS no
+      cobra por orquestar</strong>: el cluster vale 0,00 USD y con <code>desired_count = 0</code>
+      la factura entera se va a cero. EKS cobra 0,10 USD/h pase lo que pase. A cambio, EKS trae
+      RBAC, namespaces, CRDs, operadores y Helm; ECS no tiene nada de eso.</td>
+      <td><strong>Casi siempre, si el equipo no vive ya en Kubernetes.</strong> La <a
+      href="./aws-ecs.html">ficha de ECS</a> lo dice al revés y dice lo mismo: se elige EKS cuando
+      ya sabes Kubernetes, cuando necesitas portabilidad, o cuando dependes de operadores. Este
+      documento solo matiza <em>portabilidad</em> — ver abajo.</td></tr>
+    <tr><td><a href="./aws-lambda.html"><strong>AWS Lambda</strong></a></td>
+      <td>Lambda cobra por invocación y se apaga a cero; EKS cobra por tiempo de reloj del control
+      plane <em>más</em> el de los nodos. Lambda corta a los 15 minutos y no mantiene estado.</td>
+      <td>El trabajo es corto, por eventos, con tráfico irregular. <strong>El acortador de los
+      proyectos 01–03 es exactamente eso</strong>: en Lambda cuesta céntimos al mes; en EKS, unos
+      154 USD. El proyecto 06 lo migra <em>a propósito</em>, para tener la comparación hecha.</td></tr>
+    <tr><td><strong>AWS App Runner</strong></td>
+      <td>Una capa por encima de todo: le das la imagen y te devuelve una URL HTTPS. Ni cluster,
+      ni nodos, ni balanceador que declarar.</td>
+      <td>Solo quieres publicar un contenedor web. En cuanto necesites red privada, sidecars o
+      scheduling, se queda corto.</td></tr>
+    <tr><td><strong>Kubernetes en tus propias EC2</strong></td>
+      <td>Te ahorras los 0,10 USD/h del control plane y pagas tres EC2 para el plano de control
+      —que cuestan más que 73 USD/mes en cuanto quieres HA— y el trabajo de operar un
+      <code>etcd</code>.</td>
+      <td>Nunca por dinero. Solo por requisitos que EKS no cubre (una versión concreta, un CNI
+      exótico, un entorno aislado).</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La portabilidad: qué parte es real y qué parte es teórica</span>
+  <p>«Kubernetes es portable entre nubes» es el argumento estrella a favor de EKS, y es
+  <strong>parcialmente cierto</strong>. Lo honesto es separar las dos mitades:</p>
+  <ul>
+    <li><strong>Real:</strong> tus <code>Deployment</code>, <code>Service</code>,
+    <code>ConfigMap</code>, <code>HorizontalPodAutoscaler</code> y tus charts de Helm funcionan
+    igual en EKS, GKE, AKS o en un cluster de tu casa. Y sobre todo: <strong>el conocimiento del
+    equipo es portable</strong>, que suele valer más que los YAML.</li>
+    <li><strong>Teórica:</strong> en cuanto usas <a href="#identidad">IRSA o Pod Identity</a>, el
+    <a href="#lbc">ALB Controller</a> con sus anotaciones, el EBS CSI y las access entries,
+    <strong>tus manifiestos ya son de AWS</strong>. Mover eso a GKE no es «cambiar de cluster»:
+    es reescribir la capa de identidad, la de entrada de tráfico y la de almacenamiento.</li>
+  </ul>
+  <p>El criterio: <strong>si la portabilidad es un requisito escrito, ya sabes lo que cuesta
+  mantenerla —y no la mantienes gratis por usar EKS. Si es un «por si acaso», no es un argumento:
+  es una intuición cara.</strong></p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Y para un side project de una persona, sin rodeos</span>
+  <p><strong>EKS casi nunca.</strong> Un cluster vacío cuesta 73 USD al mes; el acortador que
+  aloja cuesta céntimos en Lambda. No hay una escala intermedia en la que EKS gane a ECS o a
+  Lambda para un solo desarrollador con un servicio: el suelo del control plane no baja.</p>
+  <p><strong>El proyecto 06 existe de todas formas, y el motivo es explícito: las
+  entrevistas.</strong> «He montado un EKS con IRSA, node groups y el ALB Controller, y sé
+  cuánto cuesta por hora» es una frase que se puede decir en una entrevista de System Design;
+  «he leído sobre EKS» no. Móntalo, entiéndelo, mide la factura, y destrúyelo el mismo día.</p>
+</div>
+
+<h2>En Terraform</h2>
+<p>El esqueleto mínimo son <strong>dos recursos de EKS y dos roles</strong>, y ninguno de los dos
+roles es el que tú piensas: el del cluster y el de los nodos son distintos y confían en
+principales distintos.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">cluster + node group + add-ons + acceso</span></div>
+<pre><code># --- el rol del CONTROL PLANE: lo asume el servicio EKS ---------------
+resource "aws_iam_role" "cluster" {
+  name = "eks-cluster"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "eks.amazonaws.com" }
+    }]
+  })
+}
+resource "aws_iam_role_policy_attachment" "cluster" {
+  role       = aws_iam_role.cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+resource "aws_eks_cluster" "main" {
+  name     = "acortador"
+  role_arn = aws_iam_role.cluster.arn
+  version  = "1.36"                       # ver el calendario de versiones
+
+  vpc_config {
+    subnet_ids              = aws_subnet.private[*].id   # minimo DOS AZ
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  access_config {
+    authentication_mode                         = "API"   # no CONFIG_MAP
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  upgrade_policy {
+    support_type = "STANDARD"   # sin esto: EXTENDED, y 0,60 USD/h al mes 15
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.cluster]
+}
+
+# --- el rol de los NODOS: lo asume EC2, no EKS ------------------------
+resource "aws_iam_role" "node" {
+  name = "eks-node"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "ec2.amazonaws.com" }   # <- EC2
+    }]
+  })
+}
+resource "aws_iam_role_policy_attachment" "node" {
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",          # unirse al cluster
+    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",               # pedir IPs a la VPC
+    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly", # pull de ECR
+  ])
+  role       = aws_iam_role.node.name
+  policy_arn = each.value
+}
+
+resource "aws_eks_node_group" "main" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "default"
+  node_role_arn   = aws_iam_role.node.arn
+  subnet_ids      = aws_subnet.private[*].id
+
+  instance_types = ["t4g.small"]   # sin esto: ["t3.medium"], mas caro
+  ami_type       = "AL2023_ARM_64_STANDARD"
+  capacity_type  = "ON_DEMAND"     # o "SPOT"
+  disk_size      = 20              # GiB de EBS por nodo
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 2
+    min_size     = 2
+  }
+  update_config { max_unavailable = 1 }
+
+  # SIN esto, el destroy falla: EKS no puede borrar las ENIs
+  depends_on = [aws_iam_role_policy_attachment.node]
+}
+
+# --- add-ons gestionados: los que NO vienen instalados ----------------
+resource "aws_eks_addon" "pod_identity" {
+  cluster_name = aws_eks_cluster.main.name
+  addon_name   = "eks-pod-identity-agent"
+}
+
+# --- identidad de un pod: las tres preguntas, otro principal ----------
+resource "aws_iam_role" "app" {
+  name = "acortador-app"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = ["sts:AssumeRole", "sts:TagSession"]   # las DOS
+      Principal = { Service = "pods.eks.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "app" {
+  cluster_name    = aws_eks_cluster.main.name
+  namespace       = "default"
+  service_account = "acortador"        # el SA, que creas con el provider kubernetes
+  role_arn        = aws_iam_role.app.arn
+}
+
+# --- quien puede hacer kubectl ----------------------------------------
+resource "aws_eks_access_entry" "yo" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = data.aws_iam_role.mi_rol.arn
+  type          = "STANDARD"
+}
+resource "aws_eks_access_policy_association" "yo" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = data.aws_iam_role.mi_rol.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  access_scope { type = "cluster" }
+}</code></pre>
+</div>
+
+<h3>Donde el provider de AWS se queda corto a propósito</h3>
+<p>Fíjate en lo que <strong>no</strong> hay en ese fichero: ni un <code>Deployment</code>, ni un
+<code>Service</code>, ni un <code>Ingress</code>, ni el service account que la
+<code>pod_identity_association</code> menciona. <strong>El provider <code>aws</code> llega hasta
+la puerta del cluster y no entra.</strong> Todo lo de dentro se declara con otros dos providers:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Provider</th><th>Qué declara</th><th>Cuándo se usa</th></tr></thead>
+  <tbody>
+    <tr><td><code>hashicorp/aws</code></td><td>Cluster, node groups, add-ons, access entries, pod
+      identity associations, VPC, ALB… todo lo que es <em>de AWS</em>.</td>
+      <td>Siempre.</td></tr>
+    <tr><td><code>hashicorp/kubernetes</code></td><td>Objetos sueltos:
+      <code>kubernetes_namespace</code>, <code>kubernetes_service_account</code>,
+      <code>kubernetes_deployment</code>, <code>kubernetes_manifest</code>.</td>
+      <td>Piezas puntuales — el service account de una asociación, un namespace.</td></tr>
+    <tr><td><code>hashicorp/helm</code></td><td>Charts enteros: <code>helm_release</code>.</td>
+      <td>El AWS Load Balancer Controller, Karpenter, cualquier operador de terceros.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El <em>two-phase apply</em>: la fricción que no se puede diseñar para evitar</span>
+  <p>Los providers <code>kubernetes</code> y <code>helm</code> se configuran con el
+  <strong>endpoint y el certificado del cluster</strong>. Y esos valores <em>no existen</em> hasta
+  que el cluster está creado. Terraform configura los providers <strong>antes</strong> de aplicar
+  nada, así que en un state vacío el provider de Kubernetes se inicializa con valores desconocidos
+  y falla con el clásico <code>Kubernetes cluster unreachable</code> o
+  <code>dial tcp [::1]:80: connect: connection refused</code> — que significa «he intentado hablar
+  con un cluster local porque no me diste ninguno».</p>
+  <p><strong>Las tres salidas, de peor a mejor:</strong></p>
+  <ol>
+    <li><strong><code>-target</code> dos veces.</strong> <code>terraform apply -target=aws_eks_cluster.main</code>
+    y luego un apply normal. Funciona, es feo, y no es reproducible en CI.</li>
+    <li><strong>Configurar el provider con <code>exec</code></strong>, que es lo recomendado: el
+    provider llama a <code>aws eks get-token</code> en el momento de usarse, no al inicializarse.
+    Necesita el AWS CLI disponible allí donde corra Terraform.
+<pre><code>provider "kubernetes" {
+  host                   = aws_eks_cluster.main.endpoint
+  cluster_ca_certificate = base64decode(aws_eks_cluster.main.certificate_authority[0].data)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name]
+  }
+}</code></pre></li>
+    <li><strong>Dos configuraciones y dos states</strong>: uno crea la infraestructura, otro
+    despliega dentro leyendo el primero con <code>data</code> o
+    <code>terraform_remote_state</code>. Es lo que hacen los equipos serios, y es la razón de que
+    la lección del refactor del state te haya servido para algo. Ojo al <em>destroy</em>: el
+    segundo state necesita el nombre del cluster para borrarse, y si el primero ya se lo llevó,
+    te toca ayudarle a mano.</li>
+  </ol>
+  <p><strong>Esto no es un fallo de Terraform ni del provider: es la consecuencia de que
+  Kubernetes sea una API distinta de la de AWS.</strong> Y es exactamente el tipo de fricción por
+  la que ECS —donde todo es <code>aws_*</code> y un solo apply basta— resulta más simple.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong>Los <code>depends_on</code> de los roles no son decorativos.</strong> El propio
+    ejemplo oficial lleva el comentario: <em>«Ensure that IAM Role permissions are created before
+    and deleted after EKS Node Group handling. Otherwise, EKS will not be able to properly delete
+    EC2 Instances and Elastic Network Interfaces.»</em> Sin ellos el <code>apply</code> puede ir
+    bien y el <code>destroy</code> quedarse colgado con ENIs huérfanas que hay que borrar a
+    mano — pagando el cluster mientras tanto.</li>
+    <li><strong><code>instance_types</code> vale <code>["t3.medium"]</code> por defecto</strong>
+    (0,0416 USD/h por nodo). Si no lo pones, pagas 2,5 veces lo que pagarías con
+    <code>t4g.small</code>.</li>
+    <li><strong>El <code>apply</code> es lento y el timeout lo sabe:</strong> el provider da 30
+    minutos para crear un cluster, 60 para actualizarlo y 15 para borrarlo. Un cluster tarda del
+    orden de diez minutos en existir; el node group, otros tantos. No es que se haya colgado.</li>
+    <li><strong><code>authentication_mode</code> tiene sentidos únicos.</strong> Activar
+    <code>API</code> no se deshace, y si no habilitaste <code>CONFIG_MAP</code> al crear, no lo
+    puedes habilitar luego. Decídelo antes del primer apply.</li>
+    <li><strong>Auto Mode es todo o nada:</strong> <code>compute_config.enabled</code>,
+    <code>kubernetes_network_config.elastic_load_balancing.enabled</code> y
+    <code>storage_config.block_storage.enabled</code> tienen que valer <strong>los tres</strong>
+    <code>true</code> (o los tres <code>false</code>), y además hace falta
+    <code>bootstrap_self_managed_addons = false</code>. Poner uno solo es un error de
+    validación.</li>
+    <li><strong>El cluster necesita subredes en al menos dos zonas.</strong> Es requisito de
+    <code>vpc_config.subnet_ids</code>, no una recomendación.</li>
+    <li><strong>Una asociación de Pod Identity apunta a un service account que quizá no
+    existe.</strong> Terraform la crea igual, sin error, y el pod se queda sin credenciales. El
+    service account lo tienes que crear tú con el provider <code>kubernetes</code> o con el
+    manifiesto de tu app.</li>
+    <li><strong>Las asociaciones de Pod Identity son <em>eventually consistent</em></strong>:
+    puede haber segundos de retraso tras el apply. No las crees en el camino crítico de un
+    arranque.</li>
+    <li><strong><code>scaling_config.desired_size</code> da diff perpetuo</strong> si algo
+    externo escala el node group (Cluster Autoscaler, una acción manual). El remedio es
+    <code>lifecycle { ignore_changes = [scaling_config[0].desired_size] }</code>.</li>
+    <li><strong>Actualizar <code>version</code> en el cluster no toca los nodos.</strong> Los
+    managed node groups <em>no</em> se actualizan con el control plane: quedan atrás y hay que
+    subirlos aparte. Kubernetes tolera hasta tres versiones menores de diferencia, pero vivir ahí
+    no es un plan.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · coste</p>
+  <p class="quiz-q">Un cluster tuyo lleva dieciséis meses en la misma versión de Kubernetes. Nadie
+  ha desplegado nada nuevo, el tráfico es el mismo, y la línea de EKS de la factura se ha
+  multiplicado por seis. ¿Qué ha pasado?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La versión salió de standard support a los 14 meses y entró en extended, que está activado por defecto: el control plane pasa de 0,10 a 0,60 USD/h automáticamente, sin aviso ni acción por tu parte. De 73 a 438 USD al mes por cluster.">La versión salió de standard support y entró en extended</button></li>
+    <li><button data-correct="false" data-why="El control plane no escala con el tráfico ni cambia de precio por carga: son 0,10 USD/h fijos por cluster. Existen tramos provisionados (XL, 2XL…) pero se contratan explícitamente, no aparecen solos.">El control plane escaló solo al recibir más peticiones nuevas</button></li>
+    <li><button data-correct="false" data-why="Un node group replicado aparecería como coste de EC2, no como línea de EKS, y lo verías en kubectl get nodes. El enunciado dice que la línea que se multiplicó es la de EKS: eso solo puede ser el control plane.">Los nodos del node group se replicaron por un fallo</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · elegir variante</p>
+  <p class="quiz-q">Proyecto 06, sesión de dos horas con cronómetro. Quieres entender cómo se
+  ejecutan los pods de verdad, poder describir las máquinas en una entrevista, y que el
+  <code>destroy</code> se lo lleve todo. ¿Qué cómputo eliges?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Ves las instancias, eliges el tipo (t4g.small a 0,0168 USD/h), entiendes la relación entre ENIs y max_pods, y el node group se destruye limpio. Es lo que más enseña por lo que menos cuesta, y es el vocabulario que se pregunta.">Un managed node group pequeño, con dos nodos t4g.small</button></li>
+    <li><button data-correct="false" data-why="Fargate en EKS no admite DaemonSets, ni GPU, ni arm64, ni EBS, ni Fargate Spot, ni IMDS —lo que te obliga a IRSA en vez de Pod Identity— y solo corre en subredes privadas, que exigen NAT. Aprenderías la lista de excepciones antes que Kubernetes.">Un Fargate profile, con un pod por cada namespace</button></li>
+    <li><button data-correct="false" data-why="Auto Mode es menos Terraform y menos piezas, pero te oculta justo lo que has venido a ver: no hay nodos que inspeccionar, ni SSH, ni add-ons que gestionar. Y cobra un fee de gestión por instancia encima del precio de la EC2.">El Auto Mode, con Karpenter y los addons gestionados</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · identidad</p>
+  <p class="quiz-q">Un pod del acortador necesita leer y escribir en una tabla de DynamoDB. El
+  cluster es nuevo, con nodos EC2 Linux. ¿Cómo le das ese permiso?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es la pregunta de tres partes de siempre con otro principal: un rol que confía en pods.eks.amazonaws.com (con sts:AssumeRole y sts:TagSession) y una aws_eks_pod_identity_association que lo ata al service account. AWS recomienda Pod Identity sobre IRSA siempre que sea posible.">Un rol IAM asociado al service account de ese pod</button></li>
+    <li><button data-correct="false" data-why="Un Secret de Kubernetes guarda la clave en base64, no cifrada, visible para cualquiera con permiso de lectura en el namespace, y no rota nunca. Es exactamente lo que IRSA y Pod Identity existen para eliminar.">Una clave de acceso guardada en un Secret de Kubernetes</button></li>
+    <li><button data-correct="false" data-why="Funciona, y es justo el antipatrón: el rol del nodo lo comparten TODOS los pods de esa máquina, así que le estás dando DynamoDB al pod de métricas y al de logs también. Es el motivo por el que la doc recomienda restringir el acceso al IMDS.">El rol del nodo ampliado con la política de DynamoDB</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el servicio equivocado</p>
+  <p class="quiz-q">Un desarrollador solo, un acortador de URLs con unos cientos de peticiones al
+  día, hoy en Lambda y DynamoDB. Se plantea moverlo a EKS «porque Kubernetes es el estándar».
+  ¿Qué le dices?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El control plane son 73 USD al mes antes de un solo nodo, y el acortador cuesta céntimos en Lambda. No hay ninguna capacidad de EKS que este servicio necesite: ni RBAC, ni operadores, ni namespaces. La factura sube y las capacidades no se usan.">No: pagarías el control plane y no ganarías nada nuevo</button></li>
+    <li><button data-correct="false" data-why="La portabilidad de los Deployment y los charts es real, pero en cuanto usas Pod Identity, el ALB Controller y el EBS CSI tus manifiestos ya son de AWS. Y aquí ni siquiera hay manifiestos que portar: hay una función y una tabla.">Sí: Kubernetes es el estándar y da portabilidad real inmediata</button></li>
+    <li><button data-correct="false" data-why="Los pods sí pueden escalar a cero, pero el control plane no: no existe apagar un cluster de EKS. Mientras el recurso exista corren 0,10 USD/h, que es justo lo contrario del modelo de Lambda que ya tenía.">Sí: los pods escalan a cero y la factura desaparece</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-ecs.html">Ficha: Amazon ECS</a>
+    <a href="./aws-ecr.html">Ficha: Amazon ECR</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./aws-elb.html">Ficha: ELB / ALB</a>
+    <a href="./aws-vpc.html">Ficha: Amazon VPC</a>
+    <a href="./aws-budgets.html">Ficha: AWS Budgets</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html">Amazon EKS User
+    Guide</a> — empieza por <a
+    href="https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html">Kubernetes
+    version lifecycle</a>, que es la página que decide tu factura —, la <a
+    href="https://docs.aws.amazon.com/eks/latest/userguide/service-accounts.html">comparación
+    oficial entre Pod Identity e IRSA</a>, <a
+    href="https://docs.aws.amazon.com/eks/latest/userguide/grant-k8s-access.html">Grant IAM users
+    and roles access to Kubernetes APIs</a> para las access entries, y la <a
+    href="https://aws.amazon.com/eks/pricing/">página de precios</a>. Si algo aquí no cuadra con
+    lo que te devuelve la consola, pregúntame en la sesión — y mira primero la fecha de
+    verificación.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

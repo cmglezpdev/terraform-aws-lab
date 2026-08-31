@@ -62,7 +62,8 @@ Eso es todo lo que hace.</p>
   <div class="ref-card">
     <h3>Vigilar el free tier</h3>
     <p>Un presupuesto de tipo <code>USAGE</code> sobre horas de EC2 te avisa antes de pasarte
-    de las 750 horas gratis, no después.</p>
+    del cupo gratuito, no después. Pero <strong>comprueba primero qué free tier tienes</strong>:
+    ver el aviso de abajo.</p>
   </div>
   <div class="ref-card">
     <h3>Detectar una fuga o un abuso</h3>
@@ -73,8 +74,35 @@ Eso es todo lo que hace.</p>
     <h3>Cortar de verdad (con acciones)</h3>
     <p>Un <em>budget action</em> puede aplicar una política IAM restrictiva o parar instancias
     EC2/RDS al cruzar el umbral. Es la única parte del servicio que no es solo avisar — y la
-    única que cuesta dinero.</p>
+    única que cuesta dinero. <a href="#budget-actions">A fondo, más abajo</a>.</p>
   </div>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Antes de montar un presupuesto <code>USAGE</code>: hay dos free tiers</span>
+  <p>Desde el <strong>15 de julio de 2025</strong> AWS cambió el modelo, y medio internet
+  —tutoriales, vídeos y respuestas de foro incluidas— sigue describiendo el viejo. Las cuentas
+  creadas <em>antes</em> de esa fecha conservan el free tier clásico: <strong>12 meses</strong>
+  con cupos por servicio (las famosas 750 h/mes de EC2 <code>t2.micro</code>). Las creadas
+  <em>después</em> tienen otra cosa:</p>
+  <ul>
+    <li><strong>Créditos, no cupos por servicio.</strong> 100 USD al registrarte y hasta 100
+    USD más completando actividades de onboarding. Caducan a los <strong>6 meses</strong> o
+    cuando se agoten, lo que llegue antes.</li>
+    <li><strong>Dos planes.</strong> El <em>Free account plan</em> no factura nada: cuando se
+    acaban los créditos, se acaba. A cambio, bloquea los servicios caros. El <em>Paid account
+    plan</em> pasa a precio de lista en cuanto los créditos se agotan — <strong>ahí es donde tu
+    presupuesto deja de ser un adorno</strong>.</li>
+    <li><strong>Los «Always Free» siguen.</strong> Más de 30 servicios mantienen su cupo
+    mensual permanente (el millón de invocaciones de Lambda, por ejemplo). Eso no cambió.</li>
+  </ul>
+  <p>Consecuencia práctica para esta ficha: un presupuesto <code>USAGE</code> «avísame a las
+  700 h de EC2» solo tiene sentido en el modelo viejo. En el nuevo, el número que importa es
+  <strong>el saldo de créditos y su fecha de caducidad</strong>, y lo que quieres es un
+  presupuesto <code>COST</code> con un umbral bajo listo para el día en que los créditos se
+  agoten sin avisar.
+  (<a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier.html">Explore
+  AWS services with AWS Free Tier</a>, verificado el 2026-08-30)</p>
 </div>
 
 <h2>Los tipos que existen</h2>
@@ -161,6 +189,113 @@ tu empresa compra capacidad por adelantado.</p>
   avisarte hasta el mes siguiente por mucho que sigas gastando.</li>
 </ul>
 
+<div class="callout cost" id="cronometro">
+  <span class="callout-title">Lo que cuesta el retraso: la cuenta con la regla del cronómetro</span>
+  <p>«8-12 horas» suena a matiz técnico hasta que le pones el precio por hora de un recurso
+  con cronómetro. El stack del proyecto 04 factura <strong>0,15 USD/h</strong> exista o no
+  tráfico (2 NAT Gateway + ALB + RDS + IPv4). Si lo dejas puesto un viernes por la noche:</p>
+  <div class="code">
+    <div class="code-label"><span>la ventana ciega, en dinero</span><span class="tag">us-east-1</span></div>
+<pre><code>viernes 20:00  arrancas el stack           0,00 USD
+sábado  08:00  Budgets ve el primer dato    1,80 USD  ← 12 h ya gastadas
+sábado  08:00  cruza el 50% y sale el mail
+lunes   09:00  lo destruyes                 9,15 USD</code></pre>
+  </div>
+  <p>El aviso llegó, y llegó tarde por diseño: <strong>Budgets no puede avisarte de dinero que
+  todavía no se ha facturado</strong>. Y hay un segundo retraso encima del refresco —entre que
+  usas un recurso y que ese uso entra en los datos de facturación—, que la propia
+  documentación reconoce sin ponerle número:
+  «<em>There can be a delay between when you incur a charge and when you receive a
+  notification</em>»
+  (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html">Managing
+  your costs with AWS Budgets</a>).</p>
+  <p><strong>De ahí la regla del cronómetro del curso</strong>: los recursos que cobran por
+  hora estén o no en uso se aplican con el reloj en la mano y se destruyen en la misma sesión.
+  El presupuesto no es el freno; es el testigo que te cuenta después cuánto costó no frenar.</p>
+</div>
+
+<h3 id="budget-actions">Budget actions: lo único que corta de verdad</h3>
+
+<p>Es la mitad del servicio que nadie usa y la única que no se limita a avisar. Un
+<em>budget action</em> se cuelga de un umbral y, al cruzarlo, <strong>ejecuta algo</strong>.
+Hay exactamente tres cosas que puede ejecutar
+(<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-controls.html">Configuring
+budget actions</a>):</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Acción</th><th><code>action_type</code></th><th>Qué hace</th><th>Alcance</th></tr></thead>
+  <tbody>
+    <tr><td><b>Aplicar una política IAM</b></td><td><code>APPLY_IAM_POLICY</code></td>
+      <td>Adjunta una policy —normalmente un <code>Deny</code> a
+      <code>ec2:RunInstances</code> y compañía— a usuarios, grupos o roles concretos.</td>
+      <td>Solo la cuenta del presupuesto.</td></tr>
+    <tr><td><b>Aplicar una SCP</b></td><td><code>APPLY_SCP_POLICY</code></td>
+      <td>Adjunta una <em>service control policy</em> a una OU o a una cuenta. Es el freno
+      más contundente: <strong>nadie</strong>, ni el root de la cuenta hija, puede saltárselo.</td>
+      <td>Requiere AWS Organizations y ejecutarse desde la cuenta de gestión.</td></tr>
+    <tr><td><b>Parar EC2 o RDS</b></td><td><code>RUN_SSM_DOCUMENTS</code></td>
+      <td>Lanza un runbook de Systems Manager (<code>AWS-StopEC2Instance</code> /
+      <code>AWS-StopRdsInstance</code>) contra una <strong>lista explícita de
+      <code>instance_ids</code></strong> en una región. No descubre recursos: paras lo que
+      nombraste.</td>
+      <td><strong>Solo la cuenta propia</strong>: la SCP sí cruza cuentas, esto no.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Dos parámetros deciden si esto es un freno o una molestia. <code>approval_model</code>:
+<code>AUTOMATIC</code> ejecuta sin preguntar, <code>MANUAL</code> te manda un correo para que
+lo apruebes tú —que es no tener freno automático, solo un botón—. Y
+<code>notification_type</code>: colgarlo de <code>FORECASTED</code> corta <em>antes</em> de
+gastar, pero hereda el requisito de las 5 semanas de historial.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Las tres trampas de las acciones</span>
+  <p><strong>Un Auto Scaling Group deshace la acción en segundos.</strong> La documentación lo
+  dice sin rodeos: si paras una instancia que está en un ASG, «<em>Amazon EC2 Auto Scaling
+  restarts the instance, or launches new instances to replace the stopped instance</em>». Para
+  que funcione hay que encadenar una segunda acción que le quite permisos al rol del ASG.
+  (<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html">Best
+  practices</a>)</p>
+  <p><strong>Hacen falta dos políticas, no una.</strong> Una para que tu usuario pueda pasarle
+  el rol al servicio (<code>iam:PassRole</code>) y otra en el propio rol de ejecución
+  —<code>budgets.amazonaws.com</code> como principal de confianza— para que Budgets actúe.
+  Para parar instancias, esa segunda es la gestionada
+  <code>AWSBudgetsActions_RolePolicyForResourceAdministrationWithSSM</code>, que autoriza
+  <code>ssm:StartAutomationExecution</code> sobre esos cuatro runbooks. Sin las dos, la acción
+  se queda configurada y no se ejecuta nunca.</p>
+  <p><strong>La reversión no es automática.</strong> Cuando el periodo se reinicia o el gasto
+  baja, la política sigue aplicada: hay que revertirla a mano (o por API). Un
+  <code>Deny</code> olvidado el día 1 del mes siguiente es un incidente que parece un bug de
+  IAM.</p>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">¿Sirven en una cuenta personal de aprendizaje? Respuesta honesta: casi nunca</span>
+  <p><strong>No por el precio</strong> —los dos primeros presupuestos con acciones son gratis,
+  así que el tuyo lo sería—, sino porque <em>ninguna de las tres acciones ataca tu problema
+  real</em>:</p>
+  <ul>
+    <li>La <strong>SCP</strong> necesita AWS Organizations. Tú tienes una cuenta suelta: no
+    aplica.</li>
+    <li>Parar <strong>EC2/RDS</strong> exige la lista de <code>instance_ids</code> por
+    adelantado. Pero lo que te va a arruinar el mes en este curso es un <strong>NAT
+    Gateway</strong>, un <strong>ALB</strong> o una IPv4 huérfana — y esos no se paran: no hay
+    runbook para ellos. Solo se destruyen.</li>
+    <li>La <strong>policy IAM de <code>Deny</code></strong> sí funcionaría, pero llega con las
+    mismas 8-12 h de retraso: impide crear <em>lo siguiente</em>, no apaga lo que ya está
+    facturando. Y si te la aplicas a ti mismo, el usuario que necesita hacer
+    <code>terraform destroy</code> puede quedarse sin permisos para destruir. Es el clásico
+    tiro en el pie: la acción de emergencia te bloquea la salida de emergencia.</li>
+  </ul>
+  <p><strong>El criterio</strong>: las budget actions son una herramienta de
+  <em>organización</em> —contener a un equipo dentro de una cuenta hija que no controlas—, no
+  de disciplina personal. En una cuenta de aprendizaje, los 30 segundos de
+  <code>terraform destroy</code> valen más que cualquier acción automática. Móntala una vez
+  para saber cómo se ve, y quítala.</p>
+</div>
+
 <h2>Cuánto cuesta</h2>
 
 <table class="cost-table">
@@ -170,12 +305,17 @@ tu empresa compra capacidad por adelantado.</p>
     <tr><td>Notificaciones por correo</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Primeros 2 presupuestos <em>con acciones</em></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Cada presupuesto con acciones a partir del 3º</td><td><span class="tag-cost usage">por día</span></td><td><code>0,10 USD/día</code></td></tr>
+    <tr><td><em>Budget report</em> entregado por correo</td><td><span class="tag-cost usage">por entrega</span></td><td><code>0,01 USD</code></td></tr>
     <tr><td>Topic SNS asociado (si lo añades)</td><td><span class="tag-cost usage">por uso</span></td><td>1M peticiones/mes gratis</td></tr>
   </tbody>
 </table>
-<p class="cost-stamp">Verificado el 2026-08-23 en
-<a href="https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/">AWS Budgets Pricing</a>.
-Precios sin región: el servicio es global.</p>
+<p class="cost-stamp">Verificado el 2026-08-23 y <strong>revisado el 2026-08-30</strong> en
+<a href="https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/">AWS Budgets Pricing</a>:
+sin cambios. Precios sin región: el servicio es global. Literal de la página: «<em>Your first
+two action-enabled budgets are free (regardless of the number of actions you configure per
+budget) per month. Afterwards each subsequent action-enabled budget will incur a $0.10 daily
+cost</em>» — ojo al matiz, lo gratis son los <strong>presupuestos</strong> con acciones, no las
+acciones: un presupuesto con diez acciones sigue contando como uno.</p>
 
 <div class="callout cost">
   <span class="callout-title">Lo que sorprende en la factura</span>
@@ -191,7 +331,12 @@ Precios sin región: el servicio es global.</p>
 <table>
   <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
   <tbody>
+    <tr><td>Presupuestos por cuenta de gestión</td><td><code>20 000</code></td><td>No — nunca lo vas a chocar</td></tr>
+    <tr><td>Notificaciones por presupuesto</td><td><code>10</code></td><td>No — el techo real: más de 3-4 umbrales es ruido</td></tr>
     <tr><td>Direcciones de correo por notificación</td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Presupuestos <em>con acciones</em> gratis por cuenta</td><td><code>2</code></td><td>No — a partir del 3º, 0,10 USD/día</td></tr>
+    <tr><td>Acciones por presupuesto</td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Acciones de presupuesto por cuenta</td><td><code>100</code></td><td>No</td></tr>
     <tr><td>Destinos nativos por alerta</td><td>correo, 1 topic SNS, AWS Chatbot</td><td>No</td></tr>
     <tr><td>Topics SNS por notificación</td><td><code>1</code></td><td>No</td></tr>
     <tr><td>Retraso de actualización de datos</td><td><code>8-12 h</code></td><td>No</td></tr>
@@ -201,6 +346,8 @@ Precios sin región: el servicio es global.</p>
   </tbody>
 </table>
 <p class="small">Fuentes:
+<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/management-limits.html">Quotas
+and restrictions</a> (las cifras duras, verificadas el 2026-08-30) ·
 <a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html">Best practices</a> ·
 <a href="https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-sns-policy.html">SNS topic for budget notifications</a>.</p>
 
@@ -237,8 +384,9 @@ Precios sin región: el servicio es global.</p>
       <td>Quieres saber <em>qué servicio</em> disparó la factura del mes pasado.</td>
     </tr>
     <tr>
-      <td><b>CloudWatch Alarms</b></td>
-      <td>CloudWatch alarma sobre métricas técnicas con granularidad de minuto. Budgets, sobre dinero con granularidad de medio día.</td>
+      <td><b><a href="./aws-cloudwatch.html">CloudWatch Alarms</a></b></td>
+      <td>Casi siempre alarma sobre métricas técnicas con granularidad de minuto — pero
+      <strong>también sabe alarmar sobre dinero</strong>: ver el matiz de abajo.</td>
       <td>Quieres reaccionar rápido, o alarmar sobre CPU, errores o latencia.</td>
     </tr>
     <tr>
@@ -254,6 +402,116 @@ Precios sin región: el servicio es global.</p>
   </tbody>
 </table>
 </div>
+
+<h3 id="billing-alarm">El matiz de CloudWatch: la <em>billing alarm</em> sí vigila dinero</h3>
+
+<p>Decir «CloudWatch es para métricas técnicas y Budgets para dinero» es cómodo pero
+<strong>falso</strong>. Existe —y sigue existiendo en 2026— una alarma de CloudWatch sobre la
+métrica <code>EstimatedCharges</code> del namespace <code>AWS/Billing</code>, y lo que vigila
+son dólares. Lo que cambia es todo lo demás:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>AWS Budgets</th><th>CloudWatch <em>billing alarm</em></th></tr></thead>
+  <tbody>
+    <tr><td><b>Qué mira</b></td><td>Coste o uso, con filtros por servicio, cuenta, etiqueta o
+      tipo de cargo</td><td>La métrica <code>EstimatedCharges</code>: un total (o el total de
+      un servicio), sin filtros ni etiquetas</td></tr>
+    <tr><td><b>Dónde vive</b></td><td>Global; la API en <code>us-east-1</code></td>
+      <td><strong>Solo en <code>us-east-1</code></strong>. En cualquier otra región la métrica
+      no aparece y la alarma no se puede crear</td></tr>
+    <tr><td><b>Requisito previo</b></td><td>Ninguno</td>
+      <td><strong>Activar «Receive CloudWatch Billing Alerts»</strong> en Billing Preferences,
+      con credenciales de root o permiso de facturación. Tarda ~15 min en publicar el primer
+      dato, y <em>una vez activado no se puede desactivar</em></td></tr>
+    <tr><td><b>Cadencia</b></td><td>Hasta 3 veces al día, 8-12 h entre refrescos</td>
+      <td>«Several times daily». El periodo que la propia documentación manda usar es
+      <code>21600</code> segundos = <strong>6 h</strong></td></tr>
+    <tr><td><b>Proyección</b></td><td>Sí: <code>FORECASTED</code></td>
+      <td><strong>No.</strong> «It triggers only when the current billing exceeds the
+      threshold. It doesn't use projections based on your usage so far in the month»</td></tr>
+    <tr><td><b>Precio</b></td><td><span class="tag-cost free">gratis</span></td>
+      <td><code>0,10 USD/mes</code> por alarma (las 10 primeras alarmas de la cuenta son
+      gratis)</td></tr>
+    <tr><td><b>Qué gana</b></td><td>Filtros, tipos de presupuesto, proyección, acciones</td>
+      <td>Encaja en el ecosistema de alarmas: <code>ok_actions</code>, alarmas compuestas,
+      Auto Scaling, EventBridge. Y el estado es consultable en cualquier momento, no solo
+      cuando llega el correo</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuente:
+<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/monitor_estimated_charges_with_cloudwatch.html">Create
+a billing alarm to monitor your estimated AWS charges</a>, verificado el
+<strong>2026-08-30</strong>. Detalle que sorprende: las cuentas del <em>AWS Partner Network</em>
+no publican métricas de facturación a CloudWatch, así que ahí la alarma nunca funcionará.
+El desglose completo, en la <a href="./aws-cloudwatch.html">ficha de CloudWatch</a> (sección
+«Alarms, a fondo»).</p>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio, en una línea</span>
+  <p><strong>Para vigilar el techo de 30 USD del curso, Budgets.</strong> Es gratis, proyecta
+  y filtra. La <em>billing alarm</em> de CloudWatch solo compensa cuando lo que quieres es
+  <em>enganchar el gasto a la maquinaria de alarmas</em>: combinarlo con otras alarmas en una
+  compuesta, o disparar una acción automática. Tenerlas las dos no es redundancia inútil —la
+  de CloudWatch reacciona en 6 h en vez de 12— pero cuesta 0,10 USD/mes y no te dirá qué
+  servicio fue.</p>
+</div>
+
+<h3>La familia entera, con precios</h3>
+
+<p>Budgets es una de cinco piezas que la consola presenta juntas y que resuelven preguntas
+distintas. Ninguna sustituye a otra:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Servicio</th><th>La pregunta que responde</th><th>Precio</th><th>El matiz</th></tr></thead>
+  <tbody>
+    <tr><td><b>AWS Budgets</b></td>
+      <td>«¿Voy a pasarme del techo que puse?»</td>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td>Tú pones el número. Si no sabes qué número poner, no es la herramienta.</td></tr>
+    <tr><td><b>Cost Explorer</b></td>
+      <td>«¿Qué servicio disparó la factura del mes pasado?»</td>
+      <td>Consola <span class="tag-cost free">gratis</span> · API
+      <code>0,01 USD/petición</code></td>
+      <td><strong>La API sí cobra</strong>, y por petición. Un dashboard casero que consulte
+      cada 5 min son ~86 USD/mes. La granularidad horaria se factura aparte
+      (<code>0,01 USD</code> por cada 1 000 registros de uso al mes).</td></tr>
+    <tr><td><b>Cost Anomaly Detection</b></td>
+      <td>«¿Ha pasado algo raro que yo no habría sabido buscar?»</td>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td>ML sobre tu patrón de gasto; <strong>detecta anomalías, no techos</strong>. Auto
+      activado para clientes nuevos de Cost Explorer. Corre ~3 veces al día y puede tardar
+      <strong>hasta 24 h</strong> en ver una anomalía; necesita 10 días de histórico por
+      servicio. Complementa a Budgets: uno vigila el número que fijaste, el otro lo que ni
+      se te ocurrió mirar.</td></tr>
+    <tr><td><b>Data Exports / CUR</b></td>
+      <td>«Quiero cada línea de la factura para analizarla yo»</td>
+      <td>Export <span class="tag-cost free">gratis</span> · pagas S3 (y Athena si consultas)</td>
+      <td>El grano más fino que existe, en Parquet o CSV a un bucket. Es de lo que viven las
+      herramientas de FinOps de terceros. Sobredimensionado para una cuenta personal.</td></tr>
+    <tr><td><b>Budget reports</b></td>
+      <td>«Mándame por correo el estado de mis presupuestos cada lunes»</td>
+      <td><code>0,01 USD</code> por informe entregado</td>
+      <td>La única parte de Budgets que cobra sin usar acciones. Hasta 50 presupuestos y 50
+      destinatarios por informe.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Verificado el <strong>2026-08-30</strong> en
+<a href="https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/">AWS Budgets Pricing</a>,
+<a href="https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/">Cost Explorer
+Pricing</a> y
+<a href="https://aws.amazon.com/about-aws/whats-new/2025/11/aws-cost-anomaly-detection-managed-monitoring/">el
+anuncio de <em>AWS managed monitors</em> (2025-11-19)</a>, que dice literalmente
+«<em>at no additional charge</em>». Aviso honesto: <strong>AWS no publica una página de
+precios propia de Cost Anomaly Detection</strong> —la gratuidad se deduce de sus anuncios y
+de la ausencia de línea en la de Cost Management—, mientras que el resto de cifras sí salen
+de páginas de precios oficiales. Y un detalle que se le escapa a casi todo el mundo:
+<strong>Cost Anomaly Detection no monitoriza los cargos de Budgets ni de Cost Explorer</strong>
+(<a href="https://docs.aws.amazon.com/cost-management/latest/userguide/management-limits.html">lista
+de servicios no soportados</a>).</p>
 
 <h2>En Terraform</h2>
 
@@ -300,10 +558,53 @@ Precios sin región: el servicio es global.</p>
   <code>ACTUAL</code> ya disparadas de ese periodo se olvidan.</p>
 </div>
 
+<h3>Y si algún día quieres una acción</h3>
+
+<p>Recurso aparte, <code>aws_budgets_budget_action</code>, que se cuelga del presupuesto por
+<code>budget_name</code>. Léelo con lo dicho en
+<a href="#budget-actions">Budget actions</a> delante: en una cuenta personal esto es para
+verlo una vez, no para dejarlo puesto.</p>
+
+<div class="code">
+  <div class="code-label"><span>parar dos instancias al llegar al 100% real</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_budgets_budget_action"</b> <b class="s">"freno"</b> {
+  <b class="at">budget_name</b>        = aws_budgets_budget.monthly.name
+  <b class="at">action_type</b>        = <b class="s">"RUN_SSM_DOCUMENTS"</b>  <b class="c"># o APPLY_IAM_POLICY / APPLY_SCP_POLICY</b>
+  <b class="at">notification_type</b>  = <b class="s">"ACTUAL"</b>             <b class="c"># FORECASTED corta antes, pero pide 5 semanas</b>
+  <b class="at">approval_model</b>     = <b class="s">"AUTOMATIC"</b>          <b class="c"># MANUAL = te manda un correo y no corta nada</b>
+  <b class="at">execution_role_arn</b> = aws_iam_role.budgets.arn <b class="c"># confía en budgets.amazonaws.com</b>
+
+  <b class="k">action_threshold</b> {
+    <b class="at">action_threshold_type</b>  = <b class="s">"PERCENTAGE"</b>
+    <b class="at">action_threshold_value</b> = <b class="n">100</b>
+  }
+
+  <b class="k">definition</b> {
+    <b class="k">ssm_action_definition</b> {
+      <b class="at">action_sub_type</b> = <b class="s">"STOP_EC2_INSTANCES"</b>  <b class="c"># o STOP_RDS_INSTANCES. Y nada más.</b>
+      <b class="at">region</b>          = <b class="s">"us-east-1"</b>
+      <b class="at">instance_ids</b>    = [aws_instance.demo.id]  <b class="c"># lista explícita: no descubre nada</b>
+    }
+  }
+
+  <b class="k">subscriber</b> {                                <b class="c"># a quién se avisa de que la acción corrió</b>
+    <b class="at">address</b>           = var.alert_email
+    <b class="at">subscription_type</b> = <b class="s">"EMAIL"</b>
+  }
+}</code></pre>
+</div>
+<p class="small">Esquema verificado el 2026-08-30 contra el
+<a href="https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/budgets_budget_action.html.markdown">markdown
+crudo del provider</a>. Las tres trampas: <code>execution_role_arn</code> es
+<strong>obligatorio</strong> siempre; <code>instance_ids</code> y <code>region</code> también
+lo son dentro de <code>ssm_action_definition</code> (no hay «todas las instancias»); y el
+<code>subscriber</code> de la acción es distinto de la <code>notification</code> del
+presupuesto — configurar uno no configura el otro.</p>
+
 <h2>Comprueba</h2>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-kicker">Pregunta 1 de 6</p>
   <p class="quiz-q">Acabas de abrir una cuenta AWS y montas una alarma <code>FORECASTED</code> al 100%. Al día siguiente levantas un NAT Gateway y se te olvida destruirlo. ¿Qué pasa?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="Las proyecciones necesitan unas 5 semanas de historial de uso. Antes de eso la alarma existe pero jamás se dispara.">La alarma no se dispara nunca</button></li>
@@ -315,7 +616,7 @@ Precios sin región: el servicio es global.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-kicker">Pregunta 2 de 6</p>
   <p class="quiz-q">Tu factura del mes pasado fue el triple de lo normal y quieres saber qué servicio la disparó. ¿Qué abres?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="Analiza el gasto ya ocurrido y lo desglosa por servicio, región, etiqueta y periodo. Es la herramienta forense.">Abres la consola de Cost Explorer</button></li>
@@ -327,7 +628,7 @@ Precios sin región: el servicio es global.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-kicker">Pregunta 3 de 6</p>
   <p class="quiz-q">Quieres cinco presupuestos distintos, uno por proyecto, todos con alarmas por correo. ¿Cuánto te cuesta al mes?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="Los presupuestos sin acciones son gratis y sin límite de cantidad. Solo los budget actions cuestan, a partir del tercero.">Cuesta cero dólares al mes</button></li>
@@ -339,7 +640,7 @@ Precios sin región: el servicio es global.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-kicker">Pregunta 4 de 6</p>
   <p class="quiz-q">Cruzaste el umbral <code>ACTUAL</code> al 50% el día 12 y te llegó el correo. Sigues gastando y el día 20 vas por el 80%. ¿Recibes otro aviso de esa misma notificación?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="Las alarmas ACTUAL se envían una sola vez por presupuesto y periodo, la primera vez que se cruza el umbral. Por eso se ponen varias a umbrales distintos.">No, hasta el periodo siguiente</button></li>
@@ -350,9 +651,34 @@ Precios sin región: el servicio es global.</p>
   <div class="quiz-feedback"></div>
 </div>
 
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 5 de 6</p>
+  <p class="quiz-q">Ya tienes tu presupuesto de 30 USD. Ahora quieres que el gasto entre en una <em>alarma compuesta</em> junto con otras alarmas técnicas, para que solo suene el teléfono cuando coincidan varias señales. ¿Qué añades?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La métrica AWS/Billing EstimatedCharges existe y vigila dinero de verdad: solo vive en us-east-1, hay que activar «Receive CloudWatch Billing Alerts» en Billing Preferences, se refresca cada ~6 h y cuesta 0,10 USD/mes. Es la única de las cuatro que es una alarma de CloudWatch y, por tanto, la única que puede entrar en una compuesta.">Una billing alarm de CloudWatch en us-east-1</button></li>
+    <li><button data-correct="false" data-why="Budgets no publica ninguna métrica en CloudWatch ni expone un estado de alarma: solo manda correos y mensajes a SNS. Un segundo presupuesto no se puede combinar booleanamente con nada, por muy bien elegido que esté el umbral.">Un presupuesto de Budgets con umbral FORECASTED</button></li>
+    <li><button data-correct="false" data-why="Un budget action ejecuta algo (una policy, una SCP, parar instancias) en vez de emitir una señal combinable, llega con 8-12 h de retraso y exige un rol de ejecución. Resuelve «corta», no «avísame cuando coincidan varias cosas».">Un budget action de tipo APPLY_IAM_POLICY automático</button></li>
+    <li><button data-correct="false" data-why="Cost Anomaly Detection detecta patrones raros con ML y avisa por correo o SNS, pero no tiene estado de alarma ni umbral que combinar. Además tarda hasta 24 h en ver una anomalía: es complemento de Budgets, no pieza de una compuesta.">Un monitor de Cost Anomaly Detection gestionado</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 6 de 6</p>
+  <p class="quiz-q">Cuenta personal, sin Organizations. Lo que se te olvida siempre es un NAT Gateway. Decides montar un <em>budget action</em> que apague el gasto automáticamente al llegar al 100%. ¿Cuál es el problema de fondo?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Las acciones solo saben tres cosas: aplicar una policy IAM, aplicar una SCP (que necesita Organizations, y tú no la tienes) o lanzar los runbooks de SSM AWS-StopEC2Instance y AWS-StopRdsInstance sobre una lista de instance_ids. No hay runbook para NAT Gateways, ALBs ni IPv4 huérfanas: eso solo se destruye.">No existe acción capaz de parar un NAT</button></li>
+    <li><button data-correct="false" data-why="El precio no es el obstáculo aquí: los dos primeros presupuestos con acciones de la cuenta son gratis, sin importar cuántas acciones lleve cada uno. El cargo de 0,10 USD/día empieza en el tercer presupuesto con acciones.">Las acciones cuestan diez céntimos al día siempre</button></li>
+    <li><button data-correct="false" data-why="La aprobación manual es una opción, no una obligación: approval_model acepta AUTOMATIC, que ejecuta sin preguntar. Elegir MANUAL sí convierte el freno en un botón, pero es una decisión tuya, no una limitación del servicio.">Las acciones exigen forzosamente aprobación manual por correo</button></li>
+    <li><button data-correct="false" data-why="Las acciones se cuelgan de presupuestos de coste y de uso por igual, mediante un umbral ACTUAL o FORECASTED. El tipo del presupuesto no es lo que impide apagar un NAT Gateway; lo que lo impide es que no hay ninguna acción que sepa hacerlo.">Las acciones solo funcionan sobre presupuestos de USAGE</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
 <div class="next">
   <div class="nav-links">
     <a href="./README.md">Todas las referencias</a>
+    <a href="./aws-cloudwatch.html">Referencia: Amazon CloudWatch</a>
     <a href="../lessons/0001-el-primer-apply.html">Lección 01</a>
     <a href="../lessons/0002-haz-que-la-alarma-suene.html">Lección 02</a>
     <a href="./aws-sns.html">Referencia: Amazon SNS</a>

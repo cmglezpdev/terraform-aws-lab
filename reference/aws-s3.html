@@ -21,7 +21,7 @@
     <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
     <div><dt>¿Se puede dejar puesto?</dt><dd><b>Sí.</b> Un bucket vacío cuesta 0,00 USD. Solo pagas bytes guardados y peticiones.</dd></div>
     <div><dt>Recurso Terraform</dt><dd><code>aws_s3_bucket</code></dd></div>
-    <div><dt>Aparece en</dt><dd><a href="../projects/00-foundations">00</a>, 02, 05, 07</dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/00-foundations">00</a>, 02, 05, 07 · prácticas 02 y 05</dd></div>
   </dl>
 </header>
 
@@ -201,10 +201,18 @@ explícitamente no usar. Fuente:
   puede crear el primero que llegue.</li>
 
   <li><strong>El versionado no sobrescribe: apila.</strong> Con versionado activo, cada
-  <code>PUT</code> sobre la misma clave crea una versión nueva y conserva la anterior. Un
-  <code>DELETE</code> no borra: coloca un <em>delete marker</em> encima. El objeto sigue ahí
-  y sigue pagándose. Para borrar de verdad hay que borrar cada versión por su
-  <code>VersionId</code>.</li>
+  <code>PUT</code> sobre la misma clave crea una versión nueva —con su <code>VersionId</code>,
+  una cadena opaca de hasta 1.024 bytes que solo S3 puede generar— y conserva la anterior
+  como <em>noncurrent</em>. Un <code>DELETE</code> no borra: coloca un <em>delete marker</em>
+  encima, y un <code>GET</code> normal devuelve <code>404</code> mientras esté ahí, aunque
+  todas las versiones sigan existiendo (y pagándose: cada versión es el objeto entero, no un
+  diff). Cualquier versión se recupera pidiéndola por su <code>VersionId</code>; borrar de
+  verdad exige borrar versión a versión. El historial completo se consulta con
+  <code>aws s3api list-object-versions</code>. Un bucket pasa por tres estados — sin
+  versionar (todo objeto tiene <code>VersionId</code> <code>null</code>),
+  <code>Enabled</code> y <code>Suspended</code> — y del primero no se vuelve: una vez
+  activado, solo puede suspenderse
+  (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/versioning-workflows.html">fuente</a>).</li>
 
   <li><strong>Cifrado en reposo, siempre.</strong> Desde el <strong>5 de enero de 2023</strong>
   todos los objetos nuevos se cifran con SSE-S3 (AES-256) automáticamente, sin coste y
@@ -217,8 +225,179 @@ explícitamente no usar. Fuente:
   objects don't allow public access»
   (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html">Block Public Access</a>).
   Los buckets filtrados de las noticias no eran públicos por descuido de AWS: alguien
-  desactivó esto a mano.</li>
+  desactivó esto a mano. Cómo funciona ese «privado» exactamente es la sección
+  siguiente.</li>
 </ul>
+
+<h2>El modelo de acceso: quién entra y quién no</h2>
+
+<p>Cuando llega una petición —un <code>GetObject</code>, un <code>PutObject</code>, un
+<code>ListBucket</code>—, S3 la decide consultando hasta <strong>cuatro mecanismos</strong>
+distintos. Los cuatro existen a la vez, y la mitad de los sustos con S3 vienen de conocer
+solo dos de ellos.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Mecanismo</th><th>Dónde vive</th><th>Qué responde</th><th>Estado hoy</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Política de identidad</b></td>
+      <td>En el usuario o rol</td>
+      <td>«¿Qué puede hacer este principal?»</td>
+      <td>Vigente. La conoces de la <a href="./aws-iam.html">ficha de IAM</a>.</td>
+    </tr>
+    <tr>
+      <td><b>Política de bucket</b></td>
+      <td>En el bucket</td>
+      <td>«¿Quién puede hacer qué sobre este recurso?»</td>
+      <td>Vigente. Es la política de recurso de S3; anatomía abajo.</td>
+    </tr>
+    <tr>
+      <td><b>ACLs</b></td>
+      <td>En el bucket y en <em>cada objeto</em></td>
+      <td>«¿Qué cuentas tienen concesiones sobre esta pieza?»</td>
+      <td><b>Legado.</b> Desactivadas por defecto en todo bucket nuevo.</td>
+    </tr>
+    <tr>
+      <td><b>Block Public Access</b></td>
+      <td>En el bucket, la cuenta o la organización</td>
+      <td>No concede nada: <b>anula</b> lo que otros concedan al público.</td>
+      <td>Vigente. Activado por defecto en todo bucket nuevo.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Cómo se combinan</span>
+  <p>El orden mental para evaluar una petición: <b>1.</b> ¿Alguna política aplica una
+  denegación explícita? Denegada, sin apelación. <b>2.</b> ¿Block Public Access bloquea este
+  tipo de acceso? Denegada. <b>3.</b> ¿Algún <em>allow</em> la cubre? Dentro de tu propia
+  cuenta basta con que lo diga <em>o</em> la política de identidad <em>o</em> la del bucket;
+  entre cuentas distintas tienen que decirlo <em>las dos</em>. <b>4.</b> Si nadie la
+  permite: denegación implícita, el default de todo en AWS
+  (<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html">lógica de evaluación</a>).</p>
+</div>
+
+<h3>ACLs y Object Ownership: el mecanismo heredado</h3>
+
+<p>Las ACLs (<em>access control lists</em>) son anteriores a IAM: una lista de concesiones
+pegada al bucket y a <em>cada objeto</em>, con la rareza de que la cuenta que subía un
+objeto podía quedarse como su dueña aunque el bucket fuera de otra. Dos décadas de
+tutoriales con <code>--acl public-read</code> salen de ahí — y buena parte de los buckets
+filtrados de las noticias, también.</p>
+
+<p>Hoy están <strong>desactivadas por defecto</strong>: todo bucket nuevo nace con el
+ajuste de <em>Object Ownership</em> llamado <b>Bucket owner enforced</b>, que apaga las
+ACLs y hace al dueño del bucket dueño de todos los objetos, los suba quien los suba. El
+control de acceso queda entonces exclusivamente en manos de políticas. Con ese ajuste,
+<code>PutBucketAcl</code> y <code>PutObjectAcl</code> fallan, y una subida que incluya
+cualquier ACL distinta de la equivalente al default
+(<code>bucket-owner-full-control</code>) falla con
+<code>400 AccessControlListNotSupported</code>; leer ACLs sigue funcionando. AWS recomienda
+no reactivarlas salvo que necesites permisos distintos <em>objeto a objeto</em>
+(<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/about-object-ownership.html">Object Ownership</a>).</p>
+
+<p>Los otros dos ajustes —<b>Bucket owner preferred</b> y <b>Object writer</b>— existen
+para buckets antiguos que aún dependen de ACLs. Para ti la regla es simple: no tocar nada,
+el default ya es el correcto. En Terraform existe
+<code>aws_s3_bucket_ownership_controls</code>, pero en un bucket nuevo solo sirve para
+dejar la intención por escrito.</p>
+
+<h3>Block Public Access: el cortafuegos</h3>
+
+<p>Cuatro interruptores independientes que se aplican a un bucket, a la cuenta entera o a
+la organización — y si difieren, <strong>gana la combinación más restrictiva</strong>. No
+conceden ni modifican nada: mientras están activos, <em>anulan</em>. Y ahí está su letra
+pequeña: como no tocan las políticas ni las ACLs existentes, quitarlos devuelve lo público
+a público
+(<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html">fuente</a>).</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Bandera</th><th>Qué hace exactamente</th></tr></thead>
+  <tbody>
+    <tr><td><code>block_public_acls</code></td>
+        <td>Rechaza las llamadas que intenten <b>poner</b> una ACL pública nueva
+        (<code>PutBucketAcl</code>, <code>PutObjectAcl</code>, <code>PutObject</code> con
+        ACL pública). Las ya existentes no se tocan.</td></tr>
+    <tr><td><code>ignore_public_acls</code></td>
+        <td>Hace que S3 <b>ignore</b> las ACLs públicas que ya existan sobre el bucket y
+        sus objetos. Siguen escritas, pero dejan de contar en la evaluación.</td></tr>
+    <tr><td><code>block_public_policy</code></td>
+        <td>Rechaza <code>PutBucketPolicy</code> si la política que intentas guardar
+        <b>permite</b> acceso público. La política ya guardada no se toca.</td></tr>
+    <tr><td><code>restrict_public_buckets</code></td>
+        <td>Si la política del bucket <b>es</b> pública, corta el acceso a todo el que no
+        sea la propia cuenta o un service principal de AWS — incluidas otras cuentas
+        concretas a las que la política delegara acceso.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>La simetría ayuda a recordarlas: dos hablan de ACLs y dos de políticas, y en cada pareja
+una bloquea lo <em>nuevo</em> mientras la otra neutraliza lo <em>existente</em>. ¿Y qué
+significa «público»? Una ACL que concede algo a los grupos <code>AllUsers</code> o
+<code>AuthenticatedUsers</code>; una política que concede a <code>"Principal": "*"</code>
+sin clavarlo con una condición de valor fijo (una cuenta, una VPC, un rango de IP
+concreto). Ojo al verbo: público es <strong>conceder</strong> a todos. Una política que
+<em>deniega</em> con <code>"Principal": "*"</code> no es pública — es justo lo
+contrario.</p>
+
+<h3>La política de bucket, por dentro</h3>
+
+<p>Es la política de recurso de S3: un documento JSON pegado al bucket — uno solo, de
+20 KB como máximo. La gramática es la misma que ya usas en IAM
+—<code>Version</code>, <code>Statement</code>, <code>Effect</code>, <code>Action</code>,
+<code>Resource</code>, <code>Condition</code>— con una pieza nueva:
+<code>Principal</code>. Una política de identidad no la lleva porque va pegada a quien la
+porta; una política de recurso vive en la cosa y tiene que decir <em>a quién</em> se
+refiere.</p>
+
+<div class="callout trap">
+  <span class="callout-title">El bucket y sus objetos son recursos distintos</span>
+  <p><code>arn:aws:s3:::mi-bucket</code> es el bucket;
+  <code>arn:aws:s3:::mi-bucket/*</code> son sus objetos. Las acciones de bucket
+  (<code>s3:ListBucket</code>, <code>s3:GetBucketPolicy</code>) solo casan con el primero;
+  las de objeto (<code>s3:GetObject</code>, <code>s3:PutObject</code>) solo con el segundo.
+  Una statement sobre el ARN equivocado <strong>no da error: simplemente nunca
+  aplica</strong>. Es el fallo silencioso más común al escribir políticas de S3, y la razón
+  de que el ejemplo de abajo liste los dos ARNs.</p>
+</div>
+
+<p>El ejemplo canónico — la política con la que AWS recomienda exigir TLS en cualquier
+bucket
+(<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/example-bucket-policies.html#example-bucket-policies-HTTP-HTTPS">fuente</a>):</p>
+
+<div class="code">
+  <div class="code-label"><span>denegar todo tráfico sin TLS</span><span class="tag">json</span></div>
+<pre><code>{
+    <b class="at">"Version"</b>: <b class="s">"2012-10-17"</b>,
+    <b class="at">"Statement"</b>: [{
+        <b class="at">"Sid"</b>: <b class="s">"RestrictToTLSRequestsOnly"</b>,
+        <b class="at">"Effect"</b>: <b class="s">"Deny"</b>,
+        <b class="at">"Principal"</b>: <b class="s">"*"</b>,
+        <b class="at">"Action"</b>: <b class="s">"s3:*"</b>,
+        <b class="at">"Resource"</b>: [
+            <b class="s">"arn:aws:s3:::mi-bucket"</b>,
+            <b class="s">"arn:aws:s3:::mi-bucket/*"</b>
+        ],
+        <b class="at">"Condition"</b>: {
+            <b class="at">"Bool"</b>: { <b class="at">"aws:SecureTransport"</b>: <b class="s">"false"</b> }
+        }
+    }]
+}</code></pre>
+</div>
+
+<p>Léela pieza a pieza, porque todas cargan peso. <code>Deny</code> +
+<code>Principal: "*"</code>: a todos, incluida tu propia cuenta y tu usuario admin.
+<code>s3:*</code>: cualquier acción. Los <strong>dos</strong> ARNs: bucket y objetos, por
+la trampa de arriba. Y la condición: <code>aws:SecureTransport</code> es una
+<strong>condición global</strong> — una clave que AWS rellena en cada petición, aquí
+<code>true</code> si vino cifrada por HTTPS y <code>false</code> si vino por HTTP a
+secas —, así que la statement solo se activa para el tráfico sin cifrar. Como una
+denegación explícita gana a cualquier <em>allow</em>, esta política convive en paz con
+todos los permisos que ya existan: no quita nada a nadie, salvo la puerta HTTP.</p>
 
 <h2>Cuánto cuesta</h2>
 
@@ -401,8 +580,53 @@ recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
 }</code></pre>
 </div>
 
+<p>La política de bucket es también su propio recurso, <code>aws_s3_bucket_policy</code>,
+y el patrón idiomático no es incrustar JSON con <code>jsonencode()</code> sino componerlo
+con el data source <code>aws_iam_policy_document</code> — el mismo que ya usaste en IAM,
+que valida la gramática en el <code>plan</code>. En una política de bucket debe llevar
+bloque <code>principals</code>. El esqueleto:</p>
+
+<div class="code">
+  <div class="code-label"><span>política de bucket — el esqueleto</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">data</b> <b class="s">"aws_iam_policy_document"</b> <b class="s">"este"</b> {
+  <b class="k">statement</b> {
+    <b class="at">sid</b>    = <b class="s">"…"</b>
+    <b class="at">effect</b> = <b class="s">"…"</b>          <b class="c"># "Allow" | "Deny"</b>
+
+    <b class="k">principals</b> {
+      <b class="at">type</b>        = <b class="s">"…"</b>   <b class="c"># "AWS", "Service"… — type "*" + identifiers ["*"] ⇒ "Principal": "*"</b>
+      <b class="at">identifiers</b> = [<b class="s">"…"</b>]
+    }
+
+    <b class="at">actions</b>   = [<b class="s">"…"</b>]
+    <b class="at">resources</b> = [<b class="s">"…"</b>]    <b class="c"># recuerda: bucket y objetos son ARNs distintos</b>
+
+    <b class="k">condition</b> {
+      <b class="at">test</b>     = <b class="s">"…"</b>      <b class="c"># el operador: "StringEquals", "Bool"…</b>
+      <b class="at">variable</b> = <b class="s">"…"</b>      <b class="c"># la clave de condición</b>
+      <b class="at">values</b>   = [<b class="s">"…"</b>]
+    }
+  }
+}
+
+<b class="k">resource</b> <b class="s">"aws_s3_bucket_policy"</b> <b class="s">"este"</b> {
+  <b class="at">bucket</b> = aws_s3_bucket.este.id
+  <b class="at">policy</b> = data.aws_iam_policy_document.este.json
+}</code></pre>
+</div>
+
 <div class="callout trap">
   <span class="callout-title">Trampas conocidas</span>
+  <p><strong>Un solo <code>aws_s3_bucket_policy</code> por bucket.</strong> Cada uno llama a
+  <code>PutBucketPolicy</code>, que reemplaza la política entera sin avisar: dos recursos
+  apuntando al mismo bucket se pisan en silencio, ganando el último en aplicarse
+  (<a href="https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_policy">provider</a>).</p>
+  <p><strong>La política y el <em>public access block</em> pueden chocar.</strong> Con
+  <code>block_public_policy</code> activo, S3 rechaza cualquier <code>PutBucketPolicy</code>
+  cuya política <em>permita</em> acceso público. Si un mismo <code>apply</code> crea ambos
+  recursos, Terraform no ve ninguna dependencia entre ellos y el orden queda al azar — ese
+  orden lo fijas tú con <code>depends_on</code> cuando importa. Una política que solo
+  deniega no choca: denegar no es «público».</p>
   <p><strong><code>destroy</code> falla si el bucket tiene objetos.</strong> S3 no permite
   borrar un bucket no vacío. El atajo es <code>force_destroy = true</code>, que borra todos
   los objetos —incluidas todas las versiones— sin posibilidad de recuperarlos. En un bucket de
@@ -423,7 +647,7 @@ recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
 <h2>Comprueba</h2>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-kicker">Pregunta 1 de 6</p>
   <p class="quiz-q">Guardas volcados diarios de base de datos. Se conservan por norma legal
   siete años, y en cuatro años nadie ha leído ninguno. ¿Qué clase eliges?</p>
   <ul class="quiz-opts">
@@ -436,7 +660,7 @@ recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-kicker">Pregunta 2 de 6</p>
   <p class="quiz-q">Un compañero te pide revisar su código: crea un bucket y añade un recurso
   <code>aws_s3_bucket_server_side_encryption_configuration</code> con <code>AES256</code>
   «para que los datos estén cifrados». ¿Qué le dices?</p>
@@ -450,7 +674,7 @@ recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-kicker">Pregunta 3 de 6</p>
   <p class="quiz-q">Tu aplicación guarda diez millones de registros de 2 KB, y lee unos
   cuantos sueltos por su identificador cada segundo. ¿Dónde los pones?</p>
   <ul class="quiz-opts">
@@ -463,7 +687,7 @@ recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-kicker">Pregunta 4 de 6</p>
   <p class="quiz-q">Un bucket con versionado guarda un objeto de 1 GB que se sobrescribe cada
   día. Al cabo de 30 días, ¿cuánto almacenamiento estás pagando?</p>
   <ul class="quiz-opts">
@@ -471,6 +695,34 @@ recurso aparte que apunta al bucket. Si ves un ejemplo con un bloque
     <li><button data-correct="false" data-why="Eso sería sin versionado. Con versionado activo, sobrescribir no reemplaza nada: añade una versión encima y conserva la vieja.">Un solo gigabyte guardado</button></li>
     <li><button data-correct="false" data-why="S3 no consolida ni deduplica versiones por su cuenta. Solo desaparecen si escribes una regla de ciclo de vida que las expire.">Dos gigabytes tras consolidar</button></li>
     <li><button data-correct="false" data-why="No hay ninguna retención automática de siete días en S3. Sin regla de ciclo de vida, las versiones se guardan indefinidamente.">Siete gigabytes por retención</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 5 de 6</p>
+  <p class="quiz-q">Tu usuario IAM tiene <code>s3:*</code> sobre un bucket cuya política
+  deniega todo con <code>aws:SecureTransport</code> en <code>false</code>. Envías una
+  petición por HTTP con credenciales válidas y bien firmadas. ¿Qué pasa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Una denegación explícita derrota a cualquier allow, venga de la política que venga. La evaluación no suma permisos de varias fuentes: primero busca denies, y uno solo basta.">Denegada, el deny explícito manda</button></li>
+    <li><button data-correct="false" data-why="El allow de identidad cubre la acción, pero los allows solo se consultan si ningún deny explícito aplica antes. Aquí la condición se cumple y el deny corta primero.">Permitida, tu allow ya basta</button></li>
+    <li><button data-correct="false" data-why="No existe tal jerarquía: identidad y recurso pesan igual en la evaluación, y cualquier denegación explícita de cualquiera de las dos gana siempre a todos los allows.">Permitida, la identidad gana siempre</button></li>
+    <li><button data-correct="false" data-why="S3 sí atiende HTTP en sus endpoints normales. Quien rechaza la petición aquí es la política del bucket, no la plataforma: sin esa política, habría pasado.">Denegada, S3 no acepta HTTP</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 6 de 6</p>
+  <p class="quiz-q">Escribes una statement que permite <code>s3:GetObject</code> con
+  <code>Resource</code> = <code>arn:aws:s3:::mi-bucket</code>, sin <code>/*</code>.
+  ¿Qué consigues?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="GetObject opera sobre objetos y ese ARN nombra al bucket. La política es válida, S3 la guarda sin protestar, y la statement no casa con ninguna petición posible.">Nada, la statement nunca aplica</button></li>
+    <li><button data-correct="false" data-why="Ojalá: la política es sintácticamente válida y S3 la acepta sin quejarse. Ese silencio es exactamente lo que hace peligrosa a esta trampa.">Error al guardar la política</button></li>
+    <li><button data-correct="false" data-why="Para eso el Resource tiene que ser el ARN de los objetos: el nombre del bucket seguido de /*. El bucket y sus objetos son recursos distintos.">Lectura de todos los objetos</button></li>
+    <li><button data-correct="false" data-why="Listar es otra acción, s3:ListBucket, que sí casa con el ARN del bucket — pero no es la acción que has escrito en la statement.">Listar el contenido del bucket</button></li>
   </ul>
   <div class="quiz-feedback"></div>
 </div>

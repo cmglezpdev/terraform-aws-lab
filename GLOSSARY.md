@@ -87,6 +87,36 @@ cuando aparezcan bien usados en una respuesta, un `plan` leído o un proyecto.
 - **Bloque `moved`** / **mudanza** — introducidos en [lección 10](./lessons/0010-el-refactor-invisible.html)
 - **Refactor invisible** (plan a cero: solo mudanzas, nada que añadir ni destruir) — introducido en [lección 10](./lessons/0010-el-refactor-invisible.html)
 - **Service Authorization Reference** / **Access level** (List / Read / Write / Tagging / Permissions management) — introducidos en la [ficha de IAM](./reference/aws-iam.html) durante la práctica 01
+- **ACL** / **Object Ownership** (`Bucket owner enforced`) — introducidos en la [ficha de S3](./reference/aws-s3.html) durante la práctica 02
+- **Block Public Access** (las cuatro banderas) — introducido en la [ficha de S3](./reference/aws-s3.html) durante la práctica 02
+- **Política de bucket** / **Condición global** (`aws:SecureTransport`) — introducidas en la [ficha de S3](./reference/aws-s3.html) durante la práctica 02
+- **`VersionId`** / **Delete marker** / **Versión noncurrent** — introducidos en la [ficha de S3](./reference/aws-s3.html) durante la práctica 02
+
+Los siguientes llegaron con la remesa de fichas del 2026-08-30 (servicios de los proyectos
+02-07, aún sin lección). Definición completa en su ficha; se promueven igual que el resto:
+
+- **Partición** / **AZ ID** / **Ámbito zonal-regional-global** / **Control plane vs data plane** / **SigV4** / **Región opt-in** — [ficha de Fundamentos](./reference/aws-fundamentos.html)
+- **Visibility timeout** / **Redrive policy** / **Redrive allow policy** / **Message move task** / **Long polling** / **Partial batch response** / **Fair queues** — [ficha de SQS](./reference/aws-sqs.html); son el vocabulario de la lección 12
+- **Metric filter** / **Subscription filter** / **EMF** / **`treat_missing_data`** / **Alarma compuesta** — [ficha de CloudWatch](./reference/aws-cloudwatch.html)
+- **Model access** / **Inference profile** / **Converse API** / **Prompt caching** / **Model unit** / **Text unit** — [ficha de Bedrock](./reference/aws-bedrock.html)
+- **Function URL** / **Response streaming** / **Hyperplane ENI** / **Recursive loop detection** — [ficha de Lambda](./reference/aws-lambda.html)
+- **TTL** / **GSI** / **LSI** / **Adaptive capacity** / **Single-table design** — [ficha de DynamoDB](./reference/aws-dynamodb.html)
+- **Usage plan** / **API key** / **Lambda authorizer** / **JWT authorizer** / **Deployment** (REST) — [ficha de API Gateway](./reference/aws-apigateway.html)
+- **Raw message delivery** / **Filter policy** / **Filter policy scope** / **DLQ de suscripción** — [ficha de SNS](./reference/aws-sns.html)
+- **Input transformer** / **TestEventPattern** / **Hub-and-spoke** — [ficha de EventBridge](./reference/aws-eventbridge.html)
+- **Budget action** / **Billing alarm** (`EstimatedCharges`) / **Cost Anomaly Detection** — [ficha de Budgets](./reference/aws-budgets.html)
+- **Subnet aislada** / **Gateway endpoint** / **Interface endpoint** / **Egress-only IGW** / **Referencia entre SGs** — [ficha de VPC](./reference/aws-vpc.html)
+- **Listener** / **Regla y prioridad** / **Target group** / **LCU** / **Deregistration delay** / **Cross-zone** — [ficha de ELB](./reference/aws-elb.html)
+- **Task definition** / **Task role vs execution role** / **Capacity provider (ECS)** / **`awsvpc`** — [ficha de ECS](./reference/aws-ecs.html)
+- **Lifecycle policy (ECR)** / **Pull-through cache** — [ficha de ECR](./reference/aws-ecr.html)
+- **Multi-AZ DB cluster** / **ACU** / **RDS Extended Support** / **DB subnet group** / **Blue/green deployment** — [ficha de RDS](./reference/aws-rds.html)
+- **Staging label** / **Managed rotation** / **Write-only argument** / **Ephemeral resource** — [ficha de Secrets Manager](./reference/aws-secretsmanager.html)
+- **Parameter Store** / **Session Manager** / **Port forwarding a host remoto** — [ficha de SSM](./reference/aws-ssm.html)
+- **OAC** / **Cache behavior** / **Cache key** / **Price class** / **VPC origin** / **Edge function** — [ficha de CloudFront](./reference/aws-cloudfront.html)
+- **Validación DNS** / **Certificado exportable** — [ficha de ACM](./reference/aws-acm.html)
+- **Hosted zone** / **Registro ALIAS** / **Delegation set** / **Routing policy** / **Resolver endpoint** — [ficha de Route 53](./reference/aws-route53.html)
+- **Extended support (EKS)** / **IRSA** / **Pod Identity** / **Access entry** / **Karpenter** / **Auto Mode** / **Two-phase apply** — [ficha de EKS](./reference/aws-eks.html)
+- **OIDC federation** / **`sub` claim** / **External ID** / **Role chaining** / **Instance profile** / **Service-linked role** — [ficha de IAM](./reference/aws-iam.html); vocabulario del proyecto 07
 
 ## AWS
 

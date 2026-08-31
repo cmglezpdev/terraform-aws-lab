@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon CloudFront</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon CloudFront</h1>
+  <p class="deck">La CDN de AWS: cientos de <em>edge locations</em> repartidas por el mundo
+  guardan copias de tu contenido y responden desde la más cercana al visitante. Pero el
+  producto real no es «va más rápido»: es que el borde se convierte en la <strong>única
+  puerta</strong> de tu aplicación — TLS, dominio propio, WAF, control de acceso y caché
+  dejan de vivir en el origen, y el origen deja de estar expuesto.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Red / entrega de contenido (CDN)</dd></div>
+    <div><dt>Ámbito</dt><dd><strong>Global</strong> — el plano de control vive en <code>us-east-1</code></dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> con free tier permanente</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — una distribución sin tráfico cuesta 0,00 USD</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_cloudfront_distribution</code></dd></div>
+    <div><dt>Aparece en</dt><dd>proyecto 05 (frontend estático global con TLS)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un proxy inverso cacheante desplegado en cientos de centros de datos (los <em>edge
+locations</em> o POPs). Tú declaras una <strong>distribución</strong>: de dónde sacar el
+contenido (los <strong>origins</strong>), qué reglas aplicar según la ruta pedida (los
+<strong>cache behaviors</strong>) y con qué dominio y certificado atender a los visitantes.
+CloudFront replica esa <em>configuración</em> —no tu contenido— a todos sus POPs, y a
+partir de ahí cada POP resuelve por su cuenta: si tiene el objeto fresco lo devuelve; si no,
+lo pide al origen por la red troncal de AWS, lo guarda y lo devuelve.</p>
+<p>Existe porque un origen único tiene tres problemas a la vez —latencia para el que está
+lejos, carga proporcional al tráfico, y exposición directa a internet— y los tres se
+resuelven con la misma pieza: alguien delante que responda por él.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Una cadena de librerías con un único almacén central. Cada tienda pide al almacén el
+  libro que le falta, se queda una copia en la estantería, y el siguiente cliente se lo lleva
+  sin que el almacén se entere. Donde se rompe: las tiendas <strong>no se hablan entre
+  ellas</strong>. Que Madrid tenga el libro no significa que Tokio lo tenga; cuando publicas
+  una versión nueva, el almacén no llama a nadie — cada tienda se entera cuando su copia
+  caduca. Por eso «invalidar» es una operación explícita y no gratis del todo, y por eso el
+  truco profesional no es invalidar sino <em>cambiarle el nombre al libro</em>.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Servir un SPA desde un bucket privado</h3><p>Tu caso, el
+  proyecto 05: S3 guarda el <code>index.html</code> y los bundles, CloudFront pone el
+  dominio, el certificado y la caché, y el bucket <strong>no tiene ni una política
+  pública</strong>. Sin CloudFront tendrías que abrir el bucket a internet y renunciar a
+  HTTPS con dominio propio.</p></div>
+  <div class="ref-card"><h3>Quitarle el 90 % del tráfico al origen</h3><p>Un ALB con dos
+  instancias que aguantaba 500 req/s pasa a recibir 50: el resto lo sirve el borde. No es
+  optimización prematura — es la diferencia entre escalar el cómputo y no escalarlo.</p></div>
+  <div class="ref-card"><h3>Poner TLS y WAF delante de una API</h3><p>Certificado
+  gestionado, política de TLS mínima, reglas de AWS WAF y restricción por país aplicadas
+  <em>antes</em> de que la petición entre en tu región. El origen solo ve lo que
+  sobrevivió.</p></div>
+  <div class="ref-card"><h3>Esconder un ALB o una EC2 en subred privada</h3><p>Con
+  <strong>VPC origins</strong> (2024) el balanceador deja de tener IP pública: CloudFront
+  entra por un enlace privado y es la única entrada posible. Adiós a las listas de rangos
+  IP que había que mantener a mano.</p></div>
+  <div class="ref-card"><h3>Distribuir descargas o vídeo con control de acceso</h3><p>URLs
+  y cookies firmadas con caducidad: el fichero está en un bucket privado y solo lo sirve el
+  borde a quien tu aplicación autorizó, sin que tu backend transfiera un solo byte.</p></div>
+</div>
+
+<h2>El modelo: distribución, origins, behaviors, edge locations</h2>
+<p>Cuatro piezas y una regla de precedencia. Casi todos los errores de configuración salen
+de no tener este orden claro:</p>
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">de la petición al origen</span></div>
+<pre><code>  visitante
+     │  https://app.example.com/api/users?page=2
+     ▼
+  ┌──────────────── edge location más cercana ────────────────┐
+  │ 1. TLS con TU certificado (ACM, us-east-1)                │
+  │ 2. ¿qué CACHE BEHAVIOR casa con la ruta /api/users?       │
+  │      /api/*   ─── behavior 1  (el primero que casa gana)  │
+  │      /static/* ── behavior 2                              │
+  │      *        ─── default_cache_behavior (siempre último) │
+  │ 3. el behavior fija: origen, cache policy, TTLs,          │
+  │    métodos permitidos, funciones edge, compresión         │
+  │ 4. ¿está el objeto en caché bajo su CACHE KEY?            │
+  │      sí → responde (X-Cache: Hit from cloudfront)         │
+  │      no → 5                                               │
+  └───────────────────────────┬───────────────────────────────┘
+                              │ red troncal de AWS
+                              ▼
+                       ORIGIN (S3 / ALB / VPC origin / HTTP)
+</code></pre>
+</div>
+<ul>
+  <li><strong>Los behaviors se evalúan en orden y gana el primero que casa.</strong> No es
+  «el más específico»: es el orden de la lista. Si pones <code>*</code> el primero, los
+  demás no se ejecutan jamás. En Terraform el <code>default_cache_behavior</code> es
+  siempre el último y el que atrapa lo que nadie quiso.</li>
+  <li><strong>El <em>cache key</em> decide si hay hit.</strong> Por defecto es solo la ruta.
+  Todo lo que añadas (una query string, una cabecera, una cookie) multiplica el número de
+  copias que el borde debe guardar y divide tu <em>hit ratio</em>. Cachear peor es la forma
+  más habitual de gastar más y ir más lento a la vez.</li>
+  <li><strong>Cada POP cachea por su cuenta.</strong> No hay caché global compartida. Un
+  objeto poco pedido en un POP puede ser <em>desalojado antes de caducar</em> para hacer
+  sitio a otro más popular.</li>
+  <li><strong>El objeto viaja por la red de AWS, no por internet.</strong> Esa es la mitad
+  de la mejora de latencia; la otra mitad es no cruzar el océano en absoluto.</li>
+</ul>
+
+<h3>Qué es global y qué es regional aquí</h3>
+<p>CloudFront es de los pocos servicios de AWS con <strong>ámbito global</strong>: la
+distribución no vive en una región, y en la consola aparece con la región fijada a
+<code>us-east-1</code> porque ahí está su plano de control. Consecuencias prácticas que
+sorprenden:</p>
+<ul>
+  <li>El <strong>certificado ACM</strong> debe estar en <code>us-east-1</code> aunque tu
+  bucket y tu equipo estén en <code>eu-west-1</code>. Es la razón por la que el proyecto 05
+  introduce <code>provider</code> con <code>alias</code>. Detalle abajo, en
+  <a href="#us-east-1">el requisito de us-east-1</a>.</li>
+  <li>La <strong>web ACL de AWS WAF</strong> para CloudFront también se crea con
+  <em>scope</em> <code>CLOUDFRONT</code> en <code>us-east-1</code>.</li>
+  <li>Las <strong>métricas de CloudWatch</strong> de una distribución están en
+  <code>us-east-1</code>, no en tu región.</li>
+  <li>Los <strong>logs</strong> y las <strong>invalidaciones</strong> son globales.</li>
+</ul>
+<p class="small">La distinción global / regional / zonal, con el mapa completo de qué cae
+en cada cubo, está en <a href="./aws-fundamentos.html">la ficha de fundamentos de AWS</a>.</p>
+
+<h2>Los tipos que existen</h2>
+
+<h3>Tipos de distribución</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué lo distingue</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Standard</strong></td>
+      <td>Una distribución = una configuración. Es lo que crea
+      <code>aws_cloudfront_distribution</code>.</td>
+      <td><strong>Tu caso.</strong> Un sitio, unos dominios, una configuración propia.
+      «Most people start with a standard distribution», dice la doc.</td></tr>
+    <tr><td><strong>Multi-tenant</strong> (CloudFront SaaS Manager)</td>
+      <td>Una plantilla + N <em>distribution tenants</em> que la heredan con parámetros.
+      Hasta 10 000 tenants por cuenta.</td>
+      <td>Eres un SaaS y das dominio propio a cada cliente. Fuera del alcance de este
+      curso, y además incompatible con los planes de tarifa plana.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Las distribuciones <em>staging</em> (continuous deployment) son un tercer
+sabor: una copia de la principal a la que puedes desviar un porcentaje del tráfico para
+probar cambios de configuración. Cuota: 20 por cuenta.</p>
+
+<h3>Tipos de origen — y por qué el proyecto 05 elige uno concreto</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Origen</th><th>Qué es</th><th>Acceso privado</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Bucket S3 (endpoint REST)</strong></td>
+      <td><code>bucket.s3.region.amazonaws.com</code></td>
+      <td><strong>Sí, con OAC</strong></td>
+      <td>El del proyecto 05. Bucket cerrado a cal y canto, HTTPS obligatorio hasta S3.</td></tr>
+    <tr><td><strong>Bucket S3 como <em>website endpoint</em></strong></td>
+      <td><code>bucket.s3-website-region.amazonaws.com</code></td>
+      <td><strong>No</strong> — ni OAC ni OAI</td>
+      <td>Gana <code>index.html</code> por carpeta y redirecciones, pero <strong>S3 no
+      habla HTTPS en ese endpoint</strong>: el tramo CloudFront→origen sería HTTP y el
+      bucket tiene que ser público.</td></tr>
+    <tr><td><strong>Custom origin</strong></td>
+      <td>Cualquier HTTP/HTTPS público: ALB, API Gateway, tu servidor</td>
+      <td>Solo por convención (cabecera secreta)</td>
+      <td>El origen sigue teniendo IP pública. Se protege con una cabecera compartida más
+      WAF, que es un cerrojo de cortesía.</td></tr>
+    <tr><td><strong>VPC origin</strong> <em>(nov. 2024)</em></td>
+      <td>ALB, NLB o EC2 <strong>en subred privada</strong>, sin IP pública</td>
+      <td><strong>Sí, de verdad</strong></td>
+      <td>Enlace privado gestionado; CloudFront crea un security group
+      <code>CloudFront-VPCOrigins-Service-SG</code>. <strong>Sin coste adicional.</strong>
+      25 VPC origins por cuenta.</td></tr>
+    <tr><td><strong>Lambda function URL</strong></td>
+      <td>La URL directa de una Lambda</td>
+      <td>Sí, con OAC (<code>origin_access_control_origin_type = "lambda"</code>)</td>
+      <td>Alternativa a API Gateway para casos simples.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Si el origen es un bucket y el contenido es estático: <strong>endpoint REST + OAC</strong>,
+  y resuelve el <code>index.html</code> de subcarpetas con una CloudFront Function o con
+  <code>custom_error_response</code>. Solo baja al <em>website endpoint</em> si necesitas
+  sus redirecciones y aceptas un bucket público. Si el origen es una app en tu VPC:
+  <strong>VPC origin</strong>, que es gratis y quita la IP pública de la ecuación.</p>
+</div>
+
+<h3>Price classes: pagar por menos mundo</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Valor</th><th>Qué edge locations usa</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><code>PriceClass_All</code> <em>(por defecto)</em></td>
+      <td>Las ocho regiones geográficas: todo el mundo</td>
+      <td>Audiencia global. <strong>Obligatorio</strong> si quieres Anycast static IPs.</td></tr>
+    <tr><td><code>PriceClass_200</code></td>
+      <td>Todo <em>menos</em> Sudamérica y Australia/Nueva Zelanda</td>
+      <td>Punto medio: cubre EE. UU., Europa, Asia, Oriente Medio y Sudáfrica.</td></tr>
+    <tr><td><code>PriceClass_100</code></td>
+      <td>Solo Estados Unidos/México/Canadá y Europa/Israel/Türkiye</td>
+      <td>Tu audiencia es de esos dos bloques. Es el más barato por GB.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>No es que los demás países dejen de poder entrar: siguen entrando, pero servidos desde
+un POP más lejano dentro de las regiones que sí pagas. Cambias latencia por precio. Con el
+free tier de 1 TB, <strong>para el proyecto 05 la price class es irrelevante en la
+factura</strong>; déjala en <code>PriceClass_All</code> salvo que midas tu audiencia.</p>
+
+<h2 id="oac">OAC vs OAI: el patrón del proyecto 05</h2>
+<p>El problema: quieres que el bucket sea privado y que <em>solo</em> CloudFront pueda
+leerlo. La solución vigente se llama <strong>Origin Access Control (OAC)</strong>.
+La anterior se llama <strong>Origin Access Identity (OAI)</strong>, es legacy, y
+<strong>media internet la sigue enseñando</strong> — incluido el ejemplo del propio
+provider de Terraform, que aún usa <code>s3_origin_config</code> con OAI.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>OAC (usa esto)</th><th>OAI (legacy)</th></tr></thead>
+  <tbody>
+    <tr><td>Cómo se autentica</td><td>SigV4: CloudFront <strong>firma</strong> cada petición al bucket</td><td>Un principal IAM especial <code>arn:aws:iam::cloudfront:user/…</code></td></tr>
+    <tr><td>Principal en la política</td><td><code>Service: cloudfront.amazonaws.com</code> + condición <code>AWS:SourceArn</code></td><td><code>AWS: arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity …</code></td></tr>
+    <tr><td>Regiones opt-in (posteriores a ene. 2023)</td><td>Todas</td><td><strong>No soportadas</strong></td></tr>
+    <tr><td>Cifrado SSE-KMS</td><td>Sí (añadiendo permiso en la key policy)</td><td><strong>No</strong></td></tr>
+    <tr><td><code>PUT</code> / <code>DELETE</code> hacia S3</td><td>Sí</td><td><strong>No</strong></td></tr>
+    <tr><td>Recurso Terraform</td><td><code>aws_cloudfront_origin_access_control</code></td><td><code>aws_cloudfront_origin_access_identity</code></td></tr>
+    <tr><td>Estado en AWS</td><td>Recomendado</td><td>«Legacy, not recommended»; listado como <em>legacy feature</em> incompatible con los planes de tarifa plana</td></tr>
+  </tbody>
+</table>
+</div>
+<p>La pieza que la gente olvida: <strong>crear el OAC no da permiso a nada</strong>. El
+permiso vive en la política del bucket, y la condición <code>AWS:SourceArn</code> es lo que
+impide que <em>cualquier</em> distribución de <em>cualquier</em> cuenta de AWS lea tu bucket
+por el mero hecho de que el principal sea el servicio CloudFront.</p>
+<div class="code">
+  <div class="code-label"><span>política de bucket</span><span class="tag">json — la que recomienda AWS</span></div>
+<pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "AllowCloudFrontServicePrincipalReadOnly",
+    "Effect": "Allow",
+    "Principal": { "Service": "cloudfront.amazonaws.com" },
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::mi-bucket/*",
+    "Condition": {
+      "StringEquals": {
+        "AWS:SourceArn": "arn:aws:cloudfront::111122223333:distribution/E1234ABCDEF"
+      }
+    }
+  }]
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Las tres trampas del OAC</span>
+  <ul>
+    <li><strong>Sin <code>AWS:SourceArn</code>, el bucket es de todo el mundo.</strong> El
+    principal <code>cloudfront.amazonaws.com</code> lo comparten todas las cuentas de AWS.
+    Un <code>Allow</code> sin condición es, en la práctica, un bucket público con pasos
+    extra.</li>
+    <li><strong><code>signing_behavior</code> tiene que ser <code>always</code></strong>.
+    Con <code>never</code> el OAC no firma nada y el bucket tendría que ser público; con
+    <code>no-override</code> solo firma cuando el visitante no mandó
+    <code>Authorization</code>. Además, <em>solo</em> con <code>always</code> el tramo
+    CloudFront→S3 va siempre por HTTPS.</li>
+    <li><strong>El bucket debe tener <em>Object Ownership</em> en <code>BucketOwnerEnforced</code></strong>
+    (el valor por defecto en buckets nuevos: ACLs desactivadas). Y no puede ser un
+    <em>website endpoint</em>: ahí el OAC no aplica.</li>
+  </ul>
+</div>
+<p class="small">Ciclo de dependencias: la política del bucket necesita el ID de la
+distribución, y la distribución necesita el bucket. Terraform lo resuelve sin ayuda porque
+<code>aws_cloudfront_distribution</code> no depende de <code>aws_s3_bucket_policy</code> —
+crea primero la distribución (con el bucket como origen) y después la política. Durante los
+~15 minutos del despliegue verás 403; es normal.</p>
+
+<h2>Cómo funciona por dentro: caché, TTLs e invalidaciones</h2>
+
+<h3>Las policies modernas frente a <code>forwarded_values</code></h3>
+<p>CloudFront separó en 2020 lo que antes era un solo bloque confuso. Hoy hay
+<strong>tres policies</strong> por behavior, cada una con su propio recurso Terraform y con
+versiones <em>managed</em> (creadas y mantenidas por AWS, gratis, con ID fijo):</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Policy</th><th>Qué decide</th><th>Managed útil</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Cache policy</strong><br><code>aws_cloudfront_cache_policy</code></td>
+      <td>Qué entra en el <em>cache key</em> (query strings, headers, cookies) y los TTL
+      mínimo, máximo y por defecto. Lo que entra aquí <em>también</em> se reenvía al
+      origen.</td>
+      <td><code>CachingOptimized</code> (nada en la clave salvo la ruta, compresión
+      activada) — el correcto para un frontend estático.<br>
+      <code>CachingDisabled</code> para rutas dinámicas.</td></tr>
+    <tr><td><strong>Origin request policy</strong><br><code>aws_cloudfront_origin_request_policy</code></td>
+      <td>Qué se reenvía al origen <em>sin</em> formar parte del cache key. Es la respuesta
+      a «necesito la cabecera pero no quiero fragmentar la caché».</td>
+      <td><code>AllViewerExceptHostHeader</code> para orígenes tipo ALB o API Gateway.</td></tr>
+    <tr><td><strong>Response headers policy</strong><br><code>aws_cloudfront_response_headers_policy</code></td>
+      <td>Cabeceras que CloudFront <strong>añade a la respuesta</strong> sin tocar el
+      origen: CORS, HSTS, CSP, <code>X-Frame-Options</code>.</td>
+      <td><code>SecurityHeadersPolicy</code>: te da las cabeceras de seguridad sin escribir
+      una línea en el bucket.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Internet te va a enseñar <code>forwarded_values</code></span>
+  <p>El bloque <code>forwarded_values { query_string, cookies, headers }</code> es el
+  mecanismo <strong>legacy</strong>. Está marcado <strong>Deprecated</strong> en el provider
+  de AWS («use <code>cache_policy_id</code> or <code>origin_request_policy_id</code>
+  instead»), y AWS lo lista como <em>legacy feature</em> incompatible con los planes de
+  tarifa plana. Lo malo: <strong>el ejemplo principal de la documentación del propio
+  recurso <code>aws_cloudfront_distribution</code> todavía lo usa</strong>, y de ahí lo
+  copia la mitad de los blogs. Si ves <code>forwarded_values</code> en un tutorial, el
+  tutorial es de antes de 2021 aunque tenga fecha de ayer.</p>
+</div>
+
+<h3>TTLs contra <code>Cache-Control</code>: quién manda</h3>
+<p>Sin cache policy, el TTL por defecto es <strong>24 horas</strong>. Con policy, los tres
+valores (mínimo, por defecto, máximo) negocian con lo que diga el origen. La tabla completa,
+resumida a lo que necesitas:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>El origen manda…</th><th>Con TTL mínimo = 0</th><th>Con TTL mínimo &gt; 0</th></tr></thead>
+  <tbody>
+    <tr><td><code>Cache-Control: max-age=N</code></td>
+      <td>Cachea el <strong>menor</strong> entre <code>N</code> y el TTL máximo</td>
+      <td>Se recorta a mínimo y máximo: si <code>N</code> está entre ambos, gana <code>N</code></td></tr>
+    <tr><td>Nada</td>
+      <td>Cachea el <strong>TTL por defecto</strong></td>
+      <td>El <strong>mayor</strong> entre TTL mínimo y TTL por defecto</td></tr>
+    <tr><td><code>max-age</code> + <code>s-maxage</code></td>
+      <td>CloudFront obedece a <code>s-maxage</code>; el navegador a <code>max-age</code></td>
+      <td>Igual, recortado a mínimo/máximo</td></tr>
+    <tr><td><code>no-cache</code> / <code>no-store</code> / <code>private</code></td>
+      <td>CloudFront y navegador los <strong>respetan</strong></td>
+      <td><strong>Los ignora</strong> y cachea el TTL mínimo ⚠️</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Esa última fila es la trampa cara: un TTL mínimo &gt; 0 <strong>anula</strong> el
+<code>no-store</code> de tu origen. Si vas a servir algo verdaderamente privado por una
+ruta, usa la managed <code>CachingDisabled</code>, no un TTL mínimo «pequeñito».</p>
+<p>CloudFront también entiende <code>stale-while-revalidate</code> (sirve la copia caducada
+mientras refresca en segundo plano) y <code>stale-if-error</code> (sigue sirviendo si el
+origen devuelve 5xx). Ambos se limitan al TTL máximo del behavior, gane quien gane.</p>
+
+<h3>Invalidaciones vs nombres versionados</h3>
+<p>Las <strong>primeras 1 000 rutas de invalidación al mes son gratis por cuenta</strong>
+(no por distribución); a partir de ahí, <strong>0,005 USD por ruta</strong>. Un
+<code>/*</code> cuenta como <strong>una</strong> ruta. Suena a que invalidar es gratis, y
+para un proyecto pequeño lo es. Pero AWS recomienda explícitamente lo contrario, y las
+razones son buenas:</p>
+<div class="verdict">
+  <div class="yes"><h3>Nombres versionados (<code>app.7f3a1c.js</code>)</h3><ul>
+    <li>Controlas también las cachés que <strong>no son tuyas</strong>: el navegador y el
+    proxy corporativo. Invalidar el borde no vacía el navegador del usuario.</li>
+    <li>Puedes tener dos versiones vivas a la vez: rollback instantáneo, despliegues
+    canary.</li>
+    <li>Los access logs distinguen qué versión sirvió qué.</li>
+    <li>Es gratis y no tiene latencia de propagación.</li>
+  </ul></div>
+  <div class="no"><h3>Invalidación</h3><ul>
+    <li>Es la herramienta correcta para el <strong>puñado de ficheros que no pueden llevar
+    hash</strong>: <code>index.html</code>, <code>manifest.json</code>,
+    <code>sitemap.xml</code>.</li>
+    <li>Tarda en propagarse a todos los POPs (minutos).</li>
+    <li>Cuota de ritmo: 150 rutas o tags por segundo; <strong>una sola invalidación
+    comodín por segundo</strong>.</li>
+  </ul></div>
+</div>
+<p><strong>La receta honesta para el proyecto 05:</strong> que el build ponga hash en el
+nombre de todos los assets, súbelos con <code>Cache-Control: max-age=31536000, immutable</code>,
+y deja el <code>index.html</code> con <code>max-age=0, must-revalidate</code> invalidando
+solo <code>/index.html</code> en cada deploy. Un fichero por deploy: 1 000 despliegues
+gratis al mes.</p>
+<p class="small">Novedad reciente: además de rutas, ahora se puede <strong>invalidar por
+cache tags</strong> (marcas que el origen pone en la respuesta), lo que permite tirar un
+grupo lógico de objetos sin enumerar rutas. Comparte la cuota de 150/segundo.</p>
+
+<h2>CloudFront Functions vs Lambda@Edge</h2>
+<p>Dos formas de ejecutar código en el borde, y no son «la barata y la cara»: son
+herramientas de tamaños distintos. La tabla es la fuente de la decisión.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>CloudFront Functions</th><th>Lambda@Edge</th></tr></thead>
+  <tbody>
+    <tr><td>Lenguaje</td><td>JavaScript (ECMAScript 5.1)</td><td>Node.js y Python</td></tr>
+    <tr><td>Triggers</td><td><strong>Solo</strong> viewer request y viewer response</td><td>Los cuatro: viewer request/response y <strong>origin request/response</strong></td></tr>
+    <tr><td>Duración</td><td>Submilisegundo</td><td>Hasta <strong>30 segundos</strong></td></tr>
+    <tr><td>Memoria máxima</td><td><strong>2 MB</strong></td><td>128 MB (viewer) / 10 240 MB (origin)</td></tr>
+    <tr><td>Tamaño del código + librerías</td><td><strong>10 KB</strong> (no ajustable)</td><td>50 MB comprimido</td></tr>
+    <tr><td>Escala</td><td>Millones de peticiones/s</td><td>10 000 peticiones/s por región</td></tr>
+    <tr><td>Acceso a red (llamar a otra API, al SDK)</td><td><strong>No</strong></td><td>Sí</td></tr>
+    <tr><td>Sistema de ficheros</td><td>No</td><td>Sí</td></tr>
+    <tr><td>Cuerpo de la petición</td><td><strong>No</strong></td><td>Sí</td></tr>
+    <tr><td>Geolocalización y datos de dispositivo</td><td>Sí</td><td>No en viewer; sí en origin</td></tr>
+    <tr><td>KeyValueStore (datos externos al código)</td><td>Sí (runtime JS 2.0)</td><td>No</td></tr>
+    <tr><td>Precio</td><td><strong>0,10 USD/millón</strong> · 2 M/mes gratis siempre</td><td><strong>0,60 USD/millón</strong> + 0,00005001 USD por GB-segundo · <strong>sin free tier</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Si lo que haces es <strong>mirar y reescribir la petición o la respuesta</strong>
+  —normalizar el cache key, añadir cabeceras, redirigir, reescribir <code>/docs</code> a
+  <code>/docs/index.html</code>, validar un JWT ya firmado— es <strong>CloudFront
+  Functions</strong>: seis veces más barata, con free tier, y corre en todos los POPs.
+  Salta a <strong>Lambda@Edge</strong> solo cuando necesites algo que Functions no
+  <em>puede</em> hacer: llamar a otro servicio, leer el body, usar una librería, o
+  engancharte al <code>origin request</code> (por ejemplo, para elegir origen dinámicamente).
+  Ojo con la asimetría: Lambda@Edge no ve geolocalización en los triggers de viewer, y
+  Functions no ve los triggers de origin.</p>
+</div>
+<p class="small">Un tercer sabor reciente, <strong>Connection Functions</strong>, se ejecuta
+en el establecimiento de la conexión (antes de la petición HTTP). Mismos límites de 10 KB y
+2 MB. No hace falta para nada de este curso.</p>
+
+<h2>Seguridad en el borde</h2>
+<ul>
+  <li><strong>Signed URLs vs signed cookies.</strong> Misma criptografía (clave privada
+  tuya, clave pública en un <em>key group</em> asociado al behavior; RSA 2048 o ECDSA 256),
+  distinto alcance. <strong>URL firmada</strong> para <em>un fichero</em> o cuando el
+  cliente no soporta cookies (un instalador, un PDF). <strong>Cookie firmada</strong> para
+  <em>muchos ficheros</em> sin cambiar las URLs (todos los segmentos de un vídeo HLS, el
+  área de suscriptores). Si usas las dos, <strong>la URL firmada tiene prioridad</strong>.
+  Política <em>canned</em> = solo caducidad; política <em>custom</em> = además fecha de
+  inicio, rango de IPs y comodines en el recurso.</li>
+  <li><strong>Geo restriction.</strong> Lista blanca o negra de países, resuelta en el borde
+  por base de datos GeoIP. Barata y suficiente para cumplimiento de licencias; no es una
+  medida antifraude (una VPN la salta).</li>
+  <li><strong>AWS WAF.</strong> Se asocia la web ACL (scope <code>CLOUDFRONT</code>,
+  creada en <code>us-east-1</code>) a la distribución y filtra antes de la caché. Servicio
+  aparte, factura aparte.</li>
+  <li><strong>Field-level encryption.</strong> Cifra hasta 10 campos concretos de un
+  formulario con una clave pública tuya, de modo que ni tus propios servicios intermedios
+  ven el número de tarjeta: solo el que tiene la privada. 0,02 USD por cada 10 000
+  peticiones. Nicho, pero conviene saber que existe.</li>
+  <li><strong>mTLS de visitante</strong> (mutual authentication) con <em>trust stores</em>,
+  y sus <em>connection logs</em>. Para APIs entre máquinas.</li>
+  <li><strong>Origin failover.</strong> Un <em>origin group</em> declara un origen primario
+  y uno secundario y una lista de códigos de estado (403, 404, 500, 502…) ante los cuales
+  CloudFront reintenta contra el secundario. 10 grupos por distribución. Es lo que convierte
+  dos buckets en dos regiones en un frontend con failover — sin Route 53 health checks.</li>
+  <li><strong>HTTP/3 (QUIC).</strong> Se activa con
+  <code>http_version = "http2and3"</code>. Exige TLS 1.3 y SNI en el cliente, y soporta
+  <em>connection migration</em>: el móvil que pasa de wifi a 5G no pierde la conexión. No
+  cuesta nada activarlo.</li>
+</ul>
+
+<h2>Novedades que cambian lo que dice internet (2024–2026)</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Novedad</th><th>Qué cambia</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><strong>VPC origins</strong> (nov. 2024)</td>
+      <td>ALB, NLB y EC2 en subred privada como origen. Antes, la única forma de «proteger»
+      un ALB detrás de CloudFront era una cabecera secreta más una lista de rangos IP que
+      había que refrescar.</td>
+      <td><strong>Sin coste adicional</strong></td></tr>
+    <tr><td><strong>Anycast static IPs</strong> (nov. 2024)</td>
+      <td>21 IPs dedicadas a tu cuenta (o 3 para apuntar un dominio apex con registros A).
+      Sirven para que un operador o un firewall corporativo te ponga en lista blanca.
+      Requiere <code>PriceClass_All</code> y aprobación previa de AWS.</td>
+      <td><strong>3 000 USD/mes por lista</strong> ⚠️</td></tr>
+    <tr><td><strong>Planes de tarifa plana</strong> (2025)</td>
+      <td>Free / Pro / Business / Premium: un precio fijo al mes, sin cargos por exceso, que
+      empaqueta CDN + WAF + Route 53 + certificado + edge compute. Rompe el modelo mental
+      «CloudFront es puro pago por uso».</td>
+      <td>0 / 15 / 200 / 1 000 USD al mes</td></tr>
+    <tr><td><strong>Multi-tenant distributions</strong> (2025)</td>
+      <td>Plantilla + tenants para SaaS con dominio por cliente.</td>
+      <td>Pago por uso</td></tr>
+    <tr><td><strong>Invalidación por cache tags</strong></td>
+      <td>Purgar un grupo lógico sin enumerar rutas.</td>
+      <td>Comparte cuota de invalidaciones</td></tr>
+    <tr><td><strong>OAI y <code>forwarded_values</code> marcados <em>legacy</em></strong></td>
+      <td>AWS los lista explícitamente como funciones heredadas. Casi todos los tutoriales
+      de S3 + CloudFront que encuentres siguen usando OAI.</td>
+      <td>—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en
+<a href="https://aws.amazon.com/cloudfront/pricing/pay-as-you-go/">la página de precios
+pay-as-you-go</a> y la <a href="https://aws.amazon.com/cloudfront/pricing/">página de
+precios</a>. Los precios de transferencia son por <strong>región geográfica del visitante</strong>,
+no de tu bucket; los de la tabla son Norteamérica salvo indicación.</p>
+
+<h3>El free tier «siempre gratis»</h3>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Cantidad gratis al mes</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td>Transferencia de datos a internet</td><td><strong>1 TB</strong></td><td>Por cuenta, todos los meses, sin caducidad</td></tr>
+    <tr><td>Peticiones HTTP o HTTPS</td><td><strong>10 000 000</strong></td><td>Idem</td></tr>
+    <tr><td>Invocaciones de CloudFront Functions</td><td><strong>2 000 000</strong></td><td>Idem</td></tr>
+    <tr><td>Lecturas de KeyValueStore</td><td><strong>2 000 000</strong></td><td>Idem</td></tr>
+    <tr><td>Transferencia origen → CloudFront desde orígenes AWS</td><td><strong>Ilimitada</strong></td><td>S3, ELB y API Gateway: «always free». Solo pagas la salida del borde al visitante</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout win">
+  <span class="callout-title">La pregunta del cambio de free tier de 2025-07-15</span>
+  <p>El 15 de julio de 2025 AWS sustituyó el free tier clásico para <strong>cuentas
+  nuevas</strong>: desaparecieron los 12 meses de prueba y las cuentas nuevas eligen entre
+  un plan Free y uno Paid. Lo que <strong>no</strong> cambió es la categoría
+  <em>always free</em>, y el 1 TB + 10 M peticiones de CloudFront está en ella: sigue
+  siendo permanente, para cuentas viejas y nuevas. Sí hay una letra pequeña que conviene
+  conocer: según la FAQ de CloudFront, ese free tier <strong>aplica solo al modo
+  pay-as-you-go</strong> — si suscribes una distribución a un plan de tarifa plana, no se
+  suman. Las cuentas creadas antes del 15 de julio de 2025 siguen con el free tier
+  clásico.</p>
+</div>
+
+<h3>Lo que se paga cuando te pasas</h3>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio (us-east-1 / Norteamérica)</th></tr></thead>
+  <tbody>
+    <tr><td>Distribución desplegada sin tráfico</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — <strong>no hay coste por hora</strong></td></tr>
+    <tr><td>Transferencia a internet, siguientes 9 TB</td><td>por GB</td><td><code>0,085 USD/GB</code> (Europa igual)</td></tr>
+    <tr><td>Transferencia a internet, siguientes 40 TB</td><td>por GB</td><td><code>0,080 USD/GB</code></td></tr>
+    <tr><td>Transferencia a internet, siguientes 100 TB</td><td>por GB</td><td><code>0,060 USD/GB</code></td></tr>
+    <tr><td>Transferencia a internet, Asia-Pacífico</td><td>por GB</td><td><code>0,109–0,120 USD/GB</code></td></tr>
+    <tr><td>Peticiones HTTPS</td><td>por 10 000</td><td><code>0,0100 USD</code> (Norteamérica) · <code>0,0120 USD</code> (Europa)</td></tr>
+    <tr><td>Peticiones HTTP</td><td>por 10 000</td><td><code>0,0075–0,0160 USD</code> según región</td></tr>
+    <tr><td>Invalidaciones</td><td>1 000 rutas gratis/mes, luego por ruta</td><td><code>0,005 USD/ruta</code></td></tr>
+    <tr><td>CloudFront Functions</td><td>por millón (2 M gratis)</td><td><code>0,10 USD</code></td></tr>
+    <tr><td>Lambda@Edge</td><td>por millón + GB-segundo</td><td><code>0,60 USD</code> + <code>0,00005001 USD/GB-s</code></td></tr>
+    <tr><td>KeyValueStore</td><td>por millón de lecturas (2 M gratis)</td><td><code>0,03 USD</code></td></tr>
+    <tr><td>Logs en tiempo real</td><td>por millón de líneas</td><td><code>0,01 USD</code></td></tr>
+    <tr><td>Origin Shield</td><td>por 10 000 peticiones</td><td><code>0,0075–0,0160 USD</code></td></tr>
+    <tr><td>Field-level encryption</td><td>por 10 000 peticiones</td><td><code>0,02 USD</code></td></tr>
+    <tr><td><strong>Anycast static IPs</strong></td><td><span class="tag-cost hour">por mes</span></td><td><code>3 000 USD/mes por lista</code> ⚠️</td></tr>
+    <tr><td><strong>Dedicated IP custom SSL</strong> (<code>ssl_support_method = "vip"</code>)</td><td><span class="tag-cost hour">por mes</span></td><td><code>600 USD/mes</code> ⚠️</td></tr>
+    <tr><td>VPC origins</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Certificado ACM público</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — ver <a href="./aws-acm.html">ficha de ACM</a></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Los planes de tarifa plana (2025)</h3>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Plan</th><th>Precio/mes</th><th>Peticiones incluidas</th><th>Transferencia incluida</th></tr></thead>
+  <tbody>
+    <tr><td>Free</td><td><code>0 USD</code></td><td>1 M</td><td>100 GB</td></tr>
+    <tr><td>Pro</td><td><code>15 USD</code></td><td>10 M</td><td>50 TB</td></tr>
+    <tr><td>Business</td><td><code>200 USD</code></td><td>125 M</td><td>50 TB</td></tr>
+    <tr><td>Premium</td><td><code>1 000 USD</code> (configurable hasta 10 000)</td><td>500 M (hasta 6 B)</td><td>50 TB (hasta 600 TB)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Incluyen CDN + AWS WAF y protección DDoS + bot management + Route 53 + certificado TLS +
+edge compute + ingesta de CloudWatch Logs + créditos de S3. <strong>No hay cargos por
+exceso</strong>: si te pasas mucho y de forma sostenida, AWS «ajusta cómo entrega tu
+tráfico» (POPs más lejanos) en vez de cobrarte. Las peticiones que bloquea el WAF no
+cuentan contra el cupo. Cuotas: 100 planes por cuenta, <strong>3 planes Free</strong>, un
+dominio apex por plan. Incompatibles con multi-tenant, continuous deployment, Anycast IPs,
+logs en tiempo real, FLE, OAI y <code>ForwardedValues</code>.</p>
+<div class="callout cost">
+  <span class="callout-title">Tu factura del proyecto 05: 0,00 USD</span>
+  <p>Un frontend estático de un portfolio mueve, siendo generosos, 5 GB y 300 000 peticiones
+  al mes. Eso es el <strong>0,5 % del TB gratis</strong> y el <strong>3 % de los 10 M de
+  peticiones gratis</strong>. La transferencia de S3 a CloudFront no se factura por ser S3
+  un origen AWS. El certificado de ACM es gratis. Route 53 sí cobra: 0,50 USD/mes por hosted
+  zone. <strong>Total realista del proyecto 05: 0,50 USD/mes, todo de Route 53.</strong></p>
+  <p>Lo que <em>sí</em> te arruinaría el presupuesto de 30 USD: una lista de Anycast static
+  IPs (3 000 USD/mes), <code>ssl_support_method = "vip"</code> (600 USD/mes) o suscribirse
+  al plan Business por curiosidad (200 USD/mes). Los tres son opt-in explícito; ninguno se
+  activa solo.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-limits.html">Quotas
+de CloudFront</a>, consultada el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Certificados SSL por distribución</td><td><strong>1</strong></td><td><strong>No</strong> — un certificado tiene que cubrir todos los CNAMEs</td></tr>
+    <tr><td>Cache behaviors por distribución</td><td>75</td><td>Sí</td></tr>
+    <tr><td>Alternate domain names (CNAMEs) por distribución</td><td>100</td><td>Sí</td></tr>
+    <tr><td>Origins por distribución</td><td>100</td><td>Sí</td></tr>
+    <tr><td>Origin groups por distribución</td><td>10</td><td>Sí</td></tr>
+    <tr><td>Distribuciones por cuenta</td><td>500</td><td>Sí</td></tr>
+    <tr><td>Cache / origin request / response headers policies custom</td><td>20 de cada, por cuenta</td><td>Sí</td></tr>
+    <tr><td>Query strings, headers o cookies por policy</td><td>10 de cada</td><td>Sí</td></tr>
+    <tr><td>OACs por cuenta · distribuciones por OAC</td><td>100 · 100</td><td>Sí</td></tr>
+    <tr><td>VPC origins por cuenta</td><td>25</td><td>Sí</td></tr>
+    <tr><td>Invalidaciones</td><td>150 rutas o tags/s · <strong>1 comodín/s</strong></td><td>—</td></tr>
+    <tr><td>Fichero cacheable máximo (respuesta a un GET)</td><td>50 GB</td><td>—</td></tr>
+    <tr><td>Cuerpo de petición máximo</td><td>64 GB</td><td>—</td></tr>
+    <tr><td>Longitud máxima de URL</td><td>8 192 bytes</td><td><strong>No</strong></td></tr>
+    <tr><td>Longitud de petición/respuesta sin body (headers + query)</td><td>32 768 bytes</td><td><strong>No</strong></td></tr>
+    <tr><td>Response timeout por origen</td><td>1–120 s (por defecto 30)</td><td>Sí</td></tr>
+    <tr><td>Peticiones por segundo por distribución</td><td>250 000</td><td>Sí</td></tr>
+    <tr><td>Throughput por distribución</td><td>150 Gbps</td><td>Sí</td></tr>
+    <tr><td>Tamaño de una CloudFront Function</td><td><strong>10 KB</strong></td><td><strong>No</strong> — usa KeyValueStore para los datos</td></tr>
+    <tr><td>Distribuciones encadenadas (CloudFront delante de CloudFront)</td><td>2</td><td><strong>No</strong> — pasarse da 403</td></tr>
+    <tr><td>Compresión automática: rango de tamaños</td><td>1 000 – 10 000 000 bytes</td><td><strong>No</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">El «límite» que más se sufre no está en esta tabla: una distribución tarda
+<strong>~15 minutos</strong> en desplegar cada cambio, y durante ese rato el
+<code>terraform destroy</code> se bloquea. No es una cuota; es física.</p>
+
+<h2 id="us-east-1">El requisito famoso: el certificado va en us-east-1</h2>
+<p>Lo dice la documentación de ACM sin rodeos: «To use an ACM certificate with Amazon
+CloudFront, you must request or import the certificate in the US East (N. Virginia)
+region». No es una recomendación ni una optimización: si el ARN del certificado apunta a
+otra región, el <code>apply</code> falla.</p>
+<p>El porqué no es arbitrario. Los certificados de ACM son <strong>recursos regionales</strong>
+que no se copian entre regiones, y CloudFront no vive en ninguna región: su plano de control
+está en <code>us-east-1</code> y desde ahí distribuye el certificado a todos los POPs que la
+distribución use. Los servicios <em>regionales</em> (ALB, API Gateway regional) piden el
+certificado en <strong>su propia</strong> región, con la misma lógica.</p>
+<div class="callout tf">
+  <span class="callout-title">Por eso el proyecto 05 enseña <code>provider</code> con <code>alias</code></span>
+  <p>Tu bucket, tus tags y tu backend viven en la región que hayas elegido. El certificado
+  <strong>tiene</strong> que vivir en otra. Un solo <code>provider "aws"</code> no puede
+  estar en dos regiones a la vez: hace falta un segundo provider con
+  <code>alias</code>, y pasárselo explícitamente a los recursos de ACM. Es la primera vez en
+  el curso que un requisito de AWS obliga a una estructura concreta del código Terraform —
+  no al revés.</p>
+</div>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el patrón multi-región</span></div>
+<pre><code>provider "aws" {
+  region = "eu-west-1"          # el provider por defecto: bucket, Route 53 records…
+}
+
+provider "aws" {
+  alias  = "us_east_1"          # el segundo, solo para el certificado
+  region = "us-east-1"
+}
+
+resource "aws_acm_certificate" "cdn" {
+  provider          = aws.us_east_1   # ← sin esta línea, CloudFront lo rechaza
+  domain_name       = "app.example.com"
+  validation_method = "DNS"
+
+  lifecycle { create_before_destroy = true }
+}</code></pre>
+</div>
+<p>Los detalles de validación, renovación y el trío
+<code>acm_certificate</code> + <code>route53_record</code> + <code>acm_certificate_validation</code>
+están en <a href="./aws-acm.html">la ficha de ACM</a>.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Sirves contenido estático y quieres dominio propio con HTTPS.</li>
+    <li>Quieres que el origen deje de estar expuesto a internet.</li>
+    <li>Tu audiencia está repartida geográficamente.</li>
+    <li>Quieres WAF, geo restriction o TLS moderno sin tocar el origen.</li>
+    <li>Quieres que el origen deje de recibir el grueso del tráfico.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Es una API dinámica, personalizada por usuario, sin nada cacheable, y todos tus
+    usuarios están en la misma región que el origen.</li>
+    <li>Necesitas conexiones no HTTP (SSH, bases de datos, gRPC sin TLS).</li>
+    <li>El contenido cambia por petición y no puedes tolerar un solo byte obsoleto —
+    piensa dos veces antes de <em>desactivar</em> la caché de una CDN.</li>
+  </ul></div>
+</div>
+<div class="callout why">
+  <span class="callout-title">La pregunta legítima: ¿aporta algo el borde a una API dinámica sin caché?</span>
+  <p>Menos de lo que parece, pero no cero. Lo que <strong>sí</strong> aporta aunque el hit
+  ratio sea 0 %:</p>
+  <ul>
+    <li><strong>Terminación TLS en el borde.</strong> El handshake (varios round-trips)
+    ocurre a 20 ms del usuario en vez de a 200 ms, y la conexión al origen se reutiliza
+    <em>keep-alive</em>. Para un usuario lejano eso es real y medible.</li>
+    <li><strong>Red troncal de AWS</strong> en lugar de peering público en el tramo largo.</li>
+    <li><strong>Un solo sitio donde poner WAF, mTLS, geo restriction y política de TLS</strong>,
+    y un origen que puede ser privado (VPC origin).</li>
+    <li><strong>Absorción de DDoS</strong> por AWS Shield Standard, incluido.</li>
+  </ul>
+  <p>Lo que <strong>no</strong> aporta: reducir carga del origen, ni latencia de la parte
+  que sí computa. Y añade: una pieza más que desplegar, ~15 minutos por cambio, y la
+  disciplina de decidir cache policy por ruta. <strong>El criterio:</strong> si tus usuarios
+  están cerca del origen y no necesitas WAF ni ocultar el origen, la CDN delante de una API
+  puramente dinámica es complejidad sin retorno. Si están lejos <em>o</em> quieres el
+  origen privado, sí compensa aunque no cachee nada.</p>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>S3 website endpoint a pelo</strong></td>
+      <td>S3 sirve HTML por HTTP con <code>index.html</code> por carpeta, pero
+      <strong>no soporta HTTPS</strong> ni certificados propios, y el bucket debe ser
+      público.</td>
+      <td>Nunca para algo público con dominio propio. Es exactamente por eso que el
+      proyecto 05 no lo usa: sin TLS no hay proyecto.</td></tr>
+    <tr><td><strong>Global Accelerator</strong></td>
+      <td>Acelera <em>conexiones</em> TCP/UDP con IPs anycast fijas; no cachea nada y es
+      capa 4.</td>
+      <td>Tu tráfico no es HTTP, o necesitas failover entre regiones con IPs fijas.</td></tr>
+    <tr><td><strong>ALB</strong></td>
+      <td>Reparte carga <em>dentro</em> de una región; no cachea ni tiene presencia
+      global.</td>
+      <td>Siempre que necesites balancear entre instancias — de hecho, van juntos:
+      CloudFront delante, ALB detrás como VPC origin.</td></tr>
+    <tr><td><strong>API Gateway edge-optimized</strong></td>
+      <td>Es CloudFront por debajo, pero gestionado por API Gateway y sin control sobre
+      behaviors ni policies.</td>
+      <td>Quieres un único servicio y no te importa perder el control fino de la caché.</td></tr>
+    <tr><td><strong>Amplify Hosting</strong></td>
+      <td>Empaqueta S3 + CloudFront + CI/CD con dos clics.</td>
+      <td>Quieres el resultado sin entender las piezas. Este curso quiere lo contrario.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el patrón completo del proyecto 05</span></div>
+<pre><code>resource "aws_cloudfront_origin_access_control" "site" {
+  name                              = "site-oac"
+  origin_access_control_origin_type  = "s3"
+  signing_behavior                   = "always"   # nunca "never"
+  signing_protocol                   = "sigv4"
+}
+
+resource "aws_cloudfront_distribution" "site" {
+  enabled             = true
+  is_ipv6_enabled     = true
+  default_root_object = "index.html"
+  http_version        = "http2and3"
+  price_class         = "PriceClass_All"
+  aliases             = ["app.example.com"]
+
+  origin {
+    domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
+    origin_id                = "s3-site"
+    origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+    # sin s3_origin_config: eso es OAI
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "s3-site"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = true
+
+    # managed CachingOptimized — nada de forwarded_values
+    cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  }
+
+  # SPA: cualquier ruta desconocida devuelve el index con 200
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  viewer_certificate {
+    acm_certificate_arn      = aws_acm_certificate_validation.cdn.certificate_arn
+    ssl_support_method       = "sni-only"        # "vip" cuesta 600 USD/mes
+    minimum_protocol_version = "TLSv1.2_2021"    # el default es TLSv1
+  }
+
+  restrictions {
+    geo_restriction { restriction_type = "none" }
+  }
+}
+
+resource "aws_s3_bucket_policy" "site" {
+  bucket = aws_s3_bucket.site.id
+  policy = data.aws_iam_policy_document.site.json
+}
+
+data "aws_iam_policy_document" "site" {
+  statement {
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.site.arn}/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.site.arn]   # ← el cerrojo
+    }
+  }
+}</code></pre>
+</div>
+<p>Trampas conocidas, en orden de dolor:</p>
+<ul>
+  <li><strong>Cada <code>apply</code> tarda ~15 minutos.</strong> El provider espera a que
+  la distribución pase de <code>InProgress</code> a <code>Deployed</code>. Se puede
+  desactivar con <code>wait_for_deployment = false</code> (útil en iteración), pero
+  entonces el siguiente <code>apply</code> puede chocar con el despliegue en curso.</li>
+  <li><strong>El <code>destroy</code> es peor.</strong> Hay que deshabilitar la
+  distribución, esperar el despliegue, y solo entonces borrarla. Si tienes prisa,
+  <code>retain_on_delete = true</code> la deja deshabilitada y te toca borrarla a mano
+  después.</li>
+  <li><strong>El ejemplo de la documentación del provider usa
+  <code>forwarded_values</code> y OAI.</strong> Ambos están deprecados. Si copias de ahí,
+  copias 2019.</li>
+  <li><strong><code>minimum_protocol_version</code> por defecto es <code>TLSv1</code></strong>
+  — un protocolo que hoy no debería aceptar nada. Ponlo a <code>TLSv1.2_2021</code> o
+  superior siempre que uses certificado propio.</li>
+  <li><strong>Usa <code>bucket_regional_domain_name</code>, no
+  <code>bucket_domain_name</code></strong>: el primero incluye la región y evita
+  redirecciones 307 de S3 durante los primeros minutos de vida del bucket.</li>
+  <li><strong>Los IDs de las managed policies son constantes globales.</strong>
+  <code>658327ea-f89d-4fab-a63d-7e88639e58f6</code> es <code>CachingOptimized</code> en
+  todas las cuentas. Aun así, el <code>data "aws_cloudfront_cache_policy" { name =
+  "Managed-CachingOptimized" }</code> es más legible que pegar el UUID.</li>
+  <li><strong>Una CloudFront Function se despliega en dos pasos:</strong>
+  <code>aws_cloudfront_function</code> con <code>publish = true</code>, y luego
+  <code>function_association</code> dentro del behavior. Sin el <code>publish</code> la
+  distribución referencia una versión que no existe.</li>
+</ul>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · elegir la pieza</p>
+  <p class="quiz-q">Proyecto 05: el bucket con el frontend debe quedar completamente
+  privado y solo tu distribución debe poder leerlo. ¿Qué montas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="OAC es el mecanismo vigente: CloudFront firma cada petición con SigV4 y la política del bucket autoriza al principal cloudfront.amazonaws.com solo cuando AWS:SourceArn coincide con TU distribución. Sin esa condición, cualquier distribución de cualquier cuenta podría leer el bucket.">Un OAC firmando, y el bucket confiando en SourceArn</button></li>
+    <li><button data-correct="false" data-why="Funciona, pero OAI es legacy: AWS lo marca como 'not recommended', no soporta regiones opt-in posteriores a enero de 2023, ni SSE-KMS, ni PUT/DELETE. Es lo que enseñan casi todos los tutoriales que encontrarás; por eso hay que reconocerlo y no copiarlo.">Un OAI heredado, y el bucket confiando en CanonicalUser</button></li>
+    <li><button data-correct="false" data-why="Eso es exactamente lo que el patrón evita. Con el bucket público, cualquiera puede saltarse CloudFront yendo al endpoint de S3 y te quedas sin WAF, sin logs de borde y sin control de acceso — además de pagar la salida de S3 en vez del TB gratis de CloudFront.">Un bucket público, y CloudFront leyendo por HTTP normal</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · coste</p>
+  <p class="quiz-q">Tu portfolio sirve 30 GB y 200 000 peticiones HTTPS al mes desde un
+  bucket S3 a través de CloudFront. ¿Qué te factura CloudFront?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="1 TB de transferencia y 10 millones de peticiones son 'always free', permanentes y por cuenta. Además, la transferencia de S3 a CloudFront no se factura por ser S3 un origen AWS. Lo único que pagarías en el proyecto 05 es la hosted zone de Route 53: 0,50 USD/mes.">0,00 USD: cabe entero en el free tier permanente</button></li>
+    <li><button data-correct="false" data-why="La transferencia origen→CloudFront desde orígenes AWS (S3, ELB, API Gateway) es siempre gratuita: 'you are only billed for the outbound data transfer from CloudFront to the viewer'. Ese tramo no aparece nunca en la factura.">2,55 USD: el traspaso de S3 a CloudFront cuenta</button></li>
+    <li><button data-correct="false" data-why="Las peticiones tienen su propio cupo gratuito de 10 millones al mes, que 200 000 no rozan. El precio de 0,0100 USD por 10 000 peticiones HTTPS solo empieza a aplicarse a partir del millón número diez.">0,60 USD: las peticiones HTTPS se facturan desde cero</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · elegir entre variantes</p>
+  <p class="quiz-q">Tu SPA sirve rutas limpias: <code>/perfil</code> debe pedir al bucket
+  <code>/perfil/index.html</code>. Necesitas reescribir la ruta en cada petición entrante.
+  ¿Con qué?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es el caso de uso canónico de Functions: URL rewrite en el viewer request, submilisegundo, 0,10 USD por millón con 2 millones gratis al mes, y sin necesitar red, librerías ni el cuerpo de la petición. Cabe de sobra en los 10 KB de código.">CloudFront Functions: una reescritura trivial en el viewer request</button></li>
+    <li><button data-correct="false" data-why="Funcionaría, pero es la herramienta grande para un trabajo pequeño: seis veces más caro por millón (0,60 USD), sin free tier, y con GB-segundo encima. Lambda@Edge se justifica cuando necesitas red, librerías, el body o el trigger de origin request — nada de eso hace falta aquí.">Lambda@Edge: hace falta Node y red para reescribir rutas</button></li>
+    <li><button data-correct="false" data-why="Una invalidación borra copias de la caché; no transforma peticiones. La reescritura de ruta es precisamente trabajo del borde, y es el motivo de que existan las funciones edge en el trigger de viewer request.">Una invalidación: reescribir rutas no es trabajo del borde</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · criterio de operación</p>
+  <p class="quiz-q">Cada despliegue publica un <code>index.html</code> nuevo y unos 400
+  ficheros de assets. Quieres que los usuarios vean la versión nueva ya. ¿Cómo lo
+  resuelves?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es lo que recomienda la propia AWS. El hash en el nombre invalida además la caché del navegador y del proxy corporativo, que una invalidación de CloudFront no toca; permite rollback instantáneo y sale gratis. La invalidación queda para el puñado de ficheros que no pueden llevar hash.">Versionar los assets e invalidar solo el index</button></li>
+    <li><button data-correct="false" data-why="Cuesta una sola ruta y entra en las 1000 gratis, así que la factura no es el problema: el problema es que no vacía la caché del navegador del usuario, que puede seguir viendo el bundle viejo hasta que su max-age expire. Y tira toda la caché del borde, disparando los misses al origen.">Invalidar la ruta comodín y olvidarse del versionado</button></li>
+    <li><button data-correct="false" data-why="Convierte la CDN en un proxy caro: cada petición viaja al origen, el hit ratio se va a cero, sube la latencia y desaparece la protección del origen. La caché no es el problema a eliminar; el problema es identificar bien las versiones.">Configurar TTL cero en absolutamente todas las rutas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-acm.html">Ficha: AWS Certificate Manager</a>
+    <a href="./aws-s3.html">Ficha: Amazon S3</a>
+    <a href="./aws-route53.html">Ficha: Amazon Route 53</a>
+    <a href="./aws-fundamentos.html">Fundamentos: global, regional y zonal</a>
+    <a href="./README.md">Todas las referencias</a>
+    <a href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html">página
+    de OAC</a> (con la política de bucket que copiarás literalmente), la <a
+    href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions-choosing.html">tabla
+    Functions vs Lambda@Edge</a>, la <a
+    href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Expiration.html">tabla
+    de TTLs contra <code>Cache-Control</code></a> y los <a
+    href="https://aws.amazon.com/cloudfront/pricing/pay-as-you-go/">precios pay-as-you-go</a>.
+    Precios y cuotas verificados el <strong>2026-08-30</strong>; si han pasado meses,
+    reverifica antes de citar una cifra.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

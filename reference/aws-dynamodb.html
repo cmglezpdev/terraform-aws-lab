@@ -27,7 +27,7 @@
 
 <main>
 
-<h2>Qué es</h2>
+<h2 id="que-es">Qué es</h2>
 <p>Una tabla de DynamoDB es un mapa clave → ítem repartido entre muchas máquinas. Tú eliges
 un atributo como <strong>clave de partición</strong>; DynamoDB le aplica un hash y ese hash
 decide en qué partición física vive el ítem. Por eso leer por clave cuesta lo mismo con
@@ -44,7 +44,7 @@ servidores, ni versiones, ni discos: pagas por petición y por gigabyte.</p>
   contra su diseño.</p>
 </div>
 
-<h2>Para qué se usa de verdad</h2>
+<h2 id="para-que">Para qué se usa de verdad</h2>
 <div class="ref-grid">
   <div class="ref-card"><h3>Búsquedas por clave a cualquier escala</h3><p>Tu acortador:
   <code>GET /{code}</code> → un ítem. Sesiones de usuario, carritos, perfiles, tokens. El
@@ -65,7 +65,7 @@ servidores, ni versiones, ni discos: pagas por petición y por gigabyte.</p>
   escribió una fila» y «haz algo con ello», y aparece en el proyecto 02.</p></div>
 </div>
 
-<h2>Los tipos que existen</h2>
+<h2 id="tipos">Los tipos que existen</h2>
 <p>Hay dos decisiones independientes: <strong>cómo pagas la capacidad</strong> (el
 <code>billing_mode</code>) y <strong>qué clase de almacenamiento</strong> usa la tabla. Y dos
 extensiones que se contratan aparte.</p>
@@ -77,21 +77,129 @@ extensiones que se contratan aparte.</p>
     <tr><td><code>PROVISIONED</code></td><td>Reservas RCU/WCU por hora, las uses o no; se te acaban y te devuelve <code>Throttling</code></td><td>Tráfico estable y sostenido, medido, meses después</td><td>0,00065 USD/h por WCU<br>0,00013 USD/h por RCU</td></tr>
     <tr><td><code>STANDARD_INFREQUENT_ACCESS</code><br>(clase de tabla)</td><td>Almacenar cuesta el 60% menos; cada petición, un 25% más</td><td>Tablas grandes que casi nadie lee: histórico, auditoría</td><td>0,10 USD/GB-mes<br>0,78 USD/millón de escrituras</td></tr>
     <tr><td>Global tables</td><td>Réplicas activas-activas en varias regiones, con resolución de conflictos</td><td>Usuarios en varios continentes, o DR con RPO de segundos</td><td>Escrituras replicadas: 0,625 USD/millón por región extra</td></tr>
-    <tr><td>DAX</td><td>Caché en memoria delante de la tabla, API compatible, microsegundos</td><td>Lecturas masivas del mismo puñado de ítems</td><td>Por nodo y hora, <strong>encendido o no</strong></td></tr>
+    <tr><td>DAX</td><td>Caché en memoria delante de la tabla, API compatible, microsegundos</td><td>Lecturas masivas del mismo puñado de ítems</td><td>Por nodo y hora, <strong>encendido o no</strong>: desde 0,040 USD/h</td></tr>
   </tbody>
 </table>
 </div>
 <div class="callout aws">
   <span class="callout-title">El criterio de decisión</span>
-  <p>Empieza <strong>siempre</strong> en <code>PAY_PER_REQUEST</code>. Pásate a
-  <code>PROVISIONED</code> solo cuando tengas meses de métricas que enseñen un tráfico plano y
-  sostenido: a plena utilización la capacidad reservada sale unas 3-4 veces más barata, pero
-  cada hora que no la usas la pagas igual. Con tráfico a ráfagas o bajo —tu caso en todo este
-  curso— on-demand gana sin hacer cuentas. Ojo: <strong>el default del provider de Terraform
-  es <code>PROVISIONED</code></strong>, el contrario al que quieres.</p>
+  <p>Empieza <strong>siempre</strong> en <code>PAY_PER_REQUEST</code>. Desde noviembre de 2024
+  no es solo el consejo cómodo: es el de AWS, que ahora escribe en su propia guía que
+  <em>«on-demand mode is the <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/on-demand-capacity-mode.html">default
+  and recommended</a> throughput option»</em>. Pásate a <code>PROVISIONED</code> solo cuando
+  tengas meses de métricas que enseñen un tráfico plano y sostenido. Ojo: <strong>el default
+  del provider de Terraform sigue siendo <code>PROVISIONED</code></strong>, el contrario al
+  que quieres.</p>
 </div>
 
-<h2>Cómo funciona por dentro</h2>
+<h3 id="capacidad">On-demand vs provisioned, con números</h3>
+<p>El 1 de noviembre de 2024 AWS <a
+href="https://aws.amazon.com/blogs/database/new-amazon-dynamodb-lowers-pricing-for-on-demand-throughput-and-global-tables/">bajó
+el precio del throughput on-demand un 50%</a> (de 1,25 a 0,625 USD por millón de escrituras;
+de 0,25 a 0,125 el de lecturas) y el de las escrituras replicadas de global tables hasta un
+67%. Eso movió la frontera entera del cálculo, y <strong>casi todo lo que encontrarás escrito
+en internet es anterior</strong>: los artículos que repiten «on-demand cuesta 6 o 7 veces más»
+usan la tabla de precios vieja.</p>
+<p>La cuenta actual, en <code>us-east-1</code>, para una unidad de escritura sostenida durante
+un mes de 730 horas:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>1 WCU provisionada, un mes</th><th>Lo mismo en on-demand</th></tr></thead>
+  <tbody>
+    <tr><td>Qué compras</td><td>1 escritura/s reservada, 730 h</td><td>Las escrituras que hagas</td></tr>
+    <tr><td>Escrituras que caben</td><td>2 628 000</td><td>—</td></tr>
+    <tr><td>Precio</td><td><code>0,4745 USD</code> (0,00065 × 730)</td><td><code>1,6425 USD</code> (2,628 M × 0,625/M)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>A <strong>plena</strong> utilización, provisioned sale 3,46 veces más barato. Divide y sale
+el número que de verdad manda: <strong>el punto de equilibrio está en torno al 29% de
+utilización sostenida</strong> (0,4745 ÷ 1,6425). Por debajo de eso —y una tabla real rara vez
+pasa del 40-50% si tiene picos y valles— on-demand gana. Con <em>reserved capacity</em> a 1 o
+3 años (hasta <a href="https://aws.amazon.com/dynamodb/pricing/provisioned/">54% y 77% de
+descuento</a>) el umbral baja bastante más, pero a cambio de un compromiso plurianual sobre
+una cifra que aún no conoces.</p>
+<ul>
+  <li><strong>On-demand no es magia infinita.</strong> Una tabla nueva aguanta <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/on-demand-capacity-mode.html">4 000
+  escrituras y 12 000 lecturas por segundo</a> de salida, y luego absorbe al instante hasta
+  <strong>el doble de tu pico anterior</strong>. Pasar de ahí en menos de 30 minutos sí
+  produce <code>Throttling</code>: para eso existe el <em>warm throughput</em>, que precalienta
+  la tabla antes del evento que sabes que viene.</li>
+  <li><strong>On-demand también tiene freno de mano.</strong> <code>on_demand_throughput</code>
+  (<code>max_read_request_units</code> / <code>max_write_request_units</code>) pone un techo
+  por tabla o por índice: la protección contra el bucle infinito que te factura un fin de
+  semana. Lo que pase del techo se <em>throttlea</em>, que es exactamente lo que quieres.</li>
+  <li><strong>Provisioned sin auto scaling es una trampa lenta.</strong> Con
+  <code>aws_appautoscaling_target</code> + <code>aws_appautoscaling_policy</code> apuntando a
+  <code>DynamoDBWriteCapacityUtilization</code> (objetivo típico: 70%) la capacidad sube y baja
+  sola — pero el escalado <em>reacciona</em> a la métrica de CloudWatch, con minutos de
+  retraso; el pico de los primeros dos minutos lo pagas en errores.</li>
+  <li><strong>Bajar capacidad está racionado</strong>: <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html">4
+  bajadas por día más 1 por hora</a>, hasta 27 en 24 h. Subir, ilimitado. Y cambiar de
+  provisioned a on-demand solo se puede <strong>4 veces en una ventana móvil de 24 h</strong>
+  (al revés, cuando quieras).</li>
+</ul>
+
+<h2 id="indices">Índices: GSI, LSI y por qué casi siempre GSI</h2>
+<p>Un índice secundario es <strong>otra copia de la tabla, ordenada por otras claves</strong>,
+que DynamoDB mantiene por ti. No es un índice de base relacional: no acelera un
+<code>Scan</code>, no crea restricciones, y se paga en escrituras y almacenamiento.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>GSI · global secondary index</th><th>LSI · local secondary index</th></tr></thead>
+  <tbody>
+    <tr><td>Claves</td><td>Partición y ordenación <strong>libres</strong>, cualesquiera</td><td>La <strong>misma</strong> clave de partición; solo cambia la de ordenación</td></tr>
+    <tr><td>¿Cuándo se crea?</td><td>Cuando quieras, sobre la tabla viva</td><td><strong>Solo al crear la tabla.</strong> Ni se añade ni se quita después</td></tr>
+    <tr><td>Consistencia de lectura</td><td>Solo <strong>eventual</strong> (el índice se actualiza asíncrono)</td><td>Eventual o <strong>fuerte</strong>, a elección</td></tr>
+    <tr><td>Capacidad</td><td><strong>Propia</strong>: la Query consume del índice, no de la tabla</td><td>Comparte la de la tabla</td></tr>
+    <tr><td>Atributos no proyectados</td><td><strong>No</strong> se pueden leer: la Query no baja a la tabla</td><td>Sí, con un <em>fetch</em> extra a la tabla (y su coste)</td></tr>
+    <tr><td>Límite duro propio</td><td>20 por tabla (ampliable)</td><td>5 por tabla, y <strong>10 GB por valor de clave de partición</strong></td></tr>
+    <tr><td>Coste</td><td>Cada escritura que toca el índice se paga otra vez</td><td>Igual, contra la capacidad de la tabla</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Por qué un LSI casi nunca</span>
+  <p>Dos razones, y las dos son irreversibles. <strong>Se fija al crear la tabla</strong>: el
+  día que descubras el patrón de consulta que lo justificaba, tu tabla ya existe y la única
+  salida es crear otra y migrar los datos. Y <strong>comparte partición con la tabla</strong>,
+  lo que activa un límite que no existe en ningún otro sitio de DynamoDB: la <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/LSI.html">colección
+  de ítems</a> —todo lo que comparte un valor de clave de partición, en la tabla y en sus
+  LSIs— <strong>no puede pasar de 10 GB</strong>. Al llegar ahí, DynamoDB devuelve
+  <code>ItemCollectionSizeLimitExceededException</code> y deja de aceptar escrituras
+  <em>para esa clave</em>. Una tabla sin LSIs no tiene ese techo.</p>
+  <p>Lo único que un LSI da y un GSI no: <strong>lecturas fuertemente consistentes sobre el
+  índice</strong>. Si tu caso no depende de eso —y casi ninguno depende— elige GSI.</p>
+</div>
+<ul>
+  <li><strong>Las proyecciones deciden el coste.</strong> <code>KEYS_ONLY</code> (solo claves),
+  <code>INCLUDE</code> (claves + los atributos que listes) o <code>ALL</code> (la tabla
+  duplicada). Proyectar de más multiplica el coste de cada escritura; proyectar de menos deja
+  la Query del GSI incapaz de devolver el dato, porque <strong>un GSI no puede ir a buscarlo a
+  la tabla</strong>. Cuota: <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html">100
+  atributos proyectados</a> sumando todos los índices, y solo cuenta lo que listas en
+  <code>INCLUDE</code>.</li>
+  <li><strong>Los índices son dispersos, y eso es una herramienta.</strong> Un ítem que no
+  tenga el atributo clave del GSI sencillamente no aparece en él. Poner el atributo solo en
+  los ítems «pendientes» te da una cola de trabajo que se consulta con una Query barata en vez
+  de un Scan con filtro.</li>
+  <li><strong>Un GSI ahogado ahoga la tabla.</strong> En modo provisioned, si el GSI no tiene
+  capacidad de escritura suficiente, <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html">las
+  escrituras a la tabla base se throttlean</a>. El índice es un ciudadano de primera en la
+  ruta de escritura, no un adorno asíncrono.</li>
+  <li><strong>Novedad</strong> (y todavía no está en los tutoriales): los GSI aceptan
+  <strong>claves multi-atributo</strong>, hasta 4 atributos en la partición y 4 en la
+  ordenación, sin concatenar strings sintéticos tipo
+  <code>TOURNAMENT#2024#REGION#NA</code> a mano.</li>
+</ul>
+
+<h2 id="como-funciona">Cómo funciona por dentro</h2>
 <p>El modelo mental mínimo para no cometer errores:</p>
 <ul>
   <li><strong>El hash de la clave de partición elige la partición física.</strong> Cada
@@ -118,7 +226,304 @@ extensiones que se contratan aparte.</p>
   que la tabla puede responder se deciden al diseñar las claves, no al escribir la query.</li>
 </ul>
 
-<h2>Cuánto cuesta</h2>
+<h3 id="consistencia">Consistencia: eventual, fuerte y transaccional</h3>
+<p>«Eventual por defecto» es correcto pero corto. El detalle que importa:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Lectura</th><th>Qué garantiza</th><th>Coste</th><th>Dónde se puede pedir</th></tr></thead>
+  <tbody>
+    <tr><td>Eventual (por defecto)</td><td>Puede devolver una versión anterior durante milisegundos</td><td>0,5 RRU / 4 KB</td><td>En todo</td></tr>
+    <tr><td>Fuerte (<code>ConsistentRead</code>)</td><td>Lo último escrito y confirmado en esa región</td><td>1 RRU / 4 KB</td><td>Tabla y LSI. <strong>Nunca en un GSI</strong></td></tr>
+    <tr><td>Transaccional (<code>TransactGetItems</code>)</td><td>Fuerte <em>y</em> aislada: una foto atómica de hasta 100 ítems</td><td>2 RRU / 4 KB</td><td>Tabla. No sobre índices</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Que un GSI <strong>no admita lectura fuerte</strong> no es un detalle menor: si tu flujo es
+«escribo y leo inmediatamente por el índice», el índice puede no tener el dato todavía. El
+error se manifiesta en el 1% de los casos y en producción.</p>
+
+<h3 id="transacciones">Transacciones: lo que cuestan de verdad</h3>
+<p><code>TransactWriteItems</code> agrupa hasta <strong>100 acciones</strong> sobre hasta 100
+ítems distintos, en una o varias tablas de la misma cuenta y región, con un tamaño agregado
+máximo de <strong>4 MB</strong>, y es todo-o-nada. Las cuatro acciones posibles son
+<code>Put</code>, <code>Update</code>, <code>Delete</code> y <code>ConditionCheck</code>.</p>
+<div class="callout cost">
+  <span class="callout-title">El ×2 que nadie ve venir</span>
+  <p>No hay cuota de alta por usar transacciones: <em>«you pay only for the reads or writes
+  that are part of your transaction»</em>. Pero DynamoDB hace <a
+  href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html">dos
+  operaciones internas por cada ítem</a> —una para preparar, otra para confirmar—, así que
+  <strong>cada ítem cuesta el doble</strong>. Y lo cobra <strong>aunque la transacción se
+  cancele</strong>: una condición que evalúa a falso consume la misma capacidad que un éxito.
+  Un bucle de reintentos sobre transacciones que fallan factura como si funcionaran.</p>
+</div>
+<ul>
+  <li><strong>No se puede tocar el mismo ítem dos veces</strong> en la misma transacción, ni
+  usar índices dentro de ella.</li>
+  <li><strong><code>ClientRequestToken</code> la hace idempotente</strong> durante 10 minutos:
+  repetir la llamada con el mismo token no vuelve a escribir. Los SDK de AWS lo ponen solos.</li>
+  <li><strong>Los Streams no respetan la transacción.</strong> Los registros de una misma
+  transacción pueden aparecer en momentos distintos y mezclados con los de otras: <em>«stream
+  consumers shouldn't assume transaction atomicity or ordering guarantees»</em>.</li>
+  <li><strong>La atomicidad es regional.</strong> En una global table, la otra región puede
+  observar la transacción a medio replicar.</li>
+</ul>
+
+<h3 id="particiones">Hot partitions, burst y adaptive capacity</h3>
+<p>El techo de <a
+href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">3 000
+unidades de lectura y 1 000 de escritura por segundo y partición</a> se mide en unidades, no en
+peticiones — y esa distinción muerde: con ítems de 20 KB, una lectura consistente consume 5
+unidades, así que <strong>600 lecturas por segundo</strong> ya agotan la partición.</p>
+<p>DynamoDB tiene dos amortiguadores, y conviene saber que existen sin confiar en ellos:
+<strong>adaptive capacity</strong>, que reparte capacidad no usada hacia la partición caliente
+y, si el desequilibrio persiste, <em>parte la partición</em> aislando la clave que quema —
+funciona en on-demand y en provisioned, pero es reactiva, tarda, y no puede partir una
+partición cuya presión venga de <em>un solo valor</em> de clave; y el <strong>burst</strong>,
+un colchón de capacidad no consumida de los últimos minutos que se agota igual de rápido que
+llegó. Ninguno de los dos arregla una clave de partición mal elegida: solo retrasa el
+diagnóstico.</p>
+
+<h2 id="ttl">TTL: los datos que caducan solos</h2>
+<p>Marcas un atributo de la tabla como atributo de expiración; cada ítem guarda ahí una fecha
+en <strong>segundos Unix epoch, de tipo <code>N</code> (Number)</strong>; y un proceso de
+fondo va borrando los que ya vencieron. Si el atributo es de otro tipo —un string ISO-8601,
+milisegundos en vez de segundos— <strong>el ítem se ignora en silencio</strong> y no caduca
+nunca. Es el fallo número uno de TTL, y no produce ningún error.</p>
+<div class="callout win">
+  <span class="callout-title">Lo bueno: el borrado es gratis</span>
+  <p>La documentación es literal: DynamoDB borra los ítems expirados
+  <em>«<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">without
+  consuming write throughput</a>»</em>. No hay WCU, no hay WRU, no hay línea en la factura por
+  el borrado. Comparado con un cron que hace <code>Scan</code> + <code>DeleteItem</code> —que
+  paga la lectura de la tabla entera <em>y</em> cada borrado— TTL no es una comodidad, es una
+  diferencia de orden de magnitud en el coste. Activarlo es gratis; usarlo, también.</p>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Lo malo: el borrado no es puntual, y la ventana ha empeorado</span>
+  <p>El dato clásico que circula por medio internet es «hasta 48 horas». <strong>Ya no es lo
+  que dice AWS.</strong> La guía actual dice <em>«DynamoDB automatically deletes expired items
+  <strong>within a few days</strong> of their expiration time»</em> y, más abajo, <em>«might be
+  deleted by the system at any time, typically within a few days after their
+  expiration»</em>. Es decir: la redacción pasó de un tope de 48 h a un «unos días» sin número.
+  <strong>Verificado el 2026-08-30</strong> — si alguien te enseña la cifra de 48 horas, está
+  citando documentación retirada.</p>
+  <p>Consecuencia práctica, y es la que define cómo se programa contra TTL: <strong>TTL no es
+  un mecanismo de corrección, es un mecanismo de limpieza</strong>. Nunca dependas de él para
+  que un dato «deje de existir» a una hora concreta.</p>
+</div>
+<h3 id="ttl-filtrado">El filtrado de expirados es tuyo</h3>
+<p>Entre que un ítem vence y que desaparece, <strong>sigue estando ahí para todo</strong>:
+<code>GetItem</code> lo devuelve, <code>Query</code> lo devuelve, <code>Scan</code> lo
+devuelve, y —dice AWS sin rodeos— <em>«these items still count towards storage and read costs
+until they are deleted»</em>. Lo pagas y lo lees. Tres consecuencias:</p>
+<ul>
+  <li><strong>En lecturas</strong>, filtra tú: una <code>FilterExpression</code> del tipo
+  <code>#ttl &gt; :ahora</code> sobre Query o Scan. Con <code>GetItem</code> no hay filtro:
+  compara la fecha en tu código.</li>
+  <li><strong>En escrituras</strong>, protege con condición: <code>ConditionExpression:
+  "expireAt &gt; :ahora"</code> evita que actualices un ítem que en realidad estaba muerto.</li>
+  <li><strong>Un ítem expirado se puede resucitar.</strong> Si actualizas su atributo TTL a una
+  fecha futura (o se lo quitas) antes de que el proceso pase, deja de estar expirado y no se
+  borra. Es cómo se renueva una sesión sin borrar y reescribir.</li>
+</ul>
+<div class="callout why">
+  <span class="callout-title">Qué significa esto para el caché del proyecto 03</span>
+  <p>Que <strong>TTL no implementa tu política de caducidad: la limpia</strong>. La
+  invalidación de verdad la haces al leer, comparando <code>expireAt</code> con el reloj y
+  tratando el ítem viejo como un <em>miss</em>. TTL solo evita que la tabla crezca para siempre
+  y que pagues almacenamiento por respuestas que nadie va a usar. Si confías en TTL para no
+  servir un dato caducado, servirás datos caducados durante días.</p>
+</div>
+<h3 id="ttl-streams">El borrado por TTL aparece en Streams, marcado como del sistema</h3>
+<p>Un borrado por TTL entra al stream como un <code>REMOVE</code> normal <strong>salvo por un
+campo</strong>: lleva <code>userIdentity</code> con <code>type: "Service"</code> y
+<code>principalId: "dynamodb.amazonaws.com"</code>. Los borrados que hace tu código no lo
+llevan. Eso permite distinguir «lo borró la aplicación» de «venció» sin marcar nada tú, y es
+la base del patrón de archivado: TTL expira el ítem caliente, el stream lo entrega, una Lambda
+lo escribe en S3.</p>
+<div class="code">
+  <div class="code-label"><span>filtro del event source mapping</span><span class="tag">solo borrados por TTL</span></div>
+<pre><code>{
+  <b class="s">"Filters"</b>: [
+    { <b class="s">"Pattern"</b>: { <b class="s">"userIdentity"</b>: {
+        <b class="s">"type"</b>: [<b class="s">"Service"</b>],
+        <b class="s">"principalId"</b>: [<b class="s">"dynamodb.amazonaws.com"</b>]
+    } } }
+  ]
+}</code></pre>
+</div>
+<p class="small">Patrón tomado de <a
+href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/time-to-live-ttl-streams.html">DynamoDB
+Streams and Time to Live</a>, consultada el 2026-08-30.</p>
+<ul>
+  <li><strong>En global tables (MREC)</strong>, la marca <code>userIdentity</code> solo aparece
+  en la región donde ocurrió la expiración. En las réplicas llega como un borrado replicado
+  indistinguible — y ese borrado replicado <strong>sí consume escritura</strong> y sí se
+  factura, aunque el original fuera gratis.</li>
+  <li><strong>En global tables con consistencia fuerte (MRSC), TTL no está soportado.</strong>
+  Ni se puede configurar.</li>
+</ul>
+
+<h2 id="streams">Streams: el registro de cambios de la tabla</h2>
+<p>Activar un stream convierte cada modificación de ítem en un evento ordenado y legible
+durante <strong>24 horas</strong>. No hay forma de guardarlo más tiempo ni de borrarlo antes:
+<em>«all data in DynamoDB Streams is subject to a 24-hour lifetime»</em>. Si tu consumidor
+estuvo caído 25 horas, ese cambio no existe.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>stream_view_type</code></th><th>Qué escribe cada evento</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><code>KEYS_ONLY</code></td><td>Solo las claves del ítem</td><td>«Algo cambió aquí, ya lo leeré»: eventos mínimos</td></tr>
+    <tr><td><code>NEW_IMAGE</code></td><td>El ítem completo, después</td><td>Proyecciones, réplicas, indexado en otro sistema</td></tr>
+    <tr><td><code>OLD_IMAGE</code></td><td>El ítem completo, antes</td><td>Archivar lo que se borra — el caso de TTL</td></tr>
+    <tr><td><code>NEW_AND_OLD_IMAGES</code></td><td>Ambos</td><td>Auditoría, «qué campo cambió y de qué a qué»</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Las garantías, en corto: <strong>cada registro aparece exactamente una vez</strong> y los
+cambios <strong>de un mismo ítem</strong> llegan en orden. El orden <em>entre</em> ítems
+distintos no está garantizado. Un <code>PutItem</code> o <code>UpdateItem</code> que no cambia
+nada <strong>no genera registro</strong>.</p>
+<ul>
+  <li><strong>Un shard = una partición.</strong> Cuando la tabla se parte, el stream también:
+  escala solo. Lambda procesa cada shard abierto con una instancia y respeta el linaje
+  (primero el padre, luego los hijos); <code>ParallelizationFactor</code> sube hasta 10
+  instancias por shard sin romper el orden <em>por ítem</em>.</li>
+  <li><strong>Máximo 2 lectores simultáneos por shard</strong> (1 si es una global table).
+  Pasarse produce throttling. Si necesitas cinco consumidores, el stream no es la herramienta.</li>
+  <li><strong>El <code>stream_view_type</code> no se puede editar.</strong> Cambiarlo obliga a
+  apagar el stream y volverlo a encender, y eso <strong>acuña un ARN nuevo</strong>: el event
+  source mapping que apuntaba al viejo se queda huérfano.</li>
+  <li><strong>Con Lambda de consumidor, las llamadas <code>GetRecords</code> no se
+  facturan.</strong> Consumir el stream con Lambda es, en la práctica, gratis; con la KCL, no.</li>
+</ul>
+<h3 id="streams-filtros">Filtros de evento: pagar solo por lo que te importa</h3>
+<p>El event source mapping admite <strong>hasta 5 patrones</strong>, evaluados con OR, y lo que
+no casa <strong>ni siquiera invoca la función</strong>. El ejemplo que da AWS: una tabla con 2
+millones de cambios por hora de los que solo el 5% interesa pasa de 2 000 000 a 100 000
+invocaciones. Se filtra por <code>dynamodb.Keys</code>, <code>dynamodb.NewImage</code>,
+<code>dynamodb.OldImage</code>, <code>eventName</code> y <code>userIdentity</code>, con los
+operadores habituales (<code>prefix</code>, <code>anything-but</code>, <code>exists</code>).</p>
+<div class="callout trap">
+  <span class="callout-title">Dos trampas del filtrado</span>
+  <p><strong>Los operadores numéricos no funcionan</strong>: DynamoDB entrega los números como
+  strings (<code>"quantity": {"N": "50"}</code>), así que rangos y comparaciones numéricas no
+  casan nunca. Y <strong><code>exists</code> solo funciona sobre hojas</strong> del JSON:
+  <code>{"NewImage": {"tags": [{"exists": true}]}}</code> no casa jamás porque
+  <code>tags</code> es un nodo intermedio; hay que bajar hasta el tipo:
+  <code>{"NewImage": {"tags": {"L": {"S": [{"exists": true}]}}}}</code>.</p>
+</div>
+<h3 id="kds">Streams vs Kinesis Data Streams for DynamoDB</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>DynamoDB Streams</th><th>Kinesis Data Streams for DynamoDB</th></tr></thead>
+  <tbody>
+    <tr><td>Retención</td><td>24 h, fijas</td><td>Configurable, <strong>hasta 1 año</strong></td></tr>
+    <tr><td>Consumidores</td><td>2 por shard como mucho</td><td>Muchos, con <em>enhanced fan-out</em></td></tr>
+    <tr><td>Orden y duplicados</td><td>Exactamente una vez, ordenado por ítem</td><td><strong>Puede desordenar y duplicar</strong>: ordena tú por <code>ApproximateCreationDateTime</code></td></tr>
+    <tr><td>Destinos</td><td>Lambda, KCL</td><td>+ Firehose, Managed Flink, cualquier consumidor de Kinesis</td></tr>
+    <tr><td>Coste</td><td>Gratis con Lambda; 0,02 USD/100 000 lecturas si no</td><td><strong>Los dos</strong>: <em>change data capture units</em> de DynamoDB <em>y</em> el precio de Kinesis</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>El criterio</strong>: si el consumidor es una Lambda y el trabajo es reaccionar en
+caliente, DynamoDB Streams — más simple, más barato, con mejores garantías. Kinesis solo cuando
+necesites <em>una</em> de estas tres: retención larga para reprocesar, más de dos consumidores,
+o enchufar el cambio a un pipeline analítico (Firehose, Flink) que ya existe. Pagar el
+desorden, los duplicados y dos facturas por un pipeline que no los necesita es el error
+típico. Una tabla solo puede alimentar <strong>un</strong> Kinesis data stream.</p>
+
+<h2 id="global-dax">Global tables y DAX</h2>
+<h3 id="global-tables">Global tables: dos modos de consistencia</h3>
+<p>Una global table es la misma tabla replicada en varias regiones, con lecturas y escrituras
+activas en todas. Desde junio de 2025 hay <strong>dos</strong> modos, y la elección es
+irreversible: <em>«you cannot change a global table's consistency mode after creation»</em>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>MREC · eventual (por defecto)</th><th>MRSC · fuerte multi-región</th></tr></thead>
+  <tbody>
+    <tr><td>Replicación</td><td>Asíncrona, «típicamente en un segundo o menos»</td><td><strong>Síncrona</strong> a otra región antes de responder</td></tr>
+    <tr><td>Conflictos</td><td><em>Last writer wins</em> por ítem, por timestamp interno</td><td>No hay: <code>ReplicatedWriteConflictException</code>, reintentable</td></tr>
+    <tr><td>RPO</td><td>El retraso de replicación (segundos)</td><td><strong>Cero</strong></td></tr>
+    <tr><td>Regiones</td><td>Las que quieras, se añaden y quitan en caliente</td><td><strong>Exactamente tres</strong> (o dos réplicas + un <em>witness</em>), fijadas al crear</td></tr>
+    <tr><td>Requisito de alta</td><td>Añadir réplica a una tabla existente, con datos</td><td>La tabla de partida debe estar <strong>vacía</strong></td></tr>
+    <tr><td>No soporta</td><td>—</td><td><strong>TTL, LSIs ni transacciones</strong></td></tr>
+    <tr><td>Latencia</td><td>Escritura y lectura fuerte más rápidas</td><td>Ambas más lentas: hay un viaje entre regiones</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">MRSC solo existe dentro de tres conjuntos cerrados de regiones —EEUU (N.
+Virginia, Ohio, Oregón), Europa (Irlanda, Londres, París, Fráncfort) y Asia-Pacífico (Tokio,
+Seúl, Osaka)— y una tabla no puede mezclarlos. Verificado el 2026-08-30 en <a
+href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/V2globaltables_HowItWorks.html">How
+global tables work</a>. Todo lo escrito antes de 2025 solo conoce MREC.</p>
+<p>Detalle que sorprende en MREC: una lectura con <code>ConsistentRead</code> <strong>solo es
+fuerte respecto a la región donde lees</strong>. Si el ítem se actualizó en otra región y aún
+no llegó, tu lectura «fuertemente consistente» devuelve datos viejos. Las escrituras
+condicionales evalúan la condición contra la copia local, así que dos regiones pueden aprobar
+la misma condición a la vez — el candado de <code>attribute_not_exists</code> deja de ser un
+candado en cuanto la tabla es global.</p>
+<h3 id="dax">DAX: la caché que se paga esté o no en uso</h3>
+<p>DAX pone un clúster en memoria delante de la tabla, con la misma API, y baja las lecturas
+repetidas de milisegundos a microsegundos. En este curso es sobre todo <strong>una trampa de
+coste que hay que saber reconocer</strong>, porque es la única pieza de la familia DynamoDB que
+factura por hora encendida.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Nodo</th><th>USD/hora</th><th>Un nodo, 730 h</th><th>Clúster de 3 (lo recomendado en producción)</th></tr></thead>
+  <tbody>
+    <tr><td><code>dax.t3.small</code></td><td><code>0,040</code></td><td>29,20 USD/mes</td><td><strong>87,60 USD/mes</strong></td></tr>
+    <tr><td><code>dax.t3.medium</code></td><td><code>0,080</code></td><td>58,40 USD/mes</td><td>175,20 USD/mes</td></tr>
+    <tr><td><code>dax.r5.large</code></td><td><code>0,255</code></td><td>186,15 USD/mes</td><td><strong>558,45 USD/mes</strong></td></tr>
+    <tr><td><code>dax.r5.xlarge</code></td><td><code>0,509</code></td><td>371,57 USD/mes</td><td>1 114,71 USD/mes</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios por nodo-hora en <code>us-east-1</code>, verificados el
+2026-08-30 contra la <a
+href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDAX/current/us-east-1/index.json">Price
+List API de AmazonDAX</a> (publicación 2026-08-11). Los nodos T3 corren en <em>unlimited
+mode</em>: los créditos de CPU que te pases se cobran aparte, a 0,096 USD/vCPU-hora. No hay
+free tier de DAX.</p>
+<div class="callout trap">
+  <span class="callout-title">Cuándo DAX no compensa: casi siempre, al principio</span>
+  <p>El clúster más barato posible cuesta <strong>29 USD al mes aunque no reciba una sola
+  petición</strong>. Con el precio de lectura on-demand a 0,125 USD por millón de RRU, ese
+  mínimo equivale a <strong>232 millones de lecturas eventuales</strong>. Si tu tabla no está
+  cerca de ese volumen —y con tráfico masivo de <em>los mismos</em> ítems—, DAX no es una
+  optimización de coste: es multiplicar la factura por mil para ahorrar milisegundos que nadie
+  ha pedido. Además, en una global table las escrituras <strong>saltan por encima del
+  caché</strong>, que solo se refresca cuando expira su propio TTL: DAX y multi-región juntos
+  sirven datos viejos.</p>
+</div>
+
+<h2 id="backups">Copias: PITR, backups y export a S3</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Mecanismo</th><th>Qué hace</th><th>Precio</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td><strong>PITR</strong> (backup continuo)</td><td>Restaura a <strong>cualquier segundo</strong> de la ventana; por defecto 35 días, ajustable de 1 a 35 con <code>recovery_period_in_days</code></td><td>0,20 USD/GB-mes</td><td>El <code>DELETE</code> mal escrito de un martes por la tarde</td></tr>
+    <tr><td><strong>Backup on-demand</strong></td><td>Foto puntual, se guarda hasta que la borres</td><td>0,10 USD/GB-mes</td><td>Hitos: antes de una migración, retención legal</td></tr>
+    <tr><td><strong>Restore</strong></td><td>Siempre a una <strong>tabla nueva</strong>, nunca encima de la original</td><td>0,15 USD/GB</td><td>—</td></tr>
+    <tr><td><strong>Export a S3</strong></td><td>Vuelca la tabla (completa o incremental) en DynamoDB JSON o Ion</td><td>0,10 USD/GB</td><td>Analítica con Athena, Glue, EMR</td></tr>
+  </tbody>
+</table>
+</div>
+<ul>
+  <li><strong>El export no consume capacidad</strong>: <em>«exports are asynchronous, they
+  don't consume read capacity units (RCUs) and have no impact on table performance and
+  availability»</em>. Es la respuesta correcta a «necesito agregar estos datos» y la razón por
+  la que un <code>Scan</code> analítico nunca lo es.</li>
+  <li><strong>El export exige PITR activo</strong>, porque lee de la copia continua, no de la
+  tabla. Sin PITR no hay export.</li>
+  <li><strong>Acortar la ventana de PITR no abarata nada</strong>: el precio va por tamaño de
+  tabla, no por días guardados.</li>
+  <li><strong>No hay SLA de duración</strong> para un export. AWS pide explícitamente que no
+  construyas flujos que dependan de que termine en un tiempo fijo.</li>
+</ul>
+
+<h2 id="coste">Cuánto cuesta</h2>
 <div class="scroll-x">
 <table class="cost-table">
   <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
@@ -128,14 +533,44 @@ extensiones que se contratan aparte.</p>
     <tr><td>Almacenamiento, primeros 25 GB-mes</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Almacenamiento, a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,25 USD / GB-mes</code></td></tr>
     <tr><td>Capacidad provisionada (WCU / RCU)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,00065 / 0,00013 USD por unidad-hora</code></td></tr>
+    <tr><td>Almacenamiento Standard-IA</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD / GB-mes</code></td></tr>
     <tr><td>Backup continuo (PITR)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,20 USD / GB-mes</code></td></tr>
+    <tr><td>Backup on-demand / restore</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD / GB-mes · 0,15 USD / GB restaurado</code></td></tr>
+    <tr><td>Export a S3</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD / GB</code></td></tr>
+    <tr><td>Escrituras replicadas (global tables)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,625 USD / millón, por región extra</code></td></tr>
     <tr><td>Streams</td><td><span class="tag-cost usage">por uso</span></td><td><code>2,5 M lecturas/mes gratis, luego 0,02 USD / 100 000</code></td></tr>
+    <tr><td>Streams consumidos por Lambda</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — las llamadas <code>GetRecords</code> no se facturan</td></tr>
+    <tr><td>Borrados por TTL</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — no consumen throughput de escritura</td></tr>
+    <tr><td>Transacciones</td><td><span class="tag-cost usage">por uso</span></td><td>Sin cuota de alta: el <strong>doble</strong> de unidades por ítem</td></tr>
+    <tr><td>DAX</td><td><span class="tag-cost hour">por hora</span></td><td><code>desde 0,040 USD / nodo-hora</code>, <strong>lo uses o no</strong></td></tr>
   </tbody>
 </table>
 </div>
 <p class="cost-stamp">Precios de la región us-east-1, verificados el 2026-08-28 contra la
 <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json">Price
-List API pública</a>. Cámbialos si han pasado meses.</p>
+List API pública</a>; las filas nuevas y las de DAX, el 2026-08-30. Cámbialos si han pasado
+meses.</p>
+<div class="callout aws">
+  <span class="callout-title">Lo que internet todavía cuenta mal (verificado el 2026-08-30)</span>
+  <ul>
+    <li><strong>«On-demand cuesta 6 o 7 veces más que provisioned».</strong> Falso desde el
+    1 de noviembre de 2024: la bajada del 50% dejó el punto de equilibrio en torno al 29% de
+    utilización sostenida, y AWS pasó a recomendar on-demand como modo por defecto. Los
+    artículos con 1,25 USD por millón de escrituras son de antes.</li>
+    <li><strong>«TTL borra en un máximo de 48 horas».</strong> La documentación actual dice
+    «within a few days», sin tope. Fue a peor, no a mejor.</li>
+    <li><strong>«DynamoDB nunca da consistencia fuerte entre regiones».</strong> Existe desde
+    junio de 2025: MRSC, con RPO cero — a cambio de exactamente tres regiones, tabla vacía al
+    crear, y sin TTL, LSIs ni transacciones.</li>
+    <li><strong>«Las claves compuestas de un GSI hay que concatenarlas a mano».</strong> Ya no:
+    los GSI aceptan claves multi-atributo, hasta 4 + 4.</li>
+    <li><strong>«DynamoDB es solo clave-valor».</strong> También tiene <a
+    href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html">índices
+    vectoriales</a> (hasta 5 por tabla, 4 096 dimensiones, <code>SearchVectors</code>) para
+    búsqueda semántica. Nada de esto hace falta en el curso, pero explica por qué la doc habla
+    de embeddings.</li>
+  </ul>
+</div>
 <div class="callout cost">
   <span class="callout-title">Lo que sorprende en la factura</span>
   <p>Tres cosas. Una tabla <code>PROVISIONED</code> <strong>cobra por hora aunque nadie la
@@ -149,7 +584,7 @@ List API pública</a>. Cámbialos si han pasado meses.</p>
   Dejarla desplegada cuesta exactamente cero.</p>
 </div>
 
-<h2>Límites que vas a chocar</h2>
+<h2 id="limites">Límites que vas a chocar</h2>
 <div class="scroll-x">
 <table>
   <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
@@ -160,16 +595,77 @@ List API pública</a>. Cámbialos si han pasado meses.</p>
     <tr><td>Página de resultados de <code>Query</code> / <code>Scan</code></td><td><code>1 MB</code></td><td>No — paginas con <code>LastEvaluatedKey</code></td></tr>
     <tr><td>Throughput por partición física</td><td><code>3 000 RRU / 1 000 WRU por segundo</code></td><td>No — es diseño: reparte la clave</td></tr>
     <tr><td>Throughput on-demand por tabla (default)</td><td><code>40 000 RRU / 40 000 WRU por segundo</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>Arranque de una tabla on-demand nueva</td><td><code>12 000 lecturas / 4 000 escrituras por segundo</code></td><td>Crece sola: hasta 2× tu pico anterior, al instante</td></tr>
     <tr><td>GSIs por tabla</td><td><code>20</code></td><td>Sí, por ticket</td></tr>
-    <tr><td>Tablas por región</td><td><code>2 500</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>LSIs por tabla</td><td><code>5</code></td><td>No — y solo se declaran al crear la tabla</td></tr>
+    <tr><td>Colección de ítems (tabla <em>con</em> LSIs)</td><td><code>10 GB por valor de clave de partición</code></td><td>No — sin LSIs este límite no existe</td></tr>
+    <tr><td>Atributos proyectados en índices (<code>INCLUDE</code>)</td><td><code>100</code>, sumando todos los índices</td><td>No</td></tr>
+    <tr><td><code>TransactWriteItems</code> / <code>TransactGetItems</code></td><td><code>100 ítems y 4 MB</code> por transacción</td><td>No</td></tr>
+    <tr><td>Retención de DynamoDB Streams</td><td><code>24 horas</code></td><td>No — para más, Kinesis Data Streams</td></tr>
+    <tr><td>Lectores simultáneos de un shard</td><td><code>2</code> (1 en global tables)</td><td>No — pasarse produce throttling</td></tr>
+    <tr><td>Ventana de PITR</td><td><code>35 días</code> (ajustable a la baja hasta 1)</td><td>No hacia arriba</td></tr>
+    <tr><td>Cambios de provisioned → on-demand</td><td><code>4 en 24 h</code> (ventana móvil)</td><td>No — al revés, sin límite</td></tr>
+    <tr><td>Bajadas de capacidad provisionada</td><td><code>4/día + 1/hora</code>, hasta 27 al día</td><td>No — subir es ilimitado</td></tr>
+    <tr><td>Tablas por región</td><td><code>2 500</code></td><td>Sí, hasta 10 000 con tu account team</td></tr>
   </tbody>
 </table>
 </div>
 <p class="small">Fuentes: <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Constraints.html">restricciones</a>
 y <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html">cuotas</a>,
-consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
+consultadas el 2026-08-28 y ampliadas el 2026-08-30. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
 
-<h2>Cuándo NO usarlo</h2>
+<h2 id="single-table">Single-table design: qué es y cuándo es sobreingeniería</h2>
+<p>El <em>single-table design</em> consiste en meter <strong>todas las entidades de la
+aplicación en una sola tabla</strong> —usuarios, pedidos, líneas de pedido— usando claves
+genéricas (<code>PK</code>, <code>SK</code>) con valores prefijados que codifican el tipo:
+<code>USER#42</code>, <code>ORDER#2026-08#1177</code>. Como los ítems que comparten
+<code>PK</code> viven juntos y ordenados por <code>SK</code>, una sola <code>Query</code>
+devuelve el usuario y sus veinte pedidos de golpe.</p>
+<div class="code">
+  <div class="code-label"><span>la idea, en cuatro filas</span><span class="tag">tabla única</span></div>
+<pre><code>PK              SK                    atributos
+─────────────── ───────────────────── ─────────────────────
+USER#42         PROFILE               email, nombre
+USER#42         ORDER#2026-08-01#001  total, estado
+USER#42         ORDER#2026-08-14#002  total, estado
+ORDER#002       LINE#1                sku, cantidad
+
+Query(PK = "USER#42")                 → perfil + pedidos, una petición
+Query(PK = "USER#42", SK begins_with "ORDER#") → solo los pedidos</code></pre>
+</div>
+<p>La regla que lo resume: <strong>lo que se lee junto se guarda junto</strong>. Y el precio
+que se paga por ello es alto y se paga por adelantado.</p>
+<div class="verdict">
+  <div class="yes"><h3>Tiene sentido si</h3><ul>
+    <li>Los patrones de acceso están cerrados y no cambian: los conoces todos hoy</li>
+    <li>Cada pantalla necesita varias entidades a la vez y la latencia importa</li>
+    <li>El volumen justifica ahorrar peticiones: millones al día, no cientos</li>
+    <li>Alguien del equipo lo ha hecho antes y sabe rediseñar claves sin migrar a ciegas</li>
+  </ul></div>
+  <div class="no"><h3>Es sobreingeniería si</h3><ul>
+    <li>Estás explorando: cada patrón nuevo obliga a rediseñar claves o añadir un GSI</li>
+    <li>Cada entidad se lee por su cuenta, sin <em>joins</em> implícitos</li>
+    <li>El equipo no lo domina: una tabla ilegible es un coste permanente</li>
+    <li>El ahorro real serían céntimos y unos milisegundos</li>
+  </ul></div>
+</div>
+<div class="callout why">
+  <span class="callout-title">Tu caso, dicho sin diplomacia</span>
+  <p>El proyecto 01 tiene <strong>una</strong> entidad —el enlace— y <strong>un</strong>
+  patrón de acceso: «dame el ítem con este código». Una tabla simple con
+  <code>hash_key = "code"</code> no es un atajo de principiante: es <strong>la respuesta
+  correcta</strong>. Meter <code>PK</code>/<code>SK</code> genéricos ahí no ahorraría ni una
+  petición ni un céntimo, y a cambio dejaría una tabla que hay que descifrar antes de leerla.</p>
+  <p>Single-table no es «la forma avanzada de usar DynamoDB»: es una optimización concreta
+  para un problema concreto —muchas entidades relacionadas, leídas juntas, con patrones
+  estables— y la propia AWS publica <a
+  href="https://aws.amazon.com/blogs/database/single-table-vs-multi-table-design-in-amazon-dynamodb/">una
+  guía de cuándo <em>no</em></a>. El criterio honesto: empieza con una tabla por entidad,
+  y consolida el día que midas que las peticiones extra te duelen. Al revés no se puede: una
+  tabla única mal diseñada se desmonta migrando datos.</p>
+</div>
+
+<h2 id="cuando-no">Cuándo NO usarlo</h2>
 <div class="callout trap">
   <span class="callout-title">La prueba del algodón</span>
   <p>Escribe las cinco preguntas que tu aplicación le hará a los datos. Si alguna no empieza
@@ -200,7 +696,7 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
 </table>
 </div>
 
-<h2>En Terraform</h2>
+<h2 id="terraform">En Terraform</h2>
 <div class="code">
   <div class="code-label"><span>ejemplo mínimo</span><span class="tag">hcl</span></div>
 <pre><code><b class="k">resource</b> <b class="s">"aws_dynamodb_table"</b> <b class="s">"links"</b> {
@@ -236,10 +732,88 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
   </ul>
 </div>
 
-<h2>Comprueba</h2>
+<h3 id="terraform-ttl-streams">TTL, Streams y el consumidor, completos</h3>
+<div class="code">
+  <div class="code-label"><span>ejemplo del proyecto 03</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_dynamodb_table"</b> <b class="s">"cache"</b> {
+  name         = <b class="s">"respuestas-cacheadas"</b>
+  billing_mode = <b class="s">"PAY_PER_REQUEST"</b>
+  hash_key     = <b class="s">"cache_key"</b>
+
+  attribute {
+    name = <b class="s">"cache_key"</b>
+    type = <b class="s">"S"</b>
+  }
+  <b class="c"># expire_at NO va aquí: no es clave de nada.</b>
+
+  ttl {
+    enabled        = <b class="k">true</b>
+    attribute_name = <b class="s">"expire_at"</b>   <b class="c"># segundos Unix epoch, tipo N</b>
+  }
+
+  stream_enabled   = <b class="k">true</b>
+  stream_view_type = <b class="s">"OLD_IMAGE"</b>    <b class="c"># para archivar lo que caduca</b>
+
+  point_in_time_recovery {
+    enabled                 = <b class="k">true</b>
+    recovery_period_in_days = 7        <b class="c"># default 35; acortar no abarata</b>
+  }
+
+  <b class="c"># Techo de gasto: lo que pase de aquí se throttlea.</b>
+  on_demand_throughput {
+    max_read_request_units  = 2000
+    max_write_request_units = 500
+  }
+}
+
+<b class="c"># Solo se invoca la Lambda para los borrados que hizo el propio TTL.</b>
+<b class="k">resource</b> <b class="s">"aws_lambda_event_source_mapping"</b> <b class="s">"archivador"</b> {
+  event_source_arn  = aws_dynamodb_table.cache.stream_arn
+  function_name     = aws_lambda_function.archivador.arn
+  starting_position = <b class="s">"LATEST"</b>
+
+  filter_criteria {
+    filter {
+      pattern = jsonencode({
+        userIdentity = {
+          type        = [<b class="s">"Service"</b>]
+          principalId = [<b class="s">"dynamodb.amazonaws.com"</b>]
+        }
+      })
+    }
+  }
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas de la parte nueva</span>
+  <ul>
+    <li><strong>El bloque <code>ttl</code> es todo o nada</strong>: <code>attribute_name</code>
+    es obligatorio si <code>enabled = true</code> y <strong>no debe estar puesto</strong> si es
+    <code>false</code>. Dejarlo escrito al desactivar TTL es un error de validación, no un
+    <em>no-op</em>.</li>
+    <li><strong>Activar TTL no caduca lo que ya está.</strong> Solo se borran los ítems que
+    <em>tengan</em> el atributo con una fecha pasada; los ítems viejos sin ese atributo se
+    quedan para siempre. El backfill es tuyo.</li>
+    <li><strong><code>stream_view_type</code> no se puede editar en AWS.</strong> Cambiarlo
+    obliga a apagar y encender el stream, y el ARN resultante es otro: el
+    <code>aws_lambda_event_source_mapping</code> que lo referenciaba deja de recibir nada.
+    Piensa la vista antes, como piensas la clave.</li>
+    <li><strong>Dentro de <code>global_secondary_index</code>, <code>hash_key</code> y
+    <code>range_key</code> están deprecados</strong> a favor del bloque <code>key_schema</code>
+    (que es lo que habilita las claves multi-atributo). Casi todos los ejemplos que encuentres
+    llevan los argumentos viejos.</li>
+    <li><strong>Los <code>local_secondary_index</code> son ForceNew.</strong> Añadir uno a una
+    tabla existente propone recrear la tabla. Ese es el aviso, y llega tarde.</li>
+    <li><strong>Una réplica MRSC exige <code>consistency_mode = "STRONG"</code> en el bloque
+    <code>replica</code>, exactamente tres regiones y una tabla vacía.</strong> Sobre una tabla
+    con datos, el apply falla — y ese no es momento de descubrirlo.</li>
+  </ul>
+</div>
+
+<h2 id="comprueba">Comprueba</h2>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-kicker">Pregunta 1 de 7 · coste</p>
   <p class="quiz-q">Tabla de auditoría legal: cada evento se escribe una vez, se consulta
   quizá una vez al año, y hay que retenerlo todo una década. Ya acumula 4 TB. ¿Qué cambias?</p>
   <ul class="quiz-opts">
@@ -252,7 +826,7 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-kicker">Pregunta 2 de 7 · el diseño de claves</p>
   <p class="quiz-q">Dos diseños para la tabla de enlaces del acortador: clave de partición
   <code>code</code> (aleatorio), o clave de partición <code>fecha</code> con
   <code>code</code> de clave de ordenación «para poder listar por día». ¿Cuál, y por qué?</p>
@@ -266,7 +840,7 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-kicker">Pregunta 3 de 7 · la escritura condicional</p>
   <p class="quiz-q">Tu Lambda escribe un enlace cuyo código ya existe, sin
   <code>ConditionExpression</code>. ¿Qué devuelve DynamoDB?</p>
   <ul class="quiz-opts">
@@ -279,7 +853,7 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-kicker">Pregunta 4 de 7 · analítica</p>
   <p class="quiz-q">Necesitas la lista de las URLs más visitadas de tu acortador, agregada
   por dominio, para un informe mensual. ¿Cómo lo haces bien?</p>
   <ul class="quiz-opts">
@@ -287,6 +861,46 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
     <li><button data-correct="false" data-why="Un Scan mensual lee y factura la tabla completa en páginas de 1 MB, y la agregación por dominio la harías tú a mano en memoria. Funciona con mil ítems y se convierte en un incidente de coste y throttling con cien millones.">Un Scan mensual que agrupe en memoria</button></li>
     <li><button data-correct="false" data-why="Un GSI da otra vista clave → ítem, no agregaciones: seguirías sin poder sumar visitas por dominio con una Query. Añadirlo duplicaría el coste de cada escritura para no responder la pregunta que te hacían.">Un GSI con el dominio como clave</button></li>
     <li><button data-correct="false" data-why="TransactGetItems lee hasta 100 ítems concretos de forma atómica, pagando el doble por lectura. No agrega, no filtra por dominio y no recorre la tabla: es para consistencia entre pocos ítems, no para informes.">Leerla entera usando cien lecturas transaccionales atómicas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 5 de 7 · TTL</p>
+  <p class="quiz-q">Proyecto 03: cacheas respuestas con TTL de cinco minutos. Un cliente pide
+  una clave cuyo <code>expire_at</code> venció hace una hora, y el proceso de borrado aún no
+  ha pasado. ¿Qué recibe?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="El borrado por TTL ocurre «within a few days», no al vencer: hasta entonces el ítem existe para GetItem, Query y Scan, y sigue contando para almacenamiento y lecturas. Filtrar lo expirado es responsabilidad de tu código, con FilterExpression o comparando la fecha al leer.">El ítem viejo: filtrar los expirados te toca</button></li>
+    <li><button data-correct="false" data-why="TTL no borra al vencer: marca el ítem como candidato y un proceso de fondo lo elimina cuando puede, típicamente en unos días. Diseñar como si el borrado fuera puntual es la forma más rápida de servir datos caducados en producción.">Nada, porque DynamoDB borra el ítem al vencer</button></li>
+    <li><button data-correct="false" data-why="No existe ningún error de ítem expirado en la API: para DynamoDB ese ítem es un ítem normal que resulta llevar un número en un atributo. La expiración no cambia el resultado de la lectura, solo lo pone en cola de borrado.">Un error de ítem expirado que debes capturar</button></li>
+    <li><button data-correct="false" data-why="Devuelve el ítem viejo, sí, pero la lectura se cobra igual: la propia guía avisa de que los expirados pendientes «still count towards storage and read costs until they are deleted». Lo único gratis de TTL es el borrado, no la convivencia.">El ítem viejo, pero sin cobrarte esa lectura</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 6 de 7 · elegir entre variantes</p>
+  <p class="quiz-q">Una tabla tuya ya está en producción con datos, y aparece un patrón de
+  consulta nuevo sobre un atributo que no es clave. ¿Índice local o global?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Un GSI se añade sobre una tabla viva cuando haga falta, con las claves que quieras y capacidad propia. Es la única opción real aquí, y además es la que no impone el techo de 10 GB por colección de ítems que traen los LSIs.">Global: el local se fija al crear</button></li>
+    <li><button data-correct="false" data-why="Compartir la capacidad de la tabla no lo abarata: cada escritura al índice se paga igual, solo que contra otro contador. Y el argumento se vuelve irrelevante porque un LSI ni siquiera se puede añadir a una tabla que ya existe.">Local: comparte capacidad y sale más barato</button></li>
+    <li><button data-correct="false" data-why="Es cierto que solo el LSI da lecturas fuertemente consistentes sobre el índice, y es su única ventaja real. Pero llega tarde: los LSIs se declaran al crear la tabla y no se añaden después, así que aquí no está disponible.">Local: permite lecturas fuertemente consistentes del índice</button></li>
+    <li><button data-correct="false" data-why="Un Scan con filtro lee y factura la tabla entera antes de descartar nada, en páginas de 1 MB: el filtro ahorra ancho de banda, jamás capacidad. Funciona con mil ítems y se convierte en incidente con diez millones.">Ninguno: un Scan con filtro basta aquí</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 7 de 7 · coste</p>
+  <p class="quiz-q">Tu acortador sirve 200 000 lecturas al mes, casi todas de los mismos veinte
+  enlaces. Alguien propone poner DAX delante. ¿Qué le pasa a la factura?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Esas lecturas cuestan hoy unos 0,0125 USD al mes. El nodo DAX más barato son 0,040 USD/hora, es decir 29,20 USD al mes encendido o no, y el clúster de tres nodos que se recomienda en producción, 87,60. Multiplicas la factura por más de mil para ahorrar milisegundos que nadie pidió.">Subiría de céntimos a decenas de dólares al mes</button></li>
+    <li><button data-correct="false" data-why="DAX ahorra unidades de lectura, sí, pero esas unidades ya cuestan céntimos: el ahorro máximo posible es 0,0125 USD al mes. Ningún ahorro sobre esa base compensa un clúster que factura por hora estés usándolo o no.">Bajaría, porque DAX absorbe casi todas esas lecturas repetidas</button></li>
+    <li><button data-correct="false" data-why="DAX no factura por petición: factura por nodo y hora, sea cual sea el tráfico. Es justo esa diferencia de modelo —por uso frente a por hora— la que decide si algo se puede dejar desplegado en un curso como este.">No cambiaría nada: DAX también factura por petición servida</button></li>
+    <li><button data-correct="false" data-why="La latencia sí bajaría a microsegundos, pero «un poco» son tres órdenes de magnitud: de 0,0125 a 29 o 87 USD mensuales. Y con 200 000 lecturas al mes nadie está esperando: la latencia no era el problema.">Subiría un poco, pero la latencia bajaría a microsegundos</button></li>
   </ul>
   <div class="quiz-feedback"></div>
 </div>
@@ -299,10 +913,26 @@ consultadas el 2026-08-28. DynamoDB mide en binario: 1 KB = 1024 bytes.</p>
     <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/">Documentación oficial</a>
   </div>
   <div class="ask">
-    <b>Pregúntame.</b> El hueco deliberado de esta ficha es el <strong>modelado single-table</strong>
-    —meter varias entidades en una tabla jugando con claves compuestas— porque tu acortador no
-    lo necesita. Si quieres verlo, o quieres que diseñemos las claves del proyecto 02 juntos,
-    pídemelo. Y si algo del reparto en particiones no te cuadra, esa duda es de las buenas.
+    <b>Pregúntame.</b> El single-table design ya no es el hueco: tiene <a href="#single-table">su
+    sección</a>, con el criterio de cuándo <em>no</em>. Los huecos deliberados que quedan son
+    <strong>la capacidad provisionada con auto scaling y reserved capacity</strong> —porque en
+    este curso nunca vas a tener el tráfico plano que la justifica— y los <strong>índices
+    vectoriales</strong>, que existen desde hace poco y no pintan nada en un acortador. Si
+    quieres cualquiera de los dos, o que diseñemos juntos las claves del proyecto 02, pídemelo.
+    Y si algo del reparto en particiones sigue sin cuadrarte, esa duda es de las buenas.
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">guía de
+    TTL</a> (y su página de <a
+    href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ttl-expired-items.html">ítems
+    expirados</a>, que es donde está lo que duele), <a
+    href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.html">Change
+    data capture con Streams</a>, <a
+    href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/V2globaltables_HowItWorks.html">How
+    global tables work</a> para MREC/MRSC, y las <a
+    href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html">cuotas</a>.
+    Todas consultadas el 2026-08-30.
   </div>
 </div>
 

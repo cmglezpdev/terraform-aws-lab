@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · AWS Systems Manager</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>AWS Systems Manager (SSM)</h1>
+  <p class="deck">Un paraguas de una veintena de herramientas para gestionar flotas de
+  máquinas. A este curso le importan exactamente dos: <strong>Parameter Store</strong>, que
+  guarda la configuración de tu aplicación fuera del código, y <strong>Session
+  Manager</strong>, que te da shell en una instancia privada sin abrir un solo puerto de
+  entrada, sin claves SSH y sin bastión.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Gestión de flotas / configuración</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost free">gratis</span> en lo que usa este curso</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — parámetros standard y sesiones a EC2 cuestan 0,00 USD</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_ssm_parameter</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/">proyecto 04</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Systems Manager no es <em>un</em> servicio: es una marca bajo la que AWS ha ido metiendo
+una veintena de herramientas de operaciones que comparten poco más que la consola, el
+prefijo <code>ssm:</code> en IAM y un agente instalado en las máquinas. Parchear una flota,
+correr un script en 300 instancias, inventariar software, aprobar cambios, guardar una
+cadena de conexión: todo eso se llama «Systems Manager» y casi nada de ello tiene que ver
+con lo demás.</p>
+<p>Por eso esta ficha es deliberadamente parcial. Cubre a fondo <strong>dos</strong>
+herramientas —Parameter Store y Session Manager— y <strong>omite a propósito</strong> las
+otras dieciocho, que se listan abajo en una línea cada una para que sepas que existen y no
+te sorprendas cuando aparezcan en un examen de certificación o en una consola.</p>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Systems Manager es el <strong>cajón de herramientas de sysadmin</strong> que AWS te
+  presta: destornillador, taladro, llave inglesa, aspirador. No usas todo el cajón, coges
+  la herramienta que necesitas. Donde se rompe la analogía: las herramientas del cajón real
+  se compran juntas; estas se <strong>facturan por separado</strong> y algunas son gratis
+  mientras otras cobran por paso ejecutado. «Uso Systems Manager» no dice nada sobre tu
+  factura hasta que dices <em>cuál</em>.</p>
+</div>
+
+<h3>Las otras dieciocho, de una línea cada una</h3>
+<p>Ninguna se desarrolla en esta ficha ni hace falta para el curso. Están aquí para que
+reconozcas el nombre:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Herramienta</th><th>Qué hace, en una línea</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Run Command</strong></td><td>Ejecuta un comando o script en N nodos a la vez, sin SSH. Gratis en EC2.</td></tr>
+    <tr><td><strong>State Manager</strong></td><td>Mantiene los nodos en un estado declarado (software instalado, dominio unido) reaplicándolo en bucle.</td></tr>
+    <tr><td><strong>Patch Manager</strong></td><td>Escanea y aplica parches de SO según <em>patch baselines</em> con reglas de auto-aprobación.</td></tr>
+    <tr><td><strong>Automation</strong></td><td>Runbooks multi-paso sobre recursos AWS (crear AMIs, rotar claves). Dejó de tener capa gratuita el 2025-12-31.</td></tr>
+    <tr><td><strong>Inventory</strong></td><td>Recoge metadatos de software, ficheros y parches de cada nodo; retención 30 días.</td></tr>
+    <tr><td><strong>Fleet Manager</strong></td><td>Consola unificada de la flota: salud, ficheros, registro de Windows, usuarios del SO.</td></tr>
+    <tr><td><strong>Compliance</strong></td><td>Panel de cumplimiento sobre lo que reportan Patch Manager y State Manager.</td></tr>
+    <tr><td><strong>Distributor</strong></td><td>Empaqueta y despliega software propio (o agentes de AWS) a los nodos.</td></tr>
+    <tr><td><strong>Hybrid Activations</strong></td><td>Registra máquinas que no son EC2 (on-prem, otra nube) como nodos gestionados.</td></tr>
+    <tr><td><strong>Maintenance Windows</strong></td><td>Ventanas horarias recurrentes para tareas administrativas sin pisar el horario de negocio.</td></tr>
+    <tr><td><strong>Documents</strong> (SSM documents)</td><td>El formato JSON/YAML que describe qué hace cada acción. Es el «lenguaje» común de Run Command, State Manager, Automation y las sesiones.</td></tr>
+    <tr><td><strong>Change Calendar</strong></td><td>Calendario iCalendar de ventanas donde una acción está permitida o prohibida.</td></tr>
+    <tr><td><strong>Change Manager</strong></td><td>Flujo de aprobación de cambios de empresa. <strong>Cerrado a clientes nuevos desde el 2025-11-07.</strong></td></tr>
+    <tr><td><strong>Quick Setup</strong></td><td>Asistente que configura lo anterior con las buenas prácticas por defecto, opcionalmente en toda la organización.</td></tr>
+    <tr><td><strong>AppConfig</strong></td><td>Configuración y <em>feature flags</em> con validadores y despliegue gradual con rollback. Ver «Cuándo NO usarlo».</td></tr>
+    <tr><td><strong>Application Manager</strong></td><td>Agrupa recursos AWS por aplicación y agrega su información operativa.</td></tr>
+    <tr><td><strong>Explorer</strong></td><td>Dashboard agregado de datos operativos entre cuentas y regiones.</td></tr>
+    <tr><td><strong>OpsCenter</strong></td><td>Bandeja de incidencias (<em>OpsItems</em>) con runbooks asociados. 2,97 USD/1 000 OpsItems.</td></tr>
+    <tr><td><strong>Incident Manager</strong></td><td>Gestión de incidentes: escalado, guardias, plan de respuesta.</td></tr>
+    <tr><td><strong>Just-in-time node access</strong></td><td>Novedad de abril de 2025: cero privilegios permanentes; el operador <em>pide</em> acceso a un nodo y una política lo aprueba o lo manda a un humano. Se paga por nodo/hora.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Lista y descripciones tomadas de <a
+href="https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-tools.html">Using
+AWS Systems Manager tools</a>, consultada el 2026-08-30. A partir de aquí, solo Parameter
+Store y Session Manager.</p>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Sacar la configuración del código</h3><p>El endpoint de la BD,
+  el nivel de log, el nombre del bucket. Cambiarlos no debería ser un despliegue nuevo:
+  vive en <code>/miapp/prod/log-level</code> y la aplicación lo lee al arrancar.</p></div>
+  <div class="ref-card"><h3>Pasar valores entre stacks de Terraform</h3><p>La VPC vive en
+  un state y la aplicación en otro. En vez de <code>remote_state</code> (que acopla los dos
+  states), la VPC <em>publica</em> los IDs de subred en parámetros y la aplicación los lee
+  con un <code>data source</code>. Contrato explícito, acoplamiento cero.</p></div>
+  <div class="ref-card"><h3>El AMI ID que no caduca</h3><p>AWS publica los AMI IDs actuales
+  como parámetros <em>públicos</em>
+  (<code>/aws/service/ami-amazon-linux-latest/…</code>). Tu código deja de llevar
+  <code>ami-0abc123</code> escrito a mano y pasa a preguntar por el vigente hoy en esta
+  región.</p></div>
+  <div class="ref-card"><h3>Entrar a una máquina que no tiene puerta</h3><p>Instancia en
+  subred privada, sin IP pública, con un security group sin una sola regla de entrada.
+  Session Manager te da shell igualmente. Es el sustituto del bastión.</p></div>
+  <div class="ref-card"><h3>Tunelar hasta una base de datos aislada</h3><p>Tu RDS solo
+  acepta conexiones desde el SG de la aplicación. Con <em>port forwarding</em> a través de
+  una instancia, tu <code>psql</code> local habla con <code>localhost:5432</code> y el
+  tráfico sale por el túnel. Sin abrir la BD a internet.</p></div>
+  <div class="ref-card"><h3>Auditar quién entró y qué escribió</h3><p>Cada sesión queda en
+  CloudTrail (quién, cuándo, a qué nodo) y, si lo activas, la transcripción entera en
+  CloudWatch Logs o S3. Un bastión con SSH no te da eso sin montar tú el <em>logging</em>.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+
+<h3>Parameter Store: los dos tiers</h3>
+<p>La primera decisión, y la que tiene consecuencias en la factura. Los <em>tiers</em>
+controlan el <strong>almacenamiento</strong>: cuántos parámetros caben, cómo de grandes, y
+si admiten políticas.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tier</th><th>Máx. parámetros</th><th>Máx. valor</th><th>Políticas</th><th>Compartir entre cuentas</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><code>Standard</code> (por defecto)</td><td>10 000 por cuenta y región</td><td>4 KB</td><td>No</td><td>No</td><td><strong>0,00 USD</strong></td></tr>
+    <tr><td><code>Advanced</code></td><td>100 000 por cuenta y región</td><td>8 KB</td><td>Sí, hasta 10</td><td>Sí</td><td>0,05 USD/parámetro/mes, prorrateado por hora</td></tr>
+    <tr><td><code>Intelligent-Tiering</code></td><td colspan="4">No es un tier: es una política de creación. Crea el parámetro como standard y lo promueve a advanced automáticamente el día que necesite pasar de 4 KB o llevar una política.</td><td>Lo que acabe siendo</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Advanced es un billete de ida</span>
+  <p>De standard a advanced se sube cuando quieras. <strong>De advanced a standard no se
+  baja</strong>: bajar truncaría el valor de 8 KB a 4 KB, borraría las políticas, y además
+  los dos tiers usan formas distintas de cifrado. La única salida es <em>borrar y recrear</em>
+  — y en Terraform eso significa que cambiar <code>tier</code> de <code>Advanced</code> a
+  <code>Standard</code> <strong>destruye y vuelve a crear el recurso</strong>. Con 100
+  parámetros advanced que no necesitabas te llevas 5,00 USD al mes, para siempre, hasta que
+  los borres uno a uno.</p>
+</div>
+
+<h3>Parameter Store: los tres tipos de valor</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué guarda</th><th>Cifrado</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><code>String</code></td><td>Un texto cualquiera</td><td>En reposo por AWS, sin KMS tuyo</td><td>El 90 % de los casos: endpoints, nombres, flags, IDs.</td></tr>
+    <tr><td><code>StringList</code></td><td>Texto con comas, que la API devuelve como una sola cadena</td><td>Igual que <code>String</code></td><td>Listas cortas. Ojo: <strong>si un elemento contiene una coma, se rompe</strong>. En Terraform se parte con <code>split(",", …)</code>.</td></tr>
+    <tr><td><code>SecureString</code></td><td>Texto cifrado con una clave de KMS</td><td>KMS: clave gestionada por AWS (<code>aws/ssm</code>) o tuya</td><td>Secretos que no rotan: tokens de terceros, cadenas de conexión. Para secretos que rotan, Secrets Manager.</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Quién paga las llamadas a KMS.</strong> Un <code>SecureString</code> no es
+gratis del todo aunque el parámetro sea standard: cada lectura descifrada y cada escritura
+son una llamada a KMS, y <strong>esa</strong> se factura aparte, en la línea de KMS de tu
+factura, a <a href="https://aws.amazon.com/kms/pricing/">0,03 USD por 10 000 peticiones</a>
+con 20 000 peticiones/mes de capa gratuita. La clave <code>aws/ssm</code> gestionada por AWS
+no cuesta nada por existir; una clave propia (<em>customer managed key</em>) son 1,00 USD/mes
+adicionales. Verificado el 2026-08-30, <code>us-east-1</code>.</p>
+
+<h3>Parameter Store: throughput, que no es lo mismo que tier</h3>
+<p>La confusión más común de este servicio. El <strong>tier</strong> controla el
+almacenamiento; el <strong>throughput</strong> controla el <em>ritmo de peticiones</em>. Son
+ajustes independientes y se combinan libremente.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Familia de API</th><th>Throughput estándar</th><th>Higher throughput</th></tr></thead>
+  <tbody>
+    <tr><td><code>GetParameter</code> + <code>GetParameters</code> + <code>GetParametersByPath</code></td>
+      <td><strong>40 TPS compartidos</strong> entre las tres</td>
+      <td><code>GetParameter</code> 10 000 · <code>GetParameters</code> 1 000 · <code>GetParametersByPath</code> 100</td></tr>
+    <tr><td><code>DeleteParameter(s)</code></td><td>3 TPS</td><td>5 TPS</td></tr>
+    <tr><td><code>PutParameter</code>, <code>DescribeParameters</code>, <code>GetParameterHistory</code>, <code>(Un)LabelParameterVersion</code></td><td>3 TPS</td><td>10 TPS</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">La trampa del higher throughput: es un interruptor de CUENTA</span>
+  <p>No se activa por parámetro ni por aplicación. Es un <em>service setting</em> de la
+  <strong>cuenta y la región</strong>:
+  <code>/ssm/parameter-store/high-throughput-enabled</code>. Cuando lo enciendes —porque una
+  aplicación se atragantaba— <strong>todas</strong> las llamadas a Parameter Store de esa
+  cuenta y esa región pasan a facturarse a
+  <strong>0,05 USD por cada 10 000 API interactions</strong>, incluidas las de los equipos
+  que no pidieron nada y las de los scripts de CI que leen un parámetro cada minuto. Y
+  «API interaction» no es «petición»: es <em>petición × parámetro</em> — un
+  <code>GetParameters</code> que devuelve 10 parámetros son 10 interacciones facturables.
+  Se apaga igual de fácil que se enciende (<code>--setting-value false</code>), y ese es
+  precisamente el patrón recomendado: encenderlo para el Black Friday y apagarlo el lunes.</p>
+</div>
+
+<h3>Session Manager: los tipos de sesión</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Documento SSM</th><th>Qué te da</th><th>¿Se puede loguear?</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Shell interactiva</strong></td><td><code>SSM-SessionManagerRunShell</code> (por defecto)</td>
+      <td>Un shell en el nodo, como usuario <code>ssm-user</code> (root/admin por defecto). Desde consola o <code>aws ssm start-session</code>.</td>
+      <td><strong>Sí</strong> — CloudWatch Logs o S3</td></tr>
+    <tr><td><strong>Port forwarding local</strong></td><td><code>AWS-StartPortForwardingSession</code></td>
+      <td>Un puerto de tu portátil sale por el túnel a un puerto <em>de la propia instancia</em>. RDP a un Windows privado, por ejemplo.</td>
+      <td><strong>No</strong></td></tr>
+    <tr><td><strong>Port forwarding a host remoto</strong></td><td><code>AWS-StartPortForwardingSessionToRemoteHost</code></td>
+      <td>El truco del proyecto 04: el túnel llega a la instancia y desde ahí sigue hasta <em>otro</em> host — el endpoint de RDS. El host remoto <strong>no</strong> necesita estar gestionado por SSM.</td>
+      <td><strong>No</strong></td></tr>
+    <tr><td><strong>SSH sobre SSM</strong></td><td><code>AWS-StartSSHSession</code></td>
+      <td><code>ssh</code> y <code>scp</code> de toda la vida, pero el transporte es el túnel de SSM en vez de una conexión TCP al 22. Sigue haciendo falta tu clave PEM y el usuario real (<code>ec2-user</code>), no <code>ssm-user</code>.</td>
+      <td><strong>No</strong></td></tr>
+    <tr><td><strong>Comando no interactivo</strong></td><td>Un documento propio</td>
+      <td>Ejecutar un comando fijo y salir. Útil para restringir qué puede hacer un operador.</td>
+      <td>Sí</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Los tres últimos no se pueden loguear porque SSM solo hace de túnel: el
+contenido va cifrado extremo a extremo dentro del TLS entre tu CLI y el endpoint, y el
+servicio no lo ve. Fuente: <a
+href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-logging.html">Enabling
+and disabling session logging</a>, consultada el 2026-08-30.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión, en tres reglas</span>
+  <ul>
+    <li><strong>Empieza siempre en standard.</strong> Sube a advanced solo cuando choques
+    con los 4 KB o necesites una política de expiración. 10 000 parámetros es muchísimo más
+    de lo que crees.</li>
+    <li><strong>No enciendas higher throughput «por si acaso».</strong> Primero cachea en la
+    aplicación y agrupa con <code>GetParameters</code>; el 40 TPS por defecto aguanta casi
+    todo. Enciéndelo cuando veas <code>ThrottlingException</code> de verdad.</li>
+    <li><strong>Si el secreto rota, no es Parameter Store.</strong> Es Secrets Manager.</li>
+  </ul>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<h3>Parameter Store: jerarquías, versiones y etiquetas</h3>
+<ul>
+  <li><strong>La jerarquía es una convención de nombres, no una estructura.</strong> Un
+  parámetro llamado <code>/miapp/prod/db/host</code> no vive «dentro» de ninguna carpeta:
+  el nombre <em>es</em> la barra. Lo que la hace útil es
+  <code>GetParametersByPath</code>, que devuelve todo lo que cuelga de un prefijo, y sobre
+  todo <strong>IAM</strong>: puedes dar permiso sobre
+  <code>arn:aws:ssm:…:parameter/miapp/prod/*</code> y que el rol de producción no vea nada
+  de <code>/miapp/dev/</code>. Diseñar la jerarquía es diseñar la frontera de permisos.
+  Máximo <strong>15 niveles</strong>; los prefijos <code>/aws</code> y <code>/ssm</code>
+  están reservados.</li>
+  <li><strong>Cada escritura crea una versión nueva.</strong> No sobrescribe: incrementa un
+  entero. Se conservan las <strong>100 últimas</strong>; a partir de ahí la más antigua
+  cae. Se lee una versión concreta con la sintaxis <code>nombre:3</code>, y eso es lo que
+  convierte a Parameter Store en algo parecido a un control de versiones de configuración.</li>
+  <li><strong>Las <em>labels</em> son punteros móviles a una versión.</strong> Pones la
+  etiqueta <code>live</code> en la versión 7; la aplicación lee <code>nombre:live</code>. El
+  día que despliegas, mueves la etiqueta a la 8 — y el rollback es moverla de vuelta a la 7,
+  sin tocar valores. Una etiqueta apunta a una sola versión a la vez.</li>
+  <li><strong>Las políticas de parámetro (solo advanced) se aplican por barrido
+  asíncrono.</strong> <code>Expiration</code> borra el parámetro en una fecha;
+  <code>ExpirationNotification</code> emite un evento en EventBridge N días antes;
+  <code>NoChangeNotification</code> emite un evento si nadie lo ha tocado en N días —el caso
+  típico: «este AMI aprobado lleva 90 días sin revisar». Máximo 10 por parámetro. Que el
+  barrido sea periódico significa que <strong>el borrado no es puntual al segundo</strong>:
+  no construyas nada que dependa del instante exacto. Y ojo: aplicar una política nueva
+  <em>sustituye</em> a las que hubiera, no se añade.</li>
+  <li><strong>Los parámetros públicos de AWS son parámetros normales que no son
+  tuyos.</strong> Viven bajo <code>/aws/service/…</code>, los publica AWS, y se leen con las
+  mismas APIs. El caso estrella: <code>/aws/service/ami-amazon-linux-latest/</code> con
+  entradas como <code>al2023-ami-kernel-default-x86_64</code>, cuyo valor es el AMI ID
+  vigente <em>hoy</em> <em>en esta región</em>. Cambian solos cada vez que AWS publica una
+  imagen nueva.</li>
+</ul>
+
+<h3>Session Manager: por dónde va el tráfico</h3>
+<p>La pregunta que hay que responder para entenderlo: si la instancia no tiene IP pública
+ni puerto abierto, ¿por dónde entra la conexión? <strong>No entra.</strong> Sale.</p>
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">nadie llama a la instancia: la instancia llama a AWS</span></div>
+<pre><code>  tu portátil                    AWS                      subred privada
+  ───────────                  ───────                   ───────────────
+  aws ssm start-session ──────▶ ssm.&lt;region&gt;.amazonaws.com
+                                      │
+                                      │  (la instancia mantiene ABIERTO
+                                      │   un canal saliente permanente)
+                                      ▼
+                              ssmmessages.&lt;region&gt;  ◀───── SSM Agent
+                              ec2messages.&lt;region&gt;  ◀───── (HTTPS 443 SALIENTE)
+                                                              │
+  security group de la instancia:  0 reglas de entrada  ──────┘
+  IP pública:                      ninguna
+  puerto 22:                       cerrado (o inexistente)</code></pre>
+</div>
+<p>El agente abre y mantiene un canal saliente hacia <code>ssmmessages</code>. Cuando tú
+pides una sesión, AWS la empuja por ese canal ya establecido. El sentido del tráfico es
+siempre <em>de dentro hacia fuera</em>, y por eso el security group no necesita ninguna
+regla de entrada. Lo que sí necesita es <strong>salida</strong>.</p>
+
+<h4>Los cuatro requisitos, sin ninguno de los cuales no funciona</h4>
+<ol class="steps">
+  <li><strong>SSM Agent instalado y corriendo.</strong> Viene preinstalado en Amazon Linux
+  2/2023, Ubuntu de AWS y Windows Server de AWS. Versión mínima
+  <code>2.3.68.0</code> para una shell; <code>3.0.222.0</code> para port forwarding y SSH;
+  <code>3.1.1374.0</code> para port forwarding a host remoto; <code>3.0.284.0</code> para
+  volcar la sesión a CloudWatch Logs.</li>
+  <li><strong>Permisos en el nodo.</strong> Un <em>instance profile</em> con la política
+  gestionada <code>AmazonSSMManagedInstanceCore</code>. El error de diagnóstico más común
+  del mundo: la instancia «no aparece» en la lista de Session Manager y no hay ningún
+  mensaje de error que te diga por qué.</li>
+  <li><strong>Salida HTTPS (443) a tres endpoints</strong>:
+  <code>ssm.&lt;region&gt;.amazonaws.com</code>,
+  <code>ssmmessages.&lt;region&gt;.amazonaws.com</code> y
+  <code>ec2messages.&lt;region&gt;.amazonaws.com</code>. Dos formas de conseguirlo: por
+  <strong>NAT Gateway</strong> (la instancia sale a internet) o por <strong>VPC interface
+  endpoints</strong> (el tráfico no sale de la red de AWS). Los tres endpoints hacen falta;
+  con dos, no arranca. El coste de cada opción está en la
+  <a href="./aws-vpc.html">ficha de VPC</a> — resumen: un NAT Gateway cobra por hora esté o
+  no en uso, y cada interface endpoint cobra por hora <em>y por zona de disponibilidad</em>,
+  así que tres endpoints en dos AZ son seis ENIs facturables.</li>
+  <li><strong>Permisos en tu lado.</strong> Tu rol necesita <code>ssm:StartSession</code>
+  sobre la instancia y sobre el documento, y localmente el <em>Session Manager plugin</em>
+  del AWS CLI si no usas la consola.</li>
+</ol>
+
+<div class="callout aws">
+  <span class="callout-title">Default Host Management Configuration: el paso 2, automático</span>
+  <p>Desde noviembre de 2022 existe un ajuste de <strong>cuenta y región</strong> que
+  elimina la necesidad de crear y adjuntar un instance profile a cada instancia: SSM asume
+  un rol de servicio
+  (<code>AWSSystemsManagerDefaultEC2InstanceManagementRole</code>, con la política
+  <code>AmazonSSMManagedEC2InstanceDefaultPolicy</code>) y gestiona <em>todas</em> las
+  instancias EC2 de esa cuenta y región. Requisitos reales: <strong>IMDSv2
+  obligatorio</strong> (no soporta IMDSv1) y SSM Agent <code>3.2.582.0</code> o superior.
+  Tarda hasta 30 minutos en surtir efecto y hay que activarlo región por región.</p>
+  <p><strong>La trampa que nadie ve venir:</strong> si la instancia ya tiene un instance
+  profile que permite <code>ssm:UpdateInstanceInformation</code>, el agente usará
+  <em>ese</em> y <strong>nunca</strong> las credenciales de DHMC. Los dos mecanismos no se
+  suman: el instance profile gana. Fuente: <a
+  href="https://docs.aws.amazon.com/systems-manager/latest/userguide/managed-instances-default-host-management.html">Managing
+  EC2 instances automatically with Default Host Management Configuration</a>.</p>
+</div>
+
+<h3>El túnel a la base de datos, paso a paso</h3>
+<p>Es el movimiento que resuelve el proyecto 04 y merece verse entero. La RDS está en
+subred privada y solo acepta conexiones desde el security group de la aplicación. Quieres
+abrir un cliente SQL desde tu portátil.</p>
+<div class="code">
+  <div class="code-label"><span>shell</span><span class="tag">port forwarding a host remoto</span></div>
+<pre><code>aws ssm start-session \
+  --target i-0123456789abcdef0 \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["midb.abc123.us-east-1.rds.amazonaws.com"],
+                 "portNumber":["5432"],
+                 "localPortNumber":["5432"]}'
+
+# y en otra terminal, como si la BD estuviera en tu máquina:
+psql -h localhost -p 5432 -U app midb</code></pre>
+</div>
+<ul>
+  <li>La instancia <code>i-0123…</code> hace de salto. Sigue sin tener IP pública ni puerto
+  22 abierto.</li>
+  <li>El <strong>host remoto no necesita SSM Agent</strong> — solo que la instancia de salto
+  tenga conectividad de red y resolución DNS hacia él. Por eso funciona con RDS,
+  ElastiCache o cualquier cosa que hable TCP.</li>
+  <li>El security group de la RDS solo tiene que permitir el 5432 desde el SG de la
+  instancia de salto. Nada más. Nunca desde <code>0.0.0.0/0</code>.</li>
+  <li>Esta sesión <strong>no se puede grabar</strong>. Es un túnel opaco. Lo que sí queda es
+  el registro en CloudTrail de que abriste una sesión de port forwarding contra ese nodo, a
+  esa hora, con ese rol.</li>
+</ul>
+
+<h3>Por qué a un auditor le encanta</h3>
+<p>Compara los dos mundos, que es donde está el argumento real:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Pregunta del auditor</th><th>Con bastión + SSH</th><th>Con Session Manager</th></tr></thead>
+  <tbody>
+    <tr><td>¿Quién puede entrar?</td><td>Quien tenga una clave privada. Y las claves se copian.</td><td>Quien tenga <code>ssm:StartSession</code> en IAM. Se revoca en un segundo.</td></tr>
+    <tr><td>¿Quién entró el martes?</td><td><code>/var/log/auth.log</code> del bastión, si nadie lo tocó.</td><td>CloudTrail, inmutable, fuera de la máquina.</td></tr>
+    <tr><td>¿Qué escribió?</td><td>Nada, salvo que montaras auditoría tú.</td><td>Transcripción completa en CloudWatch Logs o S3, si lo activas.</td></tr>
+    <tr><td>¿Qué puertos hay abiertos?</td><td>Al menos el 22 del bastión, hacia algún sitio.</td><td><strong>Ninguno.</strong></td></tr>
+    <tr><td>¿Se rotan las credenciales?</td><td>Cuando alguien se acuerde.</td><td>Son credenciales temporales de STS. Caducan solas.</td></tr>
+    <tr><td>¿Qué pasa si alguien deja la empresa?</td><td>Hay que rotar la clave en todas las máquinas.</td><td>Se borra su permiso IAM. Fin.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout win">
+  <span class="callout-title">La mejor puerta es la que no existe</span>
+  <p>En el proyecto 04 <strong>ningún security group tiene una regla de entrada al puerto
+  22</strong>. No es que esté restringida a una IP, ni protegida con una clave fuerte: es
+  que no está. Una regla de firewall que no existe no se puede configurar mal, no caduca, no
+  se copia en un Slack y no aparece en el informe de la siguiente auditoría. Todo el valor
+  de Session Manager cabe en esa frase.</p>
+</div>
+
+<h2>Cuánto cuesta</h2>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Parámetros standard (almacenamiento)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>API de Parameter Store, throughput estándar, parámetros standard</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Parámetros advanced (almacenamiento)</td><td><span class="tag-cost hour">por parámetro/mes</span></td><td><code>0,05 USD</code> (prorrateado por hora)</td></tr>
+    <tr><td>API sobre parámetros advanced</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,05 USD</code> / 10 000 interacciones</td></tr>
+    <tr><td>API con <em>higher throughput</em> activado</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,05 USD</code> / 10 000 interacciones</td></tr>
+    <tr><td>KMS para <code>SecureString</code> con clave <code>aws/ssm</code></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,03 USD</code> / 10 000 peticiones (20 000/mes gratis)</td></tr>
+    <tr><td>KMS con clave propia</td><td><span class="tag-cost hour">por clave/mes</span></td><td><code>1,00 USD</code> + las peticiones</td></tr>
+    <tr><td><strong>Session Manager sobre instancias EC2</strong></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — sin límite de sesiones ni de minutos</td></tr>
+    <tr><td>Session Manager sobre nodos híbridos/multicloud</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,05 USD</code> / sesión, <strong>desde el 2026-09-30</strong></td></tr>
+    <tr><td>Registro de nodos híbridos</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> desde el 2026-06-30</td></tr>
+    <tr><td>Just-in-time node access</td><td><span class="tag-cost hour">por nodo/hora</span></td><td>desde <code>0,0137 USD</code>/nodo/hora tras la prueba gratuita</td></tr>
+    <tr><td>Automation (contexto)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,002 USD</code>/paso — su capa gratuita acabó el 2025-12-31</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios de <code>us-east-1</code>, verificados el 2026-08-30 en
+<a href="https://aws.amazon.com/systems-manager/pricing/">AWS Systems Manager Pricing</a> y
+<a href="https://aws.amazon.com/kms/pricing/">AWS KMS Pricing</a>. Cámbialos si han pasado
+meses.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Tu factura del proyecto 04</span>
+  <p><strong>0,00 USD de Systems Manager.</strong> Parámetros standard: gratis. Lecturas a
+  throughput por defecto: gratis. Sesiones y túneles contra instancias EC2: gratis, ilimitadas.
+  Nada de esto cobra por hora, así que se puede dejar desplegado sin pensarlo.</p>
+  <p><strong>Lo que sí aparece en la factura, y no es de SSM:</strong> el camino de red hacia
+  los tres endpoints. Un NAT Gateway cobra por hora aunque nadie lo use; tres VPC interface
+  endpoints cobran por hora <em>y por AZ</em>. Ese es el coste real de «entrar a una máquina
+  privada», y está en la <a href="./aws-vpc.html">ficha de VPC</a>, no en esta. Segundo
+  candidato a sorpresa: los <code>SecureString</code>, cuyo cifrado se factura en la línea
+  de KMS y no en la de SSM — irrelevante a esta escala, incómodo cuando una Lambda con 2 000
+  invocaciones concurrentes lee el secreto en cada arranque en frío.</p>
+</div>
+
+<div class="callout win">
+  <span class="callout-title">Novedades 2024-2026 (por si leíste algo viejo)</span>
+  <ul>
+    <li><strong>El <em>advanced instances tier</em> ya no existe.</strong> Se eliminó el
+    <strong>2026-06-30</strong>. Durante años, usar Session Manager contra una máquina que
+    no fuera EC2 obligaba a activar un tier de pago con un tope de 1 000 instancias. Ese
+    tope y ese cargo por instancia han desaparecido: registrar nodos híbridos ahora es
+    gratis y sin límite. En su lugar, desde el <strong>2026-09-30</strong> se paga por uso:
+    0,05 USD por sesión y 0,002 USD por invocación de Run Command <em>solo</em> en esos
+    nodos. Si internet te cuenta el modelo por instancia/hora, está desactualizado.</li>
+    <li><strong>Just-in-time node access</strong> (abril de 2025): cero privilegios
+    permanentes. El operador pide acceso, una política lo aprueba automáticamente o lo manda
+    a un humano por Slack/Teams/email, y el acceso caduca solo. Es la evolución natural de
+    Session Manager para organizaciones grandes. Se paga por nodo/hora.</li>
+    <li><strong>Automation dejó de ser gratis</strong> el 2025-12-31.</li>
+    <li><strong>Change Manager está cerrado a clientes nuevos</strong> desde el 2025-11-07.</li>
+    <li><strong>Consola unificada</strong> desde el 2024-11-21, disponible solo en 16 regiones.</li>
+  </ul>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a
+href="https://docs.aws.amazon.com/general/latest/gr/ssm.html">AWS Systems Manager endpoints
+and quotas</a>, consultada el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Parámetros standard por cuenta y región</td><td><code>10 000</code></td><td>No — el camino es pasar a advanced</td></tr>
+    <tr><td>Parámetros advanced por cuenta y región</td><td><code>100 000</code></td><td>No</td></tr>
+    <tr><td>Tamaño del valor</td><td><code>4 KB</code> standard · <code>8 KB</code> advanced</td><td>No</td></tr>
+    <tr><td>Versiones conservadas por parámetro</td><td><code>100</code></td><td>No — la 101 tira la más antigua</td></tr>
+    <tr><td>Políticas por parámetro advanced</td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Niveles de jerarquía en el nombre</td><td><code>15</code></td><td>No — <code>HierarchyLevelLimitExceededException</code></td></tr>
+    <tr><td>Longitud del nombre</td><td><code>1 011</code> caracteres, <strong>incluido el ARN</strong> que lo precede (~45 caracteres)</td><td>No</td></tr>
+    <tr><td>Lecturas (<code>GetParameter*</code>)</td><td><code>40 TPS</code> compartidos</td><td>Sí, con <em>higher throughput</em> (de pago)</td></tr>
+    <tr><td>Escrituras (<code>PutParameter</code>)</td><td><code>3 TPS</code></td><td>Sí, hasta 10 con <em>higher throughput</em></td></tr>
+    <tr><td><code>StartSession</code></td><td><code>3 TPS</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>Inactividad antes de cerrar la sesión</td><td><code>20 min</code> por defecto</td><td>Sí — configurable entre 1 y 60 minutos</td></tr>
+    <tr><td>Historial de sesiones en la consola</td><td><code>30 días</code></td><td>No — para más, vuelca a S3 o CloudWatch Logs</td></tr>
+    <tr><td>Nodos gestionados por cuenta y región</td><td><code>2 400</code></td><td>Sí, por ticket — pasarse sin pedirlo hace que los nodos dejen de comunicar</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Nota: la documentación de AWS se contradice a sí misma sobre la versión
+mínima de SSM Agent para port forwarding y SSH — la
+<a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-prerequisites.html">página
+de prerrequisitos</a> dice <code>3.0.222.0</code> y la
+<a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html">página
+de inicio de sesión</a> dice <code>2.3.672.0</code>. Toma la más alta y no lo pienses más.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Guardas configuración que cambia sin desplegar código.</li>
+    <li>Quieres pasar valores entre stacks de Terraform sin acoplar states.</li>
+    <li>Necesitas el AMI ID vigente sin escribirlo a mano.</li>
+    <li>Guardas un secreto que <em>no</em> rota y quieres pagar cero por ello.</li>
+    <li>Necesitas shell o un túnel a una máquina privada, auditado y sin puertos abiertos.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>El secreto debe rotar automáticamente → Secrets Manager.</li>
+    <li>Necesitas <em>feature flags</em> con validación y despliegue gradual → AppConfig.</li>
+    <li>El valor pasa de 8 KB → S3, y el parámetro guarda la clave del objeto.</li>
+    <li>Tu aplicación lee el mismo parámetro miles de veces por segundo sin caché → arréglalo cacheando, no pagando throughput.</li>
+    <li>Necesitas una GUI de escritorio completa en Windows → Fleet Manager GUI Connect (RDP), no una shell.</li>
+  </ul></div>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La confusión cara</span>
+  <p>Parameter Store <strong>no rota nada</strong>. Un <code>SecureString</code> está
+  cifrado, sí, pero la contraseña de tu base de datos seguirá siendo la misma dentro de dos
+  años salvo que alguien la cambie a mano. «Está en SecureString, luego está gestionado» es
+  falso: está <em>guardado</em>, que es otra cosa. Y al revés: meter en Secrets Manager los
+  40 valores de configuración de tu aplicación porque «es lo seguro» te cuesta 0,40 USD/mes
+  por algo que en Parameter Store standard es gratis.</p>
+</div>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><a href="./aws-secretsmanager.html">Secrets Manager</a></td>
+      <td>Rotación automática gestionada, política de recurso propia y precio por secreto/mes. Parameter Store guarda; Secrets Manager <em>gestiona el ciclo de vida</em>.</td>
+      <td>El valor es una credencial que debe rotar, o necesitas compartirla entre cuentas con política de recurso.</td></tr>
+    <tr><td><strong>AppConfig</strong> (que también es SSM)</td>
+      <td>Despliega configuración con validadores, canary por porcentaje y rollback automático si salta una alarma. Parameter Store solo tiene un valor, sin proceso de despliegue.</td>
+      <td>Feature flags, o una configuración cuyo cambio erróneo tumbaría el servicio y quieres que se despliegue por fases.</td></tr>
+    <tr><td><strong>Variables de entorno de Lambda</strong></td>
+      <td>Se resuelven en el despliegue, no en la ejecución. Cambiarlas es actualizar la función; leerlas cuesta 0 y tarda 0.</td>
+      <td>El valor no cambia entre despliegues y no lo comparte nadie más. Para lo demás, Parameter Store.</td></tr>
+    <tr><td><strong>Bastion host</strong></td>
+      <td>Una máquina que existe, que hay que parchear, que cuesta por hora y que tiene el 22 abierto hacia algún sitio.</td>
+      <td>Nunca, si tienes Session Manager. Excepcionalmente: herramientas que exigen SSH nativo — y ni así, porque <code>AWS-StartSSHSession</code> también las cubre.</td></tr>
+    <tr><td><strong>EC2 Instance Connect Endpoint</strong></td>
+      <td>Otro camino de AWS para llegar a una instancia privada, este sí basado en SSH/RDP y sin agente. No da <code>GetParameter</code> ni nada del resto de SSM.</td>
+      <td>No puedes instalar el SSM Agent en la máquina. Con agente, Session Manager es más completo (logging, documentos, port forwarding a host remoto).</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Parameter Store vs Secrets Manager, en dos frases</strong>: Parameter Store
+guarda valores —cifrados o no— y es gratis en su tier standard; Secrets Manager gestiona el
+<em>ciclo de vida</em> de una credencial, con rotación automática integrada con RDS, y cobra
+por secreto y mes. La regla de dedo: <strong>secreto que rota → Secrets Manager;
+configuración y secretos estáticos baratos → Parameter Store</strong>. La comparación
+completa, con precios y con el caso de la contraseña de la base de datos del proyecto 04,
+está en la <a href="./aws-secretsmanager.html">ficha de Secrets Manager</a>; aquí no se
+duplica.</p>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">configuración, jerarquía y lectura</span></div>
+<pre><code>#--- escribir un parámetro de configuración -------------------------
+resource "aws_ssm_parameter" "log_level" {
+  name  = "/miapp/prod/log-level"   # la barra inicial es obligatoria
+  type  = "String"                  # String | StringList | SecureString
+  value = "info"
+  # tier = "Standard"   <- el valor por defecto de la región; no lo toques
+}
+
+#--- publicar un valor para que otro stack lo consuma ----------------
+resource "aws_ssm_parameter" "db_endpoint" {
+  name  = "/miapp/prod/db/endpoint"
+  type  = "String"
+  value = aws_db_instance.main.address
+}
+
+#--- leerlo desde OTRO state, sin remote_state ----------------------
+data "aws_ssm_parameter" "db_endpoint" {
+  name = "/miapp/prod/db/endpoint"
+}
+# -> data.aws_ssm_parameter.db_endpoint.value
+
+#--- el AMI ID vigente, sin escribirlo a mano -----------------------
+data "aws_ssm_parameter" "al2023" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
+resource "aws_instance" "app" {
+  ami                  = data.aws_ssm_parameter.al2023.value
+  instance_type        = "t3.micro"
+  subnet_id            = aws_subnet.private.id
+  iam_instance_profile = aws_iam_instance_profile.ssm.name
+  # ni key_name, ni associate_public_ip_address: no hacen falta
+}
+
+#--- el rol que hace que Session Manager funcione -------------------
+resource "aws_iam_role" "ssm" {
+  name = "app-instance-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.ssm.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ssm" {
+  name = "app-instance-profile"
+  role = aws_iam_role.ssm.name
+}
+
+#--- el security group SIN reglas de entrada ------------------------
+resource "aws_security_group" "app" {
+  name   = "app"
+  vpc_id = aws_vpc.main.id
+
+  # no hay bloque de entrada. Ninguno. Ese es el punto.
+
+  egress {                       # salida a los endpoints de SSM
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong>Un <code>SecureString</code> queda en claro en el state.</strong> Terraform
+    escribe el valor descifrado en <code>terraform.tfstate</code>. Cifrar en AWS no cifra tu
+    state. Dos salidas: <code>value_wo</code> (argumento <em>write-only</em>, Terraform 1.11
+    o superior) que nunca se guarda en el state y se actualiza incrementando
+    <code>value_wo_version</code>; o no meter el secreto en Terraform en absoluto y que lo
+    escriba otro proceso. Lo mismo vale para el <em>data source</em>: leer un
+    <code>SecureString</code> lo deposita en claro en el state del que lee.</li>
+    <li><strong><code>insecure_value</code> no marca el valor como sensible</strong> — sale
+    íntegro en el <code>plan</code>, en los logs de CI y en la captura de pantalla que
+    pegues en Slack. Existe para valores públicos que quieres ver en el diff. No es un atajo.</li>
+    <li><strong><code>overwrite</code> tiene un comportamiento asimétrico</strong>: por
+    defecto es <code>false</code> al crear (para no pisar un parámetro que ya existiera
+    fuera de Terraform) y <code>true</code> después. Si el parámetro ya existe en la cuenta
+    y lo declaras sin más, el <code>apply</code> falla.</li>
+    <li><strong>Bajar de <code>Advanced</code> a <code>Standard</code> recrea el
+    recurso.</strong> Terraform lo destruye y lo vuelve a crear, porque la API no permite
+    la bajada. Con un parámetro leído por producción, eso es una ventana de inexistencia.</li>
+    <li><strong>El <em>data source</em> devuelve siempre un string</strong>, incluso para
+    <code>StringList</code>: hay que partirlo con
+    <code>split(",", data.aws_ssm_parameter.x.value)</code>.</li>
+    <li><strong>Higher throughput se activa con
+    <code>aws_ssm_service_setting</code></strong>
+    (<code>setting_id = "/ssm/parameter-store/high-throughput-enabled"</code>) — y recuerda
+    que es un ajuste de <em>toda la cuenta y región</em>. Ese recurso en un módulo de una
+    aplicación cambia la factura de todas las demás.</li>
+    <li><strong>Para el AMI ID, el <em>data source</em> se resuelve en cada
+    <code>plan</code></strong>: el día que AWS publique una imagen nueva, tu plan mostrará
+    un reemplazo de la instancia que no habías pedido. Es lo correcto para una
+    <em>launch template</em> con Auto Scaling; es incómodo para una instancia suelta. Si no
+    lo quieres, fija la versión: <code>name = "…/al2023-…:12"</code>.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · elegir la variante</p>
+  <p class="quiz-q">Necesitas shell en una instancia que está en subred privada, sin IP
+  pública, y el requisito de seguridad del proyecto 04 dice que ningún security group puede
+  tener una regla de entrada al 22. ¿Qué montas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Session Manager funciona porque el agente abre un canal SALIENTE hacia ssm, ssmmessages y ec2messages: nadie llama a la instancia. Con el instance profile puesto y salida por NAT o por VPC endpoints, tienes shell sin una sola regla de entrada.">Rol de instancia con salida HTTPS hacia los tres endpoints</button></li>
+    <li><button data-correct="false" data-why="Es exactamente lo que Session Manager elimina. Un bastión es una máquina más que parchear, que cuesta por hora, cuyo 22 está abierto hacia algún sitio, y cuyas claves privadas se copian sin dejar rastro. Además viola el requisito literal del proyecto.">Un bastión público en subred pública con clave SSH propia</button></li>
+    <li><button data-correct="false" data-why="Restringir el origen no es lo mismo que no tener puerta: tu IP de oficina cambia, la regla se queda, y sigue habiendo un 22 escuchando. El requisito del proyecto no es «el 22 protegido», es «el 22 inexistente».">Una regla de entrada al puerto 22 desde tu oficina</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · coste</p>
+  <p class="quiz-q">Guardas 40 parámetros de configuración de menos de 1 KB cada uno, todos
+  de tipo <code>String</code>, y tu aplicación los lee unas 200 veces al día. ¿Qué te
+  factura Parameter Store al mes?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El tier standard no cobra por almacenamiento y el throughput por defecto no cobra por interacción. 40 parámetros están lejísimos del tope de 10 000 y 200 lecturas diarias son 0,002 TPS frente a los 40 disponibles. Factura literal: cero.">Cero: tier standard y throughput por defecto no cobran nada</button></li>
+    <li><button data-correct="false" data-why="Los 0,05 USD por parámetro y mes son del tier ADVANCED. Estos parámetros son standard, que es el tier por defecto y no cobra almacenamiento. Solo pagarías eso si hubieras pedido advanced explícitamente o cambiado el tier por defecto de la región.">Dos dólares al mes, porque cada parámetro cuesta cinco céntimos</button></li>
+    <li><button data-correct="false" data-why="Las lecturas solo se facturan (0,05 USD/10 000 interacciones) si activaste higher throughput a nivel de cuenta y región, o si los parámetros son advanced. Con standard y throughput por defecto, las API interactions no aparecen en la factura.">Céntimos al mes, porque las lecturas se cobran por millar</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · el criterio</p>
+  <p class="quiz-q">La contraseña maestra de la base de datos del proyecto 04 tiene que
+  cambiar sola cada 30 días, sin que nadie toque nada y sin cortar la aplicación. ¿Dónde
+  vive?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La rotación gestionada es justo lo que separa a los dos servicios: Secrets Manager trae la Lambda de rotación integrada con RDS y coordina el cambio en la BD y en el secreto. Parameter Store no rota nada, por definición.">En Secrets Manager, que trae la rotación gestionada de serie</button></li>
+    <li><button data-correct="false" data-why="Estaría cifrada, sí, pero seguiría siendo la misma dentro de dos años. Cifrado y rotación son propiedades distintas: SecureString resuelve la primera y no toca la segunda. Es el error de razonamiento más caro de este servicio.">En Parameter Store como SecureString, cifrado con una clave KMS</button></li>
+    <li><button data-correct="false" data-why="Una política de expiración BORRA el parámetro en la fecha indicada; no genera un valor nuevo ni lo cambia en la base de datos. Aplicada a una contraseña en producción, el resultado no es rotación: es que la aplicación deja de encontrar la credencial.">En Parameter Store avanzado, con una política de expiración mensual</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el diagnóstico</p>
+  <p class="quiz-q">Tu instancia privada no aparece en la lista de Session Manager. El
+  instance profile lleva <code>AmazonSSMManagedInstanceCore</code>, el SSM Agent está
+  corriendo y el security group no tiene reglas de entrada. ¿Qué falta?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El agente necesita alcanzar por HTTPS los tres endpoints, vía NAT Gateway o vía VPC interface endpoints. Es la causa número uno de «el nodo no aparece», y no da ningún mensaje de error: simplemente no está en la lista.">Salida HTTPS a los endpoints de ssm, ssmmessages y ec2messages</button></li>
+    <li><button data-correct="false" data-why="Session Manager no usa el 22 ni ningún puerto de entrada: el canal lo abre el agente desde dentro hacia fuera. Abrir el 22 no arregla nada y destruye la propiedad por la que elegiste Session Manager.">Abrir de entrada el puerto 22 en el security group</button></li>
+    <li><button data-correct="false" data-why="La IP pública no hace falta en ningún momento: el tráfico va de dentro hacia fuera y puede ir por NAT o por endpoints privados sin salir de la red de AWS. Añadirla amplía la superficie de ataque sin resolver el problema.">Una IP pública elástica asociada a su interfaz de red</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-secretsmanager.html">Ficha: Secrets Manager</a>
+    <a href="./aws-vpc.html">Ficha: VPC (endpoints y NAT)</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html">guía
+    de Parameter Store</a> (empieza por <em>Choosing parameter tiers</em> y <em>Managing
+    Parameter Store throughput</em>), los <a
+    href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-prerequisites.html">prerrequisitos
+    de Session Manager</a> con la lista exacta de endpoints, y la <a
+    href="https://aws.amazon.com/systems-manager/pricing/">página de precios</a>, que es
+    donde vive la letra pequeña del cambio de 2026 en nodos híbridos. Cualquier duda,
+    pregúntame en la sesión.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

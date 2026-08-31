@@ -1,0 +1,895 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon SQS</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon SQS</h1>
+  <p class="deck">La cola: un buzón durable donde el productor deja mensajes y el consumidor
+  los recoge cuando puede. Nadie espera a nadie. Lo que compras no es «mandar mensajes» —eso
+  ya lo hace una llamada HTTP— sino <strong>que el mensaje sobreviva</strong> a que el
+  consumidor esté caído, saturado o desplegándose, y que <strong>se reintente solo</strong>
+  hasta que alguien lo procese o se rinda de forma controlada.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Mensajería / integración de aplicaciones</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (la cola vive en una región; replicada en varias AZ)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — una cola vacía cuesta 0,00 USD/h. Solo se pagan peticiones a la API</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_sqs_queue</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/02-event-driven">proyecto 02</a> (lección 12)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un almacén de mensajes gestionado, con semántica de cola: un <strong>productor</strong>
+llama a <code>SendMessage</code> y SQS guarda el mensaje de forma redundante en varias zonas
+de disponibilidad antes de responder; un <strong>consumidor</strong> llama a
+<code>ReceiveMessage</code>, procesa, y llama a <code>DeleteMessage</code>. Si no borra, el
+mensaje <strong>vuelve a aparecer</strong> y otro consumidor lo intenta. Ese ciclo
+—recibir, ocultar temporalmente, borrar o devolver— es todo el servicio.</p>
+<p>No hay servidores, no hay <em>brokers</em> que dimensionar, no hay particiones que
+gestionar (salvo en FIFO, y las gestiona AWS), no hay disco que llenar: el número de
+mensajes que una cola puede almacenar es
+<a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-queues.html">ilimitado</a>.
+Lo que existe es un contrato de retención: 4 días por defecto, 14 como máximo.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>La bandeja de «pendientes» de una oficina, con una regla rara: cuando coges un papel de
+  la bandeja <strong>no te lo llevas</strong> — se queda ahí pero invisible para los demás
+  durante 30 segundos. Si en ese rato vuelves y lo tiras a la papelera, desapareció de
+  verdad. Si te caes por las escaleras, el papel reaparece en la bandeja y otro lo coge.
+  Nadie pierde trabajo porque alguien se muera a mitad.</p>
+  <p>Donde se rompe la analogía: en una bandeja física ves el fondo. En SQS
+  <strong>no puedes mirar</strong> el contenido sin consumirlo, no puedes buscar «el mensaje
+  con id X», no puedes leer sin ocultar, y el contador de mensajes es
+  <em>aproximado</em> (<code>ApproximateNumberOfMessages</code>). Una cola no es una base de
+  datos con una API mala: es una cinta transportadora.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Que el pico no tumbe al consumidor</h3><p>El Black Friday mete
+  50 000 pedidos/min y facturación aguanta 500/min. Sin cola, facturación se cae y los
+  pedidos se pierden. Con cola, la cola engorda, facturación va a su ritmo y a las tres
+  horas está al día. La cola <strong>absorbe la diferencia entre dos velocidades</strong>.</p></div>
+  <div class="ref-card"><h3>Trabajo en diferido</h3><p>El usuario sube un vídeo y la
+  respuesta HTTP vuelve en 200 ms: lo único que hizo la API fue meter un mensaje. Transcodificar
+  tarda ocho minutos y ocurre después, en otra máquina, sin que nadie mire el reloj del
+  navegador.</p></div>
+  <div class="ref-card"><h3>Reintentos que no escribes tú</h3><p>Tu proyecto 02: el CSV llega,
+  la Lambda peta porque una fila está corrupta. SQS lo devuelve a la cola y lo reintenta cinco
+  veces; a la sexta lo aparta en la DLQ. Ni un <code>try/catch</code> con
+  <em>backoff</em> escrito a mano.</p></div>
+  <div class="ref-card"><h3>Repartir entre N trabajadores</h3><p>Diez Lambdas leen de la
+  misma cola. Cada mensaje lo procesa uno solo (el visibility timeout lo garantiza mientras
+  dure), y añadir el trabajador once no requiere coordinar a nadie. Es el balanceador de
+  carga de las tareas asíncronas.</p></div>
+  <div class="ref-card"><h3>Desplegar sin perder eventos</h3><p>Durante los noventa segundos
+  en que el consumidor está reiniciando, los mensajes se acumulan en vez de rebotar con un
+  502. Es la diferencia entre «ventana de mantenimiento» y «se procesa un poco más tarde».</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Dos tipos de cola de verdad —se eligen al crearla y <strong>no se pueden cambiar
+después</strong>— y desde julio de 2025 un modo de comportamiento que se activa desde el
+lado del productor, sin tocar la cola.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Orden</th><th>Entrega</th><th>Throughput</th><th>Precio (us-east-1)</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Standard</strong></td>
+      <td><em>Best-effort</em>: casi siempre en orden, sin garantía</td>
+      <td><strong>At-least-once</strong>: puede llegar un duplicado</td>
+      <td>Prácticamente ilimitado</td>
+      <td>0,40 USD/M peticiones</td></tr>
+    <tr><td><strong>FIFO</strong> (<code>.fifo</code>)</td>
+      <td>Estricto <em>dentro de cada</em> <code>MessageGroupId</code></td>
+      <td><em>Exactly-once processing</em>: deduplica en una ventana de 5 min</td>
+      <td>300 TPS por partición y acción (3 000 msg/s con lotes); en modo alto rendimiento hasta 70 000 TPS / 700 000 msg/s</td>
+      <td>0,50 USD/M peticiones</td></tr>
+    <tr><td><strong>Fair queues</strong><br><span class="small">(modo, no tipo)</span></td>
+      <td>El de standard — <code>MessageGroupId</code> aquí <strong>no ordena</strong></td>
+      <td>El de standard</td>
+      <td>El de standard, sin límites añadidos</td>
+      <td>0,10 USD/M <em>además</em> de la tarifa standard</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Standard por defecto. FIFO solo si el desorden o el duplicado causan un daño que
+  no puedes reparar en el consumidor.</strong> La pregunta operativa no es «¿me importa el
+  orden?» —a todo el mundo le suena que sí— sino: <em>si proceso el mensaje dos veces,
+  ¿qué se rompe?</em> Si la respuesta es «nada, es idempotente» (escribir el mismo objeto en
+  S3, hacer un <code>PutItem</code> con la misma clave, marcar un flag), standard y a otra
+  cosa: es más barata, escala sin límite y no tiene el cuello de botella del message group.
+  Si la respuesta es «se cobra dos veces al cliente», o bien FIFO, o bien —mejor— haces el
+  consumidor idempotente con una clave de deduplicación tuya en DynamoDB, que funciona
+  también contra los duplicados que FIFO <em>no</em> cubre.</p>
+</div>
+
+<h3>Lo que FIFO <em>no</em> te garantiza (y todo el mundo cree que sí)</h3>
+<p>«<em>Exactly-once processing</em>» es un nombre generoso. Lo que AWS dice literalmente es
+que <a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html">si
+reintentas <code>SendMessage</code> dentro del intervalo de deduplicación de 5 minutos, SQS
+no introduce duplicados en la cola</a>. Es una garantía sobre el <strong>lado del
+productor</strong> y con caducidad:</p>
+<ul>
+  <li><strong>La ventana son 5 minutos y no se configura.</strong> El mismo mensaje enviado a
+  los seis minutos entra dos veces, en FIFO igual que en standard.</li>
+  <li><strong>El duplicado del lado consumidor sigue existiendo.</strong> Si tu Lambda procesa
+  el mensaje y muere antes de borrarlo, el mensaje reaparece y se procesa otra vez. FIFO no
+  lo impide: solo garantiza que ese reintento respete el orden del grupo.</li>
+  <li><strong>El orden es por grupo, no por cola.</strong> Mensajes de
+  <code>MessageGroupId</code> distintos pueden procesarse en cualquier orden. Si quieres
+  orden global usas un solo grupo — y con eso te quedas en un consumidor concurrente.</li>
+  <li><strong>El grupo se bloquea mientras hay un mensaje en vuelo.</strong> Un mensaje
+  atascado en el grupo <code>cliente-42</code> detiene a todo <code>cliente-42</code> hasta
+  que se borre o expire su visibility timeout. Con Lambda, la concurrencia efectiva en FIFO
+  es <strong>el mínimo entre el número de message groups y tu <code>maximum_concurrency</code></strong>.</li>
+</ul>
+<p>Las dos formas de deduplicar, para elegir sin pensarlo: <strong>content-based
+deduplication</strong> hace que SQS calcule un SHA-256 <em>del cuerpo del mensaje</em> (no de
+sus atributos) y lo use como id — cómodo cuando el cuerpo ya identifica el hecho;
+<strong><code>MessageDeduplicationId</code> explícito</strong> cuando dos mensajes con el
+mismo cuerpo son eventos distintos («cobrar 10 €» dos veces sí son dos cobros) y necesitas
+poner tú el identificador de negocio.</p>
+
+<h3>High-throughput FIFO: dos atributos, no un tipo aparte</h3>
+<p>Una cola FIFO normal está limitada a
+<a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html">300
+transacciones por segundo y acción</a> (3 000 mensajes/s si agrupas de diez en diez). El modo
+de alto rendimiento se activa poniendo <strong>los dos</strong> atributos a la vez:
+<code>deduplication_scope = "messageGroup"</code> y
+<code>fifo_throughput_limit = "perMessageGroupId"</code>. Con cualquier otra combinación
+sigues en el modo normal <em>y no te avisa nadie</em>. En <code>us-east-1</code> el techo
+pasa a 70 000 TPS sin lotes o 700 000 mensajes/s con ellos. El precio de admisión: la
+deduplicación pasa a ser por grupo en vez de por cola, y necesitas <strong>muchos
+<code>MessageGroupId</code> distintos</strong>, porque SQS hashea ese id para repartir entre
+particiones y cada partición sigue topando en sus 300 TPS.</p>
+
+<h3>Fair queues (julio 2025): el arreglo del vecino ruidoso</h3>
+<p>El problema clásico de una cola multi-tenant: el cliente A publica un millón de mensajes,
+tus consumidores se pasan dos horas con ellos, y los tres mensajes del cliente B esperan
+detrás. El <em>dwell time</em> (tiempo desde que el mensaje llega hasta que se procesa) de
+todo el mundo se degrada por culpa de uno.</p>
+<p><a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fair-queues.html">Fair
+queues</a> lo arregla en el servicio: SQS vigila el reparto de mensajes <em>en vuelo</em>
+por tenant y, cuando uno acapara, prioriza la entrega de los demás. Lo que hay que saber:</p>
+<ul>
+  <li><strong>Se activa desde el productor, no desde la cola.</strong> No hay atributo que
+  poner ni recurso Terraform que cambiar: basta con que <code>SendMessage</code> lleve un
+  <code>MessageGroupId</code>. El consumidor no se toca. Se puede adoptar en producción sin
+  migración.</li>
+  <li><strong>En standard, <code>MessageGroupId</code> NO ordena.</strong> Es solo el
+  identificador de tenant. Reutiliza el nombre del parámetro de FIFO y significa otra cosa:
+  es la confusión más fácil de cometer con este servicio.</li>
+  <li><strong>No es un limitador de ritmo.</strong> Al vecino ruidoso no se le corta: se le
+  atiende cuando hay capacidad libre. Nadie deja de procesarse, solo se reordena quién va
+  antes.</li>
+  <li><strong>Cuesta.</strong> Las peticiones que involucran un mensaje con
+  <code>MessageGroupId</code> se facturan a tarifa fair <em>y</em> a tarifa standard:
+  0,10 + 0,40 = <strong>0,50 USD/millón</strong>. Poner un group id «por si acaso» en una
+  cola de un solo tenant multiplica la factura por 1,25 sin comprar nada.</li>
+  <li>Métricas nuevas del tipo <code>Approximate…InQuietGroups</code> para ver que el backlog
+  del ruidoso no está contaminando a los demás.</li>
+</ul>
+<p class="small">Verificado el 2026-08-30. Anuncio: <a
+href="https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-sqs-introduces-fair/">SQS
+introduces fair queues</a> (julio 2025). Desde noviembre de 2025 <a
+href="https://aws.amazon.com/about-aws/whats-new/2025/11/amazon-eventbridge-sqs-fair-queue-targets/">EventBridge
+sabe poner el group id al entregar a una cola fair</a>.</p>
+
+<h2>Cómo funciona por dentro</h2>
+<p>El modelo mental mínimo. Todo lo demás son parámetros de estos cinco hechos:</p>
+<ul>
+  <li><strong>Recibir no es borrar.</strong> El único acto que elimina un mensaje es
+  <code>DeleteMessage</code>. Todo lo que se recibe y no se borra, vuelve.</li>
+  <li><strong>La entrega es <em>at-least-once</em>.</strong> En standard por arquitectura
+  distribuida; en FIFO porque un consumidor que muere a mitad provoca reentrega. Tu consumidor
+  <strong>debe</strong> tolerar procesar el mismo mensaje dos veces. Esto no es opcional.</li>
+  <li><strong>Es <em>pull</em>, no <em>push</em>.</strong> SQS jamás llama a tu código: alguien
+  tiene que preguntar. Cuando parece push (el trigger de Lambda), quien pregunta es el
+  <em>event source mapping</em>, un poller que AWS opera por ti — y sus preguntas son
+  peticiones facturables.</li>
+  <li><strong>Un mensaje, un consumidor.</strong> SQS no es pub/sub: no reparte copias. Si
+  quieres que tres sistemas vean el mismo evento, necesitas tres colas y algo delante
+  (SNS o EventBridge) que las alimente.</li>
+  <li><strong>Todo es aproximado.</strong> <code>ApproximateNumberOfMessages</code>,
+  <code>ApproximateAgeOfOldestMessage</code>, <code>ApproximateReceiveCount</code>. Sirven
+  para alarmas y tendencias, no para lógica de negocio.</li>
+</ul>
+
+<h3>El ciclo de vida de un mensaje</h3>
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">los tres estados y las dos salidas</span></div>
+<pre><code>  SendMessage
+      │
+      ├─ (delay_seconds &gt; 0) ──▶ RETRASADO ──┐  invisible, 0-15 min
+      │                                       ▼
+      └──────────────────────────────────▶ VISIBLE  ◀──────────┐
+                                              │                │
+                                 ReceiveMessage│                │ expira el
+                                              ▼                │ visibility timeout
+                                        EN VUELO ──────────────┘ (ApproximateReceiveCount++)
+                                              │
+                        DeleteMessage ────────┤
+                                              ▼
+                                           BORRADO
+
+  Salidas sin que nadie lo borre:
+    · ApproximateReceiveCount &gt; maxReceiveCount  ──▶  se mueve a la DLQ
+    · message_retention_seconds cumplidos        ──▶  se DESCARTA en silencio</code></pre>
+</div>
+<p>La segunda salida es la que muerde: <strong>sin DLQ, un mensaje que nadie consigue
+procesar no se guarda en ningún sitio</strong>. A los 4 días (el default) desaparece, sin
+error, sin log, sin métrica que diga «he tirado esto». Lo único que lo delata es que
+<code>ApproximateAgeOfOldestMessage</code> subía y de pronto bajó.</p>
+
+<h3>Visibility timeout: el parámetro que más daño hace mal puesto</h3>
+<p>Cuando un consumidor recibe un mensaje, este no se borra: se vuelve invisible durante el
+<strong>visibility timeout</strong>. Default <strong>30 segundos</strong>, mínimo 0, máximo
+<strong>12 horas</strong>. Es la ventana que tienes para procesar y borrar.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Si lo pones…</th><th>Lo que pasa</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Demasiado corto</strong></td>
+      <td>El mensaje reaparece <em>mientras aún lo estás procesando</em>. Otro consumidor lo
+      coge: trabajo duplicado, y además <code>ApproximateReceiveCount</code> sube en cada
+      reaparición, así que el mensaje acaba en la DLQ <strong>aunque nunca haya fallado
+      nada</strong>. Es el bug más difícil de diagnosticar de este servicio.</td></tr>
+    <tr><td><strong>Demasiado largo</strong></td>
+      <td>Cuando el consumidor <em>sí</em> muere, el mensaje tarda todo ese rato en volver a
+      estar disponible. Con 12 horas, un fallo transitorio te para la línea medio día.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Se puede ajustar por mensaje sobre la marcha con <code>ChangeMessageVisibility</code> —el
+patrón <em>heartbeat</em>: procesa por trozos y ve extendiendo—. Ojo con el techo: las
+extensiones <a
+href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html">no
+reinician el límite de 12 horas</a> contado desde la primera recepción; si necesitas más,
+el trabajo es de Step Functions, no de un consumidor de cola.</p>
+<div class="callout aws">
+  <span class="callout-title">La regla de las 6×, y por qué es 6 y no 1</span>
+  <p>Con Lambda como consumidor, AWS pide que el visibility timeout de la cola sea
+  <strong>al menos seis veces el timeout de la función</strong>, y si usas <em>batch
+  window</em>, seis veces el timeout <em>más</em> los segundos de la ventana (<a
+  href="https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html">fuente</a>).
+  El factor no cubre «que la función tarde más de la cuenta» —para eso bastaría 1×— sino
+  <strong>los reintentos que Lambda hace dentro de la misma ventana cuando la función está
+  <em>throttled</em></strong>: si no hay concurrencia libre, el poller espera y vuelve a
+  intentar, y todo eso ocurre con el mensaje todavía en vuelo.</p>
+  <p>Hay además una regla dura que Lambda <em>sí</em> valida al crear el event source
+  mapping: <strong>el timeout de la función debe ser ≤ el visibility timeout de la cola</strong>.
+  Si no, el <code>apply</code> falla. Con función de 30 s: 30 s de visibility timeout pasa la
+  validación, pero la recomendación es 180 s.</p>
+</div>
+
+<h3>Long polling vs short polling: 20 segundos que se pagan solos</h3>
+<p><code>ReceiveMessage</code> con <code>WaitTimeSeconds = 0</code> (el default) hace
+<strong>short polling</strong>: consulta un subconjunto aleatorio de los servidores de SQS y
+contesta ya, aunque no traiga nada. Consecuencias: <em>respuestas vacías</em> a mansalva y,
+peor, <em>falsas vacías</em> — la cola tiene mensajes pero tocó preguntar a los servidores
+equivocados. Cada una de esas respuestas vacías es una petición facturada.</p>
+<p>Con <code>receive_wait_time_seconds</code> entre 1 y <strong>20</strong> (el máximo) tienes
+<strong>long polling</strong>: SQS consulta todos los servidores y aguanta la conexión abierta
+hasta que aparezca un mensaje o se agote la espera. Menos peticiones, menos vacías, y el
+mensaje llega antes que si estuvieras sondeando cada segundo.</p>
+<div class="callout win">
+  <span class="callout-title">Ponlo a 20 y olvídate</span>
+  <p>No hay caso realista en el que short polling gane. El default de
+  <code>receive_wait_time_seconds</code> es <code>0</code> —o sea, el modo malo— porque
+  cambiarlo rompería compatibilidad, no porque sea mejor. En una cola con consumidor propio,
+  pasar de 0 a 20 puede dividir la factura de peticiones por veinte. La única excepción real
+  es un consumidor que <em>necesite</em> no bloquear el hilo, y en 2026 eso se resuelve con
+  E/S asíncrona.</p>
+</div>
+
+<h3>Retención, retrasos y tamaño</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Parámetro</th><th>Default</th><th>Rango</th><th>Para qué sirve de verdad</th></tr></thead>
+  <tbody>
+    <tr><td><code>message_retention_seconds</code></td><td><strong>4 días</strong> (345 600)</td><td>60 s – <strong>14 días</strong> (1 209 600)</td>
+      <td>Cuánto aguanta un mensaje sin consumir antes de evaporarse. En la DLQ, súbelo a 14 días: es un buzón de forense, no de tráfico.</td></tr>
+    <tr><td><code>delay_seconds</code></td><td>0</td><td>0 – 900 (15 min)</td>
+      <td><em>Delay queue</em>: todo mensaje nace invisible ese rato. Útil para dar tiempo a que se propague una escritura antes de que el consumidor la lea.</td></tr>
+    <tr><td><code>visibility_timeout_seconds</code></td><td>30</td><td>0 – 43 200 (12 h)</td><td>Arriba.</td></tr>
+    <tr><td><code>receive_wait_time_seconds</code></td><td>0</td><td>0 – 20</td><td>Long polling. Arriba.</td></tr>
+    <tr><td><code>max_message_size</code></td><td colspan="2">Ver el callout de abajo — aquí AWS y Terraform discrepan</td>
+      <td>Límite de bytes del cuerpo. Rango 1 KiB – 1 MiB.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>El <code>delay_seconds</code> de la cola aplica a todos los mensajes; para retrasar
+<em>uno</em>, el productor manda <code>DelaySeconds</code> en la propia llamada
+(<em>message timer</em>), con el mismo tope de 15 minutos. No existe «entrégalo el martes»:
+para eso está EventBridge Scheduler.</p>
+<div class="callout trap">
+  <span class="callout-title">Casi todo internet dice 256 KB. Desde el 4 de agosto de 2025 son 1 MiB</span>
+  <p>El límite histórico de <strong>256 KiB</strong> por mensaje —repetido en todos los
+  tutoriales, cursos de certificación y respuestas de StackOverflow— <a
+  href="https://aws.amazon.com/about-aws/whats-new/2025/08/amazon-sqs-max-payload-size-1mib">subió
+  a 1 MiB (1 048 576 bytes)</a> en agosto de 2025, para colas standard y FIFO, en todas las
+  regiones comerciales, y el event source mapping de Lambda se actualizó para acompañarlo.
+  La <a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html">API
+  <code>CreateQueue</code></a> ya declara <code>MaximumMessageSize</code> con
+  <em>default</em> 1 MiB.</p>
+  <p><strong>Pero en Terraform sigues capado a 256 KiB salvo que lo digas.</strong> El
+  provider AWS define <code>max_message_size</code> con
+  <code>Default: 262_144</code> en su esquema (<a
+  href="https://github.com/hashicorp/terraform-provider-aws/blob/main/internal/service/sqs/consts.go"><code>internal/service/sqs/consts.go</code></a>,
+  comprobado el 2026-08-30), así que <em>toda cola creada con este recurso sale con el límite
+  viejo puesto explícitamente</em>, aunque AWS ya no lo pondría. Si quieres el megabyte,
+  escribe <code>max_message_size = 1048576</code>. Y ojo también: la
+  <a href="https://docs.aws.amazon.com/general/latest/gr/sqs-service.html">tabla de Service
+  Quotas del General Reference</a> todavía dice «Message Size: 256 Kilobytes» mientras la
+  guía del desarrollador dice 1 MiB — la doc de AWS se contradice a sí misma; gana la
+  guía y la API.</p>
+  <p>Para cargas mayores, el patrón sigue siendo el mismo de siempre: el dato va a S3 y el
+  mensaje lleva la referencia. Las <em>Extended Client Library</em> (Java y Python) lo
+  automatizan y llegan a <strong>2 GB</strong> — pero el S3 lo pagas tú y no hay librería
+  oficial para Node.</p>
+</div>
+
+<h2>La DLQ, a fondo</h2>
+<p>Una <em>dead-letter queue</em> no es un tipo especial de cola: es <strong>una cola normal
+a la que otra cola apunta</strong>. Toda la mecánica está en dos políticas y una tarea.</p>
+
+<h3>1. Redrive policy — la que aparta</h3>
+<p>Va en la cola <em>de origen</em>. Dos campos:
+<code>deadLetterTargetArn</code> y <code>maxReceiveCount</code>. Cuando el
+<code>ApproximateReceiveCount</code> de un mensaje supera ese número, SQS lo mueve a la DLQ.
+El default de <code>maxReceiveCount</code> en la API es 10; AWS recomienda
+<strong>al menos 5</strong> cuando el consumidor es Lambda, para dar margen a los reintentos
+por <em>throttling</em>.</p>
+<ul>
+  <li><strong>El contador cuenta recepciones, no fallos.</strong> Un visibility timeout corto
+  hace que el mismo mensaje se reciba cinco veces sin que tu código haya fallado nunca — y
+  acaba en la DLQ igual. Antes de culpar al mensaje, mira el timeout.</li>
+  <li><strong>El tipo debe coincidir</strong>: la DLQ de una cola FIFO tiene que ser FIFO; la
+  de una standard, standard. Y <a
+  href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html">misma
+  cuenta y misma región</a>.</li>
+  <li><strong>El reloj de retención NO se reinicia</strong> (en standard): el mensaje conserva
+  su <em>enqueue timestamp</em> original. Si pasó un día en la cola de origen y la DLQ retiene
+  4 días, te quedan 3, no 4. Por eso la DLQ siempre lleva
+  <code>message_retention_seconds = 1209600</code> (14 días). En FIFO sí se reinicia — otra
+  asimetría que sorprende.</li>
+</ul>
+
+<h3>2. Redrive allow policy — la que autoriza</h3>
+<p>Va en la <em>DLQ</em>, y responde a la pregunta inversa: ¿qué colas pueden usarme de
+vertedero? Tres valores de <code>redrivePermission</code>:
+<code>allowAll</code> (default: cualquier cola de tu cuenta y región),
+<code>byQueue</code> (una lista explícita, <strong>máximo 10 ARNs</strong>) o
+<code>denyAll</code>. Se usa poco y merece más: sin ella, cualquier cola nueva de la cuenta
+puede empezar a verter en tu DLQ y mezclar dos incidentes distintos en el mismo buzón.</p>
+
+<h3>3. El camino de vuelta — <em>message move task</em></h3>
+<p>La parte que la mitad de los equipos no sabe que existe y sustituye por un script casero
+que lee de una cola y escribe en otra. Desde 2023, SQS tiene
+<a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_StartMessageMoveTask.html"><code>StartMessageMoveTask</code></a>:
+arreglas el bug, despliegas, y le dices a SQS que devuelva los mensajes de la DLQ a su cola de
+origen. Lo que hay que saber antes de confiar en ello:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Aspecto</th><th>Realidad</th></tr></thead>
+  <tbody>
+    <tr><td>Destino</td><td><code>DestinationArn</code> opcional: si lo omites, cada mensaje vuelve <strong>a su cola de origen</strong> respectiva. Si lo pones, van todos a la cola que digas.</td></tr>
+    <tr><td>Ritmo</td><td><code>MaxNumberOfMessagesPerSecond</code>, máximo <strong>500</strong>. Si lo omites, SQS elige el ritmo. Ponlo a mano: devolver 200 000 mensajes a toda velocidad a la cola que ya reventó una vez es repetir el incidente.</td></tr>
+    <tr><td>Concurrencia</td><td><strong>Una sola tarea activa por cola.</strong> No hay paralelismo que rascar.</td></tr>
+    <tr><td>Origen</td><td>Solo colas que estén configuradas como DLQ <em>de otras colas SQS</em>. Una cola que recoge fallos de Lambda o de SNS <strong>no</strong> vale como origen.</td></tr>
+    <tr><td>Terraform</td><td><strong>No hay recurso.</strong> Es una operación puntual, no estado deseado: se lanza desde la consola o con <code>aws sqs start-message-move-task</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Las dos DLQ del proyecto 02 no son la misma, y no se tocan</span>
+  <p>El pipeline S3 → EventBridge → SQS → Lambda tiene <strong>dos fronteras donde algo puede
+  fracasar</strong>, y cada una tiene su propia DLQ con su propio mecanismo:</p>
+  <ul>
+    <li>La <strong>DLQ del target de EventBridge</strong> (<code>dead_letter_config</code> en
+    el <code>aws_cloudwatch_event_target</code>) recoge eventos que <em>no consiguieron
+    entrar</em> en la cola — típicamente porque falta la política de recurso.</li>
+    <li>La <strong>DLQ de la cola</strong> (<code>redrive_policy</code>, esta ficha) recoge
+    mensajes que <em>entraron</em> pero que el consumidor <em>no consiguió procesar</em>.</li>
+  </ul>
+  <p>Frontera distinta, fracaso distinto, cola distinta — y el
+  <code>StartMessageMoveTask</code> solo sabe volver de la segunda. La ficha de EventBridge lo
+  explica desde el otro lado: <a href="./aws-eventbridge.html">la entrega es por pareja
+  regla×target</a>.</p>
+</div>
+
+<h2>Con Lambda: el event source mapping</h2>
+<p>No configuras un «trigger» en la cola: creas un <code>aws_lambda_event_source_mapping</code>,
+un componente que AWS opera y que hace long polling sobre tu cola e invoca la función de forma
+<strong>síncrona</strong> con un lote. Si la invocación termina bien, el ESM borra los mensajes
+del lote. Si lanza excepción, <strong>no borra ninguno</strong> y el lote entero reaparece.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Parámetro</th><th>Default</th><th>Rango</th><th>Criterio</th></tr></thead>
+  <tbody>
+    <tr><td><code>batch_size</code></td><td>10</td><td>Standard: hasta <strong>10 000</strong>. FIFO: <strong>10</strong></td>
+      <td>Grande = menos invocaciones y menos peticiones SQS (más barato). Pero el payload total no puede pasar de <strong>6 MB</strong> (el límite de invocación síncrona), y un fallo tira el lote entero. Por encima de 10 <strong>es obligatorio</strong> poner <code>maximum_batching_window_in_seconds ≥ 1</code>.</td></tr>
+    <tr><td><code>maximum_batching_window_in_seconds</code></td><td>0</td><td>0 – 300 (5 min)</td>
+      <td>Espera a llenar el lote antes de invocar. No aplica a FIFO. Si lo usas, súmalo al visibility timeout. Con tráfico muy bajo Lambda puede esperar hasta 20 s aunque pongas menos.</td></tr>
+    <tr><td><code>function_response_types</code></td><td>—</td><td><code>["ReportBatchItemFailures"]</code></td>
+      <td>Enciende las <em>partial batch responses</em>. Ver abajo: enciéndelo siempre.</td></tr>
+    <tr><td><code>scaling_config.maximum_concurrency</code></td><td>sin límite</td><td>2 – 1 000</td>
+      <td>Techo de instancias concurrentes que <em>esta</em> cola puede invocar. Es lo que evita que una avalancha en la cola se coma toda la concurrencia de la cuenta y tire la API del proyecto 01.</td></tr>
+    <tr><td><code>filter_criteria</code></td><td>—</td><td>—</td>
+      <td>Descarta mensajes antes de invocar. Los descartados <strong>se borran</strong> de la cola, no se quedan.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3><code>ReportBatchItemFailures</code>: el interruptor que casi nadie enciende</h3>
+<p>Por defecto, si un mensaje de un lote de diez falla, <strong>los diez</strong> vuelven a la
+cola — incluidos los nueve que ya procesaste bien, que se procesarán otra vez, y cuyo
+<code>ApproximateReceiveCount</code> sube hacia la DLQ sin haber hecho nada malo. Con
+<code>ReportBatchItemFailures</code> la función devuelve qué mensajes fallaron y solo esos
+vuelven:</p>
+<div class="code">
+  <div class="code-label"><span>handler</span><span class="tag">typescript</span></div>
+<pre><code>export const handler = async (event: SQSEvent): Promise&lt;SQSBatchResponse&gt; =&gt; {
+  const batchItemFailures: SQSBatchItemFailure[] = [];
+  for (const record of event.Records) {
+    try {
+      await procesar(record);
+    } catch {
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+    }
+  }
+  return { batchItemFailures };   // vacío = lote entero correcto
+};</code></pre>
+</div>
+<ul>
+  <li><strong>Hay que capturar las excepciones.</strong> Si el handler lanza, Lambda considera
+  el lote un fracaso completo y la lista da igual. Es el error nº 1 al adoptarlo.</li>
+  <li><strong>Un JSON mal formado también es fracaso total</strong>, igual que un
+  <code>itemIdentifier</code> vacío, nulo, con mala clave o con un id que no existe en el
+  lote.</li>
+  <li><strong>Bonus operativo</strong>: con este modo activo, Lambda <em>no</em> reduce el
+  ritmo de polling cuando hay fallos. Si esperas fallos habituales (un porcentaje de mensajes
+  malos), esto evita que el rendimiento de toda la cola se hunda por ellos.</li>
+  <li><strong>En FIFO</strong>, para no romper el orden, hay que parar en el primer fallo y
+  devolver ese mensaje y todos los posteriores del grupo.</li>
+</ul>
+
+<div class="callout aws">
+  <span class="callout-title">La DLQ va en la COLA, no en la Lambda</span>
+  <p>Lambda tiene su propio mecanismo de fallos —la <em>on-failure destination</em> y la
+  vieja <code>dead_letter_config</code> de la función—, pero <strong>solo se aplica a
+  invocaciones asíncronas</strong>. El consumo desde SQS es por <em>polling</em> y la
+  invocación es <strong>síncrona</strong>: esos ajustes de la función no se disparan
+  <em>nunca</em>. Quien lleva la cuenta de intentos es SQS
+  (<code>ApproximateReceiveCount</code>) y quien aparta el mensaje es la
+  <code>redrive_policy</code> de la cola. Configurar una DLQ en la función y creer que
+  cubre la cola es un fallo silencioso: no da error de <code>apply</code>, simplemente los
+  mensajes malos se evaporan a los 4 días.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Otro dato viejo que sigue circulando: cómo escala el ESM</span>
+  <p>Casi todos los artículos dicen «Lambda añade 60 instancias por minuto hasta un máximo de
+  1 000». <a href="https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html">La
+  doc actual dice otra cosa</a>: arranca con <strong>cinco</strong> lotes concurrentes y sube
+  hasta <strong>300 invocaciones concurrentes más por minuto</strong>, con techo de
+  <strong>1 250</strong> concurrentes por event source mapping. Cuando el tráfico baja, se
+  repliega a cinco y puede optimizar hasta dos — salvo que hayas puesto
+  <code>maximum_concurrency</code>, que desactiva esa optimización. Y desde agosto de 2026 el
+  <em>provisioned mode</em> (pollers dedicados, de pago) llega a
+  <a href="https://aws.amazon.com/about-aws/whats-new/2026/08/aws-Lambda-provisioned-sqs-esm-max-pollers/">10 000
+  pollers y 100 000 invocaciones concurrentes</a>. Nada de eso hace falta en el proyecto 02:
+  el modo por defecto es gratis y sobra.</p>
+</div>
+
+<h2>Quién puede escribir en la cola</h2>
+<p>Que EventBridge apunte a tu cola no le da permiso para escribir en ella. Que S3 tenga
+configurada la notificación tampoco. Aquí entra el mapa de IAM del curso —
+<a href="./aws-iam.html">identidad / confianza / recurso</a> — y SQS cae de lleno en la
+tercera casilla:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Quién actúa</th><th>Qué política lo permite</th><th>Dónde vive</th></tr></thead>
+  <tbody>
+    <tr><td>Tu Lambda consumidora</td>
+      <td><strong>De identidad</strong>: <code>sqs:ReceiveMessage</code>, <code>DeleteMessage</code>, <code>GetQueueAttributes</code> (la managed policy <code>AWSLambdaSQSQueueExecutionRole</code> los trae)</td>
+      <td>En el rol de ejecución de la función</td></tr>
+    <tr><td>EventBridge, S3, SNS</td>
+      <td><strong>De recurso</strong>: <code>sqs:SendMessage</code> con principal <code>events.amazonaws.com</code> / <code>s3.amazonaws.com</code> / <code>sns.amazonaws.com</code></td>
+      <td>En la <em>queue policy</em> — <code>aws_sqs_queue_policy</code></td></tr>
+    <tr><td>Otra cuenta AWS</td>
+      <td><strong>De recurso</strong>, nombrando el ARN del rol o el número de cuenta</td>
+      <td>En la queue policy. SQS <em>sí</em> admite políticas de recurso completas, a diferencia de DynamoDB</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Estos servicios no asumen un rol tuyo: llegan como <em>service principal</em>, así que
+la única forma de autorizarlos es desde el lado del recurso. Y la condición
+<code>aws:SourceArn</code> no es decorativa: sin ella estás autorizando a
+<em>cualquier</em> bucket o regla de EventBridge del mundo a escribir en tu cola — el
+problema del <em>confused deputy</em>. Los topes: <strong>20 statements, 50 principals,
+10 condiciones, 8 192 bytes</strong> por queue policy, y ninguno es ajustable.</p>
+
+<h2>Cifrado</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Opción</th><th>Qué hace</th><th>Coste</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>SSE-SQS</strong><br><code>sqs_managed_sse_enabled</code></td>
+      <td>AES-256 con claves que gestiona SQS. Cero configuración, cero permisos que dar.</td>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td><strong>Por defecto desde octubre de 2022</strong> en toda cola nueva. Déjalo así salvo que tengas un motivo.</td></tr>
+    <tr><td><strong>SSE-KMS</strong><br><code>kms_master_key_id</code></td>
+      <td>Envelope encryption con una KMS key tuya o la gestionada <code>alias/aws/sqs</code>. Auditable en CloudTrail, revocable, con política propia.</td>
+      <td><span class="tag-cost usage">por uso</span> Llamadas a KMS + 1,00 USD/mes si la clave es tuya</td>
+      <td>Cuando cumplimiento exige control de la clave, o cuando cortar el acceso a la clave debe cortar el acceso al dato.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Lo que se cifra es <strong>el cuerpo del mensaje</strong>. No se cifran los metadatos de la
+cola (nombre, atributos) ni los del mensaje (id, timestamp, <em>message attributes</em>): no
+metas nada sensible en un atributo creyendo que va protegido.</p>
+<p>Con SSE-KMS, la palanca de coste es
+<code>kms_data_key_reuse_period_seconds</code>: cuánto reutiliza SQS una data key antes de
+volver a llamar a KMS. Default <strong>300 s</strong>, rango 60 – 86 400. Bajarlo a 60 s
+<strong>quintuplica</strong> las llamadas a KMS y por tanto ese renglón de la factura;
+subirlo a 24 h lo reduce a casi nada a cambio de una ventana de reutilización más larga. Y
+recuerda añadir <code>kms:Decrypt</code> al rol de la Lambda consumidora: sin eso, la cola
+cifrada se traga los mensajes en silencio para tu función.</p>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong>, región <code>us-east-1</code>,
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSQueueService/current/us-east-1/index.json">Price
+List API</a> (offer code <code>AWSQueueService</code>) y la
+<a href="https://aws.amazon.com/sqs/pricing/">página de precios</a>.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Tener la cola creada, vacía, sin tráfico</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD/h</code></td></tr>
+    <tr><td>Primer millón de peticiones al mes</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — free tier permanente, no de los 12 meses</td></tr>
+    <tr><td>Peticiones a cola <strong>standard</strong></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,40 USD/millón</code> (0,30 a partir de 100 000 M; 0,24 a partir de 200 000 M)</td></tr>
+    <tr><td>Peticiones a cola <strong>FIFO</strong></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD/millón</code> (0,40 / 0,35 en los tramos altos)</td></tr>
+    <tr><td>Recargo <strong>fair queue</strong></td><td><span class="tag-cost usage">por uso</span></td><td><code>+0,10 USD/millón</code> sobre la tarifa standard → 0,50 USD/M efectivos</td></tr>
+    <tr><td>Transferencia de datos dentro de la región</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Transferencia cross-region o a internet</td><td><span class="tag-cost usage">por uso</span></td><td>Tarifa estándar de AWS Data Transfer</td></tr>
+    <tr><td>SSE-SQS</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>SSE-KMS</td><td><span class="tag-cost usage">por uso</span></td><td>Llamadas a KMS, según <a href="https://aws.amazon.com/kms/pricing">precios de KMS</a></td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Qué cuenta como «petición»</strong>: cada acción de la API —
+<code>SendMessage</code>, <code>ReceiveMessage</code>, <code>DeleteMessage</code>,
+<code>ChangeMessageVisibility</code>…— es una petición, <strong>incluidas las que vuelven
+vacías</strong>. Y el payload se factura en trozos de <strong>64 KB</strong>: un mensaje de
+1 MiB cuenta como <strong>16 peticiones</strong>, no como una. Ese detalle importa más ahora
+que el límite subió a 1 MiB: un mensaje grande no es «gratis porque cabe», es 16×.</p>
+<p>El ciclo completo de un mensaje son típicamente <strong>tres peticiones</strong>: enviar,
+recibir, borrar. Con lotes de diez bajan a 0,3 por mensaje.</p>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura: una cola vacía con trigger de Lambda no es gratis</span>
+  <p>Nada en SQS cobra por hora. Pero un event source mapping <strong>hace long polling
+  continuamente aunque no llegue un solo mensaje en todo el mes</strong>, y cada espera de
+  20 s que expira vacía es una <code>ReceiveMessage</code> facturable.</p>
+  <p>Cuenta echada a partir del comportamiento documentado: el ESM se repliega a
+  <strong>2-5 pollers</strong> cuando no hay tráfico; con esperas de 20 s son 3 peticiones por
+  minuto y poller, o sea <strong>entre 260 000 y 650 000 peticiones al mes</strong> por una
+  cola completamente ociosa. A 0,40 USD/millón eso es entre 0,10 y 0,26 USD/mes — despreciable
+  para el presupuesto de 30 USD del curso, y <strong>por debajo del free tier de un millón</strong>.
+  Pero es exactamente el renglón que aparece en la factura de quien tiene cuarenta colas de
+  <em>staging</em> con trigger y ningún tráfico: cuarenta colas dormidas son ~10-25 M de
+  peticiones al mes, entre 4 y 10 USD por no hacer nada. La mitigación es la misma que la
+  buena práctica: <code>receive_wait_time_seconds = 20</code>, y borrar los ESM que no usas.</p>
+  <p><strong>Tu factura del proyecto 02</strong>: unos miles de CSV al mes × 3 peticiones,
+  más el polling en vacío. Total muy por debajo del millón gratuito →
+  <strong>0,00 USD</strong>.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuentes: <a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html">quotas
+de mensajes</a>, <a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-queues.html">quotas
+de colas</a> y <a href="https://docs.aws.amazon.com/general/latest/gr/sqs-service.html">Service
+Quotas</a>, consultadas el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Mensajes almacenados en una cola</td><td><strong>Ilimitado</strong></td><td>—</td></tr>
+    <tr><td>Retención máxima</td><td><strong>14 días</strong></td><td><strong>No</strong> — si necesitas más, el sitio del dato es S3 o DynamoDB</td></tr>
+    <tr><td>Tamaño de un mensaje</td><td><strong>1 MiB</strong> (1 048 576 bytes)</td><td>No — por encima, S3 + referencia (hasta 2 GB con la extended client)</td></tr>
+    <tr><td>Mensajes <strong>en vuelo</strong></td><td>~<strong>120 000</strong> (standard y FIFO)</td><td>Standard: sí, por Service Quotas. FIFO: solo por ticket de soporte</td></tr>
+    <tr><td>Mensajes por lote (<code>SendMessageBatch</code>, <code>ReceiveMessage</code>)</td><td><strong>10</strong></td><td><strong>No</strong> — el <code>batch_size</code> de 10 000 del ESM lo consigue haciendo muchas llamadas de 10</td></tr>
+    <tr><td>Visibility timeout</td><td>0 – <strong>12 h</strong></td><td>No</td></tr>
+    <tr><td>Long polling</td><td>0 – <strong>20 s</strong></td><td>No</td></tr>
+    <tr><td>Delay / message timer</td><td>0 – <strong>15 min</strong></td><td>No</td></tr>
+    <tr><td>Atributos por mensaje</td><td>10</td><td>No</td></tr>
+    <tr><td>Longitud del nombre de cola</td><td>80 caracteres (alfanuméricos, <code>-</code>, <code>_</code>; sensible a mayúsculas)</td><td>No</td></tr>
+    <tr><td>Queue policy</td><td>8 192 bytes · 20 statements · 50 principals · 10 condiciones · 7 acciones</td><td>No</td></tr>
+    <tr><td>FIFO sin alto rendimiento</td><td>300 TPS por acción y partición (3 000 msg/s con lotes)</td><td>No — se sube activando el modo, no pidiendo cuota</td></tr>
+    <tr><td>FIFO con alto rendimiento (<code>us-east-1</code>)</td><td>70 000 TPS · 700 000 msg/s con lotes</td><td>No</td></tr>
+    <tr><td>Message move task</td><td>1 activa por cola · 500 msg/s máximo</td><td>No</td></tr>
+    <tr><td>Recrear una cola con el mismo nombre</td><td>Hay que esperar <strong>60 s</strong> tras borrarla</td><td>No — muerde en ciclos <code>destroy</code>/<code>apply</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">No hay cuota publicada de «colas por cuenta»: la tabla de Service Quotas no la
+lista.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Productor y consumidor van a velocidades distintas y quieres que el rápido no tumbe al lento</li>
+    <li>El trabajo puede esperar segundos o minutos: nadie mira una pantalla esperando</li>
+    <li>Quieres reintentos y aislamiento de venenos sin escribirlos tú</li>
+    <li>Un mensaje lo procesa <em>un</em> consumidor y ya</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Necesitas respuesta al que llama (SQS es de un solo sentido: no hay <em>reply</em>)</li>
+    <li>El mismo mensaje debe llegar a varios sistemas — eso es SNS o EventBridge <em>delante</em> de varias colas</li>
+    <li>Quieres releer el histórico, o que un consumidor nuevo procese lo de la semana pasada</li>
+    <li>Necesitas orden global estricto con alto volumen: FIFO te da orden por grupo, no por cola</li>
+    <li>Buscas latencias de microsegundos o miles de mensajes por segundo con orden total</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>SNS</strong></td>
+      <td>SNS es <em>push</em> y fan-out: copia el mensaje a todos los suscriptores y no retiene nada. SQS es <em>pull</em> y competitivo: un mensaje, un consumidor, guardado hasta 14 días.</td>
+      <td>El mismo aviso tiene que llegar a N destinos a la vez (email, móvil, tres colas).</td></tr>
+    <tr><td><strong>EventBridge</strong></td>
+      <td>El bus enruta por contenido y <strong>no retiene</strong>: entrega o descarta. La cola no enruta y <strong>sí</strong> retiene.</td>
+      <td>Tienes que decidir <em>quién</em> recibe qué en función del contenido del evento. Los dos juntos es lo normal: el bus decide quién, la cola decide cuándo.</td></tr>
+    <tr><td><strong>Kinesis / Kafka (MSK)</strong></td>
+      <td>Un <em>stream</em> es un log ordenado con posición: varios consumidores lo leen entero, cada uno a su ritmo, y se puede rebobinar. En SQS leer es consumir: el mensaje desaparece.</td>
+      <td>Necesitas replay, varios consumidores independientes del mismo flujo, orden por partición o analítica sobre el histórico.</td></tr>
+    <tr><td><strong>Step Functions</strong></td>
+      <td>La cola no sabe nada del proceso: no hay estado, ni pasos, ni «espera a que termine el anterior».</td>
+      <td>Hay un flujo con etapas, esperas largas (&gt;12 h), ramas y compensaciones que quieres ver dibujado.</td></tr>
+    <tr><td><strong>La DLQ de un target de EventBridge</strong></td>
+      <td>Es <em>una cola SQS</em>, sí — pero configurada desde EventBridge y para un fracaso distinto (no consiguió entrar, vs. no se consiguió procesar).</td>
+      <td>Ver el callout de arriba. No es «o una u otra»: en el proyecto 02 conviven.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Patrones que hay que reconocer en una entrevista</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Fan-out: SNS → N × SQS</h3><p>Un topic SNS con tres colas
+  suscritas. El publicador manda una vez; cada cola recibe su copia y su consumidor va a su
+  ritmo, con su propio backlog y su propia DLQ. Es <strong>el</strong> patrón de fan-out
+  duradero: SNS solo no retiene, así que un suscriptor caído pierde el aviso; con una cola
+  detrás, no. Cada cola necesita su <code>aws_sqs_queue_policy</code> con principal
+  <code>sns.amazonaws.com</code> y condición <code>aws:SourceArn</code>.</p></div>
+  <div class="ref-card"><h3>Buffer de picos (queue-based load leveling)</h3><p>La API acepta
+  todo y encola; los trabajadores consumen a capacidad constante. El sistema deja de
+  dimensionarse por el pico y pasa a dimensionarse por la media, con la cola absorbiendo la
+  diferencia. La métrica que vigilas no es CPU sino
+  <code>ApproximateAgeOfOldestMessage</code>: si sube sin parar, no hay backlog, hay
+  déficit de capacidad.</p></div>
+  <div class="ref-card"><h3>Work queue con Lambda</h3><p>Cola + ESM + una función. Sin
+  servidores, sin autoscaling que configurar, con reintentos y DLQ de serie. Es el proyecto
+  02. El diseño se reduce a tres números: <code>batch_size</code>,
+  <code>visibility_timeout</code> (6× el timeout) y <code>maxReceiveCount</code>.</p></div>
+  <div class="ref-card"><h3>Priority queues (que no existen)</h3><p>SQS no tiene prioridades.
+  El patrón real son <strong>dos colas</strong>, <code>urgente</code> y <code>normal</code>, y
+  un consumidor que lee de la primera y solo va a la segunda cuando la primera está vacía. Si
+  lo que querías era «que un cliente no ahogue a los demás», eso ya no es prioridad: es
+  <strong>fair queues</strong>.</p></div>
+  <div class="ref-card"><h3>Claim-check</h3><p>El payload no cabe (o cuesta 16×): sube el
+  objeto a S3 y manda por la cola solo la clave. Es lo que ya hace el evento de S3 del
+  proyecto 02 — el mensaje dice «bucket X, clave Y», no lleva el CSV. Que el límite subiera a
+  1 MiB no jubila el patrón: lo hace opcional para el rango 256 KiB – 1 MiB.</p></div>
+</div>
+<div class="callout why">
+  <span class="callout-title">¿Y por qué no S3 → SQS directo, sin EventBridge?</span>
+  <p>Se puede: la notificación clásica de S3 entrega directamente a una cola. El criterio
+  completo —qué compra meter el bus y qué cuesta la migración posterior— ya está en la ficha de
+  EventBridge y no se repite aquí: <a href="./aws-eventbridge.html">la pregunta legítima, en
+  la ficha de EventBridge</a>.
+  En corto: si el número de consumidores es y será uno, directo; si es «hoy uno, mañana quién
+  sabe», bus. Lo que <strong>no</strong> cambia en ninguno de los dos montajes es que la cola
+  necesita su política de recurso — solo cambia el principal
+  (<code>s3.amazonaws.com</code> o <code>events.amazonaws.com</code>).</p>
+</div>
+
+<h2>En Terraform</h2>
+<p>Cuatro recursos, y el reparto entre ellos tiene lógica: los tres «policy» existen aparte
+porque las políticas se refieren a ARNs de otras colas, y separarlos rompe las dependencias
+circulares (la cola apunta a la DLQ, la DLQ autoriza a la cola).</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Recurso</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td><code>aws_sqs_queue</code></td><td>La cola y todos sus atributos</td></tr>
+    <tr><td><code>aws_sqs_queue_policy</code></td><td>Política de recurso: quién puede hacer <code>SendMessage</code></td></tr>
+    <tr><td><code>aws_sqs_queue_redrive_policy</code></td><td>La DLQ de una cola, cuando la DLQ debe existir antes</td></tr>
+    <tr><td><code>aws_sqs_queue_redrive_allow_policy</code></td><td>Qué colas pueden usar esta DLQ</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">cola de trabajo + DLQ + permiso para EventBridge</span></div>
+<pre><code>resource "aws_sqs_queue" "dlq" {
+  name = "csv-dlq"
+  # La DLQ es el buzón forense: retención al máximo.
+  message_retention_seconds = 1209600 # 14 días
+}
+
+resource "aws_sqs_queue" "work" {
+  name = "csv-work"
+
+  # 6 × el timeout de la Lambda (30 s) = 180 s.
+  visibility_timeout_seconds = 180
+  # Long polling. El default es 0 y el default es malo.
+  receive_wait_time_seconds  = 20
+  message_retention_seconds  = 345600 # 4 días
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.dlq.arn
+    maxReceiveCount     = 5 # entero, NO "5"
+  })
+}
+
+# Solo esta cola puede verter en la DLQ.
+resource "aws_sqs_queue_redrive_allow_policy" "dlq" {
+  queue_url = aws_sqs_queue.dlq.id
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue"
+    sourceQueueArns   = [aws_sqs_queue.work.arn]
+  })
+}
+
+# Política de RECURSO: sin esto, EventBridge no puede escribir. Y no da error.
+resource "aws_sqs_queue_policy" "work" {
+  queue_url = aws_sqs_queue.work.id
+  policy = jsonencode({
+    Version = "2012-10-17" # !! obligatorio o el apply se cuelga !!
+    Statement = [{
+      Sid       = "AllowEventBridge"
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.work.arn
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.csv_uploaded.arn }
+      }
+    }]
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "work" {
+  event_source_arn = aws_sqs_queue.work.arn
+  function_name    = aws_lambda_function.procesador.arn
+
+  batch_size                         = 10
+  function_response_types            = ["ReportBatchItemFailures"]
+  scaling_config { maximum_concurrency = 5 }
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong>Sin <code>Version = "2012-10-17"</code> en la queue policy, AWS se cuelga
+    indefinidamente</strong> y el provider muere con <code>timeout while waiting</code>. Está
+    documentado como aviso destacado en <a
+    href="https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue_policy"><code>aws_sqs_queue_policy</code></a>.
+    No es un error tuyo de sintaxis: es la API de SQS.</li>
+    <li><strong><code>maxReceiveCount</code> tiene que ser entero</strong> (<code>5</code>), no
+    string (<code>"5"</code>). Con comillas el <code>apply</code> pasa y la DLQ no funciona.</li>
+    <li><strong><code>queue_url</code> es el <code>.id</code>, no el <code>.arn</code>.</strong>
+    El <code>id</code> de <code>aws_sqs_queue</code> es la URL. Confundirlos da un error poco
+    claro.</li>
+    <li><strong>El nombre FIFO debe acabar en <code>.fifo</code></strong> y
+    <code>fifo_queue = true</code>. Y no se puede convertir standard ↔ FIFO: cambiarlo
+    <strong>destruye y recrea</strong> la cola, perdiendo todo lo que hubiera dentro.</li>
+    <li><strong>Recrear con el mismo nombre exige esperar 60 s</strong> tras el
+    <code>destroy</code>. Un <code>terraform apply</code> inmediato tras un destroy falla con
+    <code>QueueDeletedRecently</code>; se arregla reintentando.</li>
+    <li><strong><code>max_message_size</code> sale a 256 KiB</strong> aunque AWS ya use 1 MiB
+    por defecto (ver el callout de arriba). Ponlo explícito si lo necesitas.</li>
+    <li><strong>Alto rendimiento FIFO son <em>dos</em> atributos</strong>
+    (<code>deduplication_scope</code> y <code>fifo_throughput_limit</code>). Uno solo no
+    activa nada y no avisa.</li>
+    <li><strong>Cifrado: elige uno.</strong> <code>sqs_managed_sse_enabled</code> y
+    <code>kms_master_key_id</code> son excluyentes.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · elegir variante</p>
+  <p class="quiz-q">Proyecto 02: cada CSV subido genera un mensaje, los ficheros son
+  independientes entre sí, y el procesador escribe el resultado en S3 con una clave derivada
+  del nombre del fichero. Unos pocos miles de mensajes al mes. ¿Standard o FIFO?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El orden entre ficheros no significa nada y el consumidor es idempotente por construcción: escribir dos veces el mismo objeto en S3 da el mismo resultado. Standard es más barata (0,40 vs 0,50 USD/M), escala sin límite y no tiene el cuello de botella del message group.">Standard: el orden no importa y el consumidor es idempotente</button></li>
+    <li><button data-correct="false" data-why="FIFO no impide eso. Su garantía es sobre el productor: si reintentas SendMessage dentro de 5 minutos, no entra duplicado. Un consumidor que muere tras procesar y antes de borrar provoca reentrega igual en FIFO que en standard.">FIFO: solo ella impide que un mismo mensaje llegue duplicado</button></li>
+    <li><button data-correct="false" data-why="Al revés: unos miles de mensajes al mes están a seis órdenes de magnitud del límite de 300 TPS de FIFO. El modo de alto rendimiento resuelve un problema que este proyecto no tiene, y a cambio complica la deduplicación.">FIFO: este volumen ya exige el modo de alto rendimiento</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · coste</p>
+  <p class="quiz-q">Tu cola del proyecto 02 recibe 100 000 mensajes al mes. Además, el event
+  source mapping de la Lambda hace long polling las 24 horas del día, también los días en que
+  no llega nada. ¿Cuánto factura SQS?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Los polls vacíos SÍ se facturan como peticiones — unos 260 000-650 000 al mes con 2-5 pollers a 20 s. Sumados a las ~300 000 del tráfico real (enviar, recibir, borrar), el total queda por debajo del millón mensual gratuito. Free tier permanente, no de los primeros doce meses.">Cero: el free tier permanente de un millón cubre ambas</button></li>
+    <li><button data-correct="false" data-why="Sí las cobra. Una ReceiveMessage que expira sin traer nada es una petición facturable como cualquier otra: por eso el long polling (20 s) frente al short polling (0 s) puede dividir por veinte esa parte de la factura. Aquí el total no se paga por el free tier, no porque sean gratis.">Cero: SQS no cobra las peticiones que vuelven sin mensajes</button></li>
+    <li><button data-correct="false" data-why="SQS no tiene ningún componente que cobre por hora: ni la cola, ni la DLQ, ni el ESM. Es cien por cien por petición, y una cola creada y olvidada cuesta exactamente 0,00 USD. Lo que sí cobra por hora es un NAT Gateway o un ALB.">Unos treinta dólares: la cola cobra por hora de vida</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · dónde va la DLQ</p>
+  <p class="quiz-q">Un CSV corrupto hace fallar la Lambda una y otra vez, bloqueando el
+  pipeline. Quieres que tras cinco intentos deje de reintentarse y quede apartado para
+  inspección. ¿Dónde se configura eso?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Quien lleva la cuenta de intentos es SQS, con ApproximateReceiveCount, y quien aparta el mensaje al superar maxReceiveCount es la redrive policy de la cola de origen. Es el único mecanismo que actúa cuando el consumo es por polling.">En la cola: redrive policy con maxReceiveCount igual a cinco</button></li>
+    <li><button data-correct="false" data-why="Esos ajustes de la función solo se aplican a invocaciones ASÍNCRONAS. El consumo desde SQS es por polling y la invocación es síncrona: nunca se disparan. Configurarlo así no da error de apply — simplemente el mensaje malo se evapora a los 4 días.">En la Lambda: destino on-failure apuntando a la cola muerta</button></li>
+    <li><button data-correct="false" data-why="Esa DLQ existe y es útil, pero cubre otra frontera: eventos que NO consiguieron entrar en la cola (típicamente por falta de política de recurso). Aquí el mensaje entró perfectamente; lo que falla es procesarlo.">En el target de EventBridge: dead letter config con reintentos</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el parámetro traicionero</p>
+  <p class="quiz-q">Tu Lambda consumidora tiene <code>timeout = 30</code> y a veces tarda los
+  30 segundos enteros. Dejas el <code>visibility_timeout_seconds</code> de la cola en su valor
+  por defecto, que también es 30. ¿Qué te va a pasar?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El visibility timeout empieza a contar en la recepción, no al final del proceso: si la función agota sus 30 s, el mensaje reaparece justo cuando ella iba a borrarlo. Trabajo duplicado, y ApproximateReceiveCount sube en cada reaparición hasta mandarlo a la DLQ sin que haya fallado nada. Por eso la recomendación es 6× el timeout: 180 s.">Se reprocesa: el mensaje reaparece justo al terminar la función</button></li>
+    <li><button data-correct="false" data-why="El ESM no toca el visibility timeout: es un atributo de la cola y se queda como lo pusiste. Extenderlo sobre la marcha es cosa de tu código, llamando a ChangeMessageVisibility (el patrón heartbeat), y el ESM no lo hace por ti.">No pasa nada: el mapping va alargando el timeout solo</button></li>
+    <li><button data-correct="false" data-why="Terraform no valida nada de esto. Quien valida es Lambda al crear el event source mapping, y solo exige que el timeout de la función sea MENOR O IGUAL que el visibility timeout: 30 ≤ 30 pasa sin quejarse. La regla de las 6× es una recomendación, no una validación.">Falla el apply: Terraform valida que sean seis veces más</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-eventbridge.html">Ficha: Amazon EventBridge</a>
+    <a href="./aws-sns.html">Ficha: Amazon SNS</a>
+    <a href="./aws-lambda.html">Ficha: AWS Lambda</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="../lessons/0011-la-senal.html">Lección 11: la señal</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html">SQS
+    Developer Guide</a> (empieza por <em>visibility timeout</em> y <em>dead-letter
+    queues</em>), <a
+    href="https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html">Using Lambda with
+    Amazon SQS</a> para todo lo del event source mapping, y las <a
+    href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html">quotas
+    de mensajes</a> cuando dudes de un número. Precios y límites verificados el
+    <strong>2026-08-30</strong> en <code>us-east-1</code>: si han pasado meses, revísalos.
+    Cualquier duda, pregúntame en la sesión.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

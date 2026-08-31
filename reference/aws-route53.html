@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon Route 53</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon Route 53</h1>
+  <p class="deck">El DNS de AWS, y tres productos distintos con el mismo nombre: un
+  <strong>registrador</strong> de dominios, un <strong>servidor DNS autoritativo</strong>
+  (las hosted zones) y un <strong>resolver</strong> dentro de tus VPCs. La gente los mezcla
+  porque comparten consola; se contratan por separado, se facturan por separado y se rompen
+  por separado. Además es el primer servicio del curso que cobra <strong>por mes</strong>
+  aunque nadie consulte nada: 0,50 USD por zona, exista o no tráfico.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Red / DNS</dd></div>
+    <div><dt>Ámbito</dt><dd>Global — el control plane vive en <code>us-east-1</code>; los
+    servidores que responden son anycast en todo el mundo</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost hour">por mes</span> la zona ·
+    <span class="tag-cost usage">por uso</span> las queries ·
+    <span class="tag-cost free">gratis</span> las queries ALIAS a AWS</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><strong>Casi.</strong> Una hosted zone cuesta
+    <code>0,50 USD/mes</code> sin tráfico ninguno. No es cero, pero tampoco es un NAT
+    Gateway: son <strong>6 USD al año</strong> por dominio</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_route53_zone</code> ·
+    <code>aws_route53_record</code> · <code>aws_route53_health_check</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../ROADMAP.md">proyecto 05</a>
+    (<code>05-edge-cdn</code>: S3 + CloudFront + ACM + Route 53)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2 id="que-es">Qué es</h2>
+<p>Un servicio DNS gestionado, dividido en tres piezas que se venden por separado:</p>
+<ul>
+  <li><strong>Route 53 (autoritativo)</strong> — guarda las respuestas de tu dominio en
+  <em>hosted zones</em> y las sirve al mundo desde una flota anycast. Es lo que hace que
+  <code>midominio.com</code> devuelva una IP.</li>
+  <li><strong>Route 53 Domains</strong> — un registrador acreditado. Compra el dominio al
+  registro del TLD, en contratos anuales.</li>
+  <li><strong>Route 53 Resolver</strong> — el <em>otro</em> lado del DNS: el que
+  <strong>pregunta</strong> desde dentro de tus VPCs. Ya lo estás usando aunque no lo
+  sepas.</li>
+</ul>
+<p>El número «53» es el puerto del protocolo DNS. Y el nombre completo del problema que
+resuelve: los servidores autoritativos de un dominio deben estar disponibles el 100 % del
+tiempo, porque si no responden <strong>nada</strong> de lo que hay detrás existe — ni el
+CDN, ni el load balancer, ni la base de datos con tres réplicas.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>El registro de la propiedad y la guía telefónica son dos oficinas distintas.
+  <strong>Registrar</strong> el dominio es comprar la escritura: pagas cada año y el nombre
+  es tuyo. <strong>Alojar</strong> la zona es publicar el número de teléfono: cuesta
+  aparte, y lo puede hacer otra empresa. Donde se rompe la analogía: la guía telefónica se
+  imprime una vez al año, y aquí cada <em>resolver</em> del mundo se guarda su propia copia
+  durante el TTL que tú fijaste. Cambiar un registro no cambia lo que ya está cacheado — y
+  ese detalle es el 90 % de los sustos con DNS.</p>
+</div>
+
+<h2 id="para-que">Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Poner tu dominio delante de un CDN</h3><p>El caso del proyecto
+  05: <code>midominio.com</code> → distribución de CloudFront. Un registro ALIAS de tipo A
+  en el apex. Sin ALIAS esto <em>no se puede hacer</em>: el DNS estándar prohíbe un CNAME en
+  el apex.</p></div>
+  <div class="ref-card"><h3>Validar un certificado ACM</h3><p>ACM te pide crear un registro
+  CNAME con un valor aleatorio para demostrar que el dominio es tuyo. Si la zona está en
+  Route 53, Terraform lo crea solo y la validación tarda minutos en vez de días.</p></div>
+  <div class="ref-card"><h3>Nombres internos en una VPC</h3><p>Una <em>private hosted
+  zone</em> asociada a la <a href="./aws-vpc.html">VPC</a> hace que
+  <code>db.interno</code> resuelva a la IP privada de RDS — y solo desde dentro. Las
+  queries a zonas privadas son gratis.</p></div>
+  <div class="ref-card"><h3>Canary por DNS</h3><p>Weighted routing con pesos 95/5: el 5 %
+  de los resolvers reciben la IP nueva. Es el despliegue progresivo más barato que existe…
+  y el menos preciso, porque el reparto es por <em>resolver</em>, no por usuario.</p></div>
+  <div class="ref-card"><h3>Failover entre regiones</h3><p>Un health check vigila el
+  endpoint primario; cuando cae, Route 53 deja de devolverlo y sirve el secundario. La
+  página de mantenimiento en un bucket S3 es el patrón clásico de plan B.</p></div>
+</div>
+
+<h2 id="tipos">Los tipos que existen</h2>
+
+<h3>Las tres caras del servicio</h3>
+<p>Primer error de todo el mundo: creer que «usar Route 53» es una sola decisión. Son tres
+productos independientes. Puedes usar cualquiera sin los otros dos.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Producto</th><th>Qué hace</th><th>Quién le pregunta</th><th>Coste</th><th>¿Lo necesita el curso?</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Domains</strong><br>(registrador)</td>
+      <td>Compra y renueva el dominio ante el registro del TLD. Guarda los contactos WHOIS
+      y los NS que declaras al mundo.</td>
+      <td>Nadie en runtime. Es un contrato administrativo anual.</td>
+      <td><strong>Por año, por TLD.</strong> <code>.com</code>: 16,00 USD/año</td>
+      <td>Opcional — puedes traer un dominio comprado en Namecheap</td></tr>
+    <tr><td><strong>Hosted zones</strong><br>(DNS autoritativo)</td>
+      <td>Guarda los registros y responde a las consultas del mundo (zona pública) o de tus
+      VPCs (zona privada).</td>
+      <td>Los resolvers de todo internet, vía delegación NS.</td>
+      <td><strong>0,50 USD/mes por zona</strong> + 0,40 USD/millón de queries</td>
+      <td><strong>Sí</strong> — es la pieza del proyecto 05</td></tr>
+    <tr><td><strong>Resolver</strong><br>(DNS recursivo)</td>
+      <td>Resuelve nombres <em>desde dentro</em> de una VPC. El «.2» de tu CIDR. Con
+      <em>endpoints</em>, además cruza el DNS entre AWS y tu red on-prem.</td>
+      <td>Tus instancias, tus Lambdas en VPC, tus contenedores.</td>
+      <td><strong>Gratis</strong> el resolver de la VPC · <strong>0,125 USD/h por ENI</strong> los endpoints</td>
+      <td>Lo usas sin configurarlo. Los endpoints, <strong>no</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Registrador y DNS <strong>no tienen por qué ser la misma empresa</strong>. Lo único
+  que los une son los cuatro <code>NS</code> que declaras en el registrador. Si ya tienes el
+  dominio comprado fuera, <strong>no lo transfieras</strong>: crea la hosted zone en Route
+  53 y cambia los NS en tu registrador actual. Cuesta cinco minutos, es reversible, y te
+  ahorra un traslado de 16 USD que además bloquea el dominio 60 días.</p>
+</div>
+
+<h3>Hosted zones: públicas vs privadas</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Pública</th><th>Privada</th></tr></thead>
+  <tbody>
+    <tr><td>Quién la puede consultar</td>
+      <td>Cualquiera en internet</td>
+      <td>Solo desde las VPCs asociadas (o vía inbound endpoint)</td></tr>
+    <tr><td>Cómo se llega a ella</td>
+      <td>Delegación: el TLD apunta a tus 4 NS</td>
+      <td>El VPC Resolver detecta la asociación VPC↔zona y va por dentro. Los NS que
+      muestra (<code>ns-0.awsdns-00.com</code>…) son de adorno: nunca se contactan</td></tr>
+    <tr><td>Coste de la zona</td><td>0,50 USD/mes</td><td>0,50 USD/mes — igual</td></tr>
+    <tr><td>Coste de las queries</td><td>0,40 USD/millón</td><td><strong>0,00 USD</strong> — gratis</td></tr>
+    <tr><td>Requisito</td><td>Ser dueño del dominio (o de la delegación)</td>
+      <td>La <a href="./aws-vpc.html">VPC</a> con <code>enable_dns_support</code> y
+      <code>enable_dns_hostnames</code> activados, y al menos una asociación <strong>en todo
+      momento</strong></td></tr>
+    <tr><td>DNSSEC</td><td>Sí</td><td>No aplica</td></tr>
+    <tr><td>Accelerated recovery</td><td>Sí (2025)</td><td>No soportado</td></tr>
+  </tbody>
+</table>
+</div>
+<p><em>Split-view DNS</em>: puedes tener una zona pública y una privada <strong>con el mismo
+nombre</strong>. Desde fuera, <code>api.midominio.com</code> resuelve al ALB público; desde
+dentro de la VPC, a la IP privada. Es la razón principal de existir de las zonas privadas —
+y también la razón de que alguien pierda una tarde preguntándose por qué
+<code>dig</code> le da respuestas distintas según dónde lo lance.</p>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa de los NS: recrear la zona rompe la delegación</span>
+  <p>Al crear una hosted zone, Route 53 le adjudica automáticamente dos registros que tú no
+  escribiste: un <code>SOA</code> y un <code>NS</code> con <strong>cuatro name servers
+  asignados al azar</strong> de su flota (<code>ns-1234.awsdns-56.com</code> y compañía).
+  Esos cuatro nombres son los que copias al registrador.</p>
+  <p>Y aquí está la mina: <strong>los name servers se asignan por zona, no por dominio, y
+  no se pueden cambiar</strong> — «<em>You cannot change the name servers for an existing
+  hosted zone</em>» (<a
+  href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/white-label-name-servers.html">doc
+  oficial</a>). Si haces <code>terraform destroy</code> + <code>apply</code>, o si mueves
+  la zona a otro state y Terraform decide recrearla, la zona nueva sale con
+  <strong>otros cuatro NS</strong>. El registrador sigue apuntando a los viejos, que ya no
+  saben nada de tu dominio: <strong>el dominio deja de resolver</strong>, y sigue sin
+  resolver durante el TTL del NS del TLD (típicamente 48 h) aunque arregles el registrador
+  al minuto siguiente.</p>
+  <p>Tres defensas, de más a menos práctica: (1) <code>prevent_destroy = true</code> en el
+  <code>lifecycle</code> de la zona; (2) la zona vive en su propio state, separada de lo que
+  se despliega a diario; (3) si de verdad necesitas recrear zonas sin cambiar NS, crea un
+  <strong>reusable delegation set</strong> y pásalo en <code>delegation_set_id</code> — es
+  la única forma, y solo se puede vincular <em>al crear</em> la zona.</p>
+</div>
+
+<h3>Tipos de registro, y ALIAS a fondo</h3>
+<p>Route 53 soporta los tipos estándar que espera cualquiera: <code>A</code> (IPv4),
+<code>AAAA</code> (IPv6), <code>CNAME</code> (alias de nombre), <code>MX</code> (correo),
+<code>TXT</code> (verificaciones, SPF, DKIM), <code>NS</code>, <code>SOA</code>,
+<code>SRV</code>, <code>CAA</code>, <code>PTR</code>, <code>DS</code>, <code>NAPTR</code>,
+<code>SPF</code>, <code>SSHFP</code>, <code>TLSA</code>, <code>HTTPS</code> y
+<code>SVCB</code>. Y uno que <strong>no existe en el DNS</strong>: el <strong>ALIAS</strong>.</p>
+<p>Un ALIAS es una extensión propietaria de AWS. No viaja por el cable: cuando un resolver
+pregunta por <code>midominio.com</code> tipo A, Route 53 resuelve el destino por dentro y
+devuelve <strong>las IPs finales</strong>, en una respuesta A perfectamente normal. Desde
+fuera, un ALIAS es indistinguible de un registro A — <code>dig</code> lo ve como A, y la
+propiedad «alias» solo aparece en la consola o en la API.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th><code>ALIAS</code></th><th><code>CNAME</code></th></tr></thead>
+  <tbody>
+    <tr><td><strong>¿Vale en el apex?</strong> (<code>midominio.com</code> pelado)</td>
+      <td><strong>Sí.</strong> Es su razón de existir</td>
+      <td><strong>No.</strong> El RFC lo prohíbe: el apex ya tiene NS y SOA, y un CNAME no
+      puede convivir con otros registros</td></tr>
+    <tr><td>¿A qué puede apuntar?</td>
+      <td>Solo recursos AWS de una lista cerrada: CloudFront, ELB (ALB/NLB/CLB), S3 website
+      endpoint, API Gateway, VPC interface endpoint, Global Accelerator, Elastic Beanstalk,
+      App Runner, AppSync, OpenSearch, Lightsail — y otro registro <em>del mismo tipo y de
+      la misma hosted zone</em></td>
+      <td>Cualquier nombre DNS del mundo, en tu zona o fuera de ella</td></tr>
+    <tr><td><strong>Precio de las queries</strong></td>
+      <td><strong>0,00 USD.</strong> «<em>Route 53 doesn't charge for alias queries to AWS
+      resources</em>»</td>
+      <td>Se cobran. Y si el CNAME apunta a otro registro de una zona de Route 53, se cobra
+      <strong>como dos queries</strong>: la que devuelve el nombre y la que resuelve ese
+      nombre</td></tr>
+    <tr><td>TTL</td>
+      <td><strong>No lo pones tú.</strong> Route 53 usa el TTL del recurso destino (60 s
+      para los recursos típicos). En Terraform, <code>ttl</code> debe omitirse</td>
+      <td>Lo fijas tú, y si te pasas de generoso lo pagas en el siguiente incidente</td></tr>
+    <tr><td>¿Sigue los cambios del destino?</td>
+      <td><strong>Sí, solo.</strong> Si el ALB cambia de IPs, Route 53 empieza a devolver
+      las nuevas sin que toques nada</td>
+      <td>Sí, indirectamente: resuelves el nombre destino en cada consulta (y pagas)</td></tr>
+    <tr><td>Health check del destino</td>
+      <td><code>evaluate_target_health</code>: Route 53 mira la salud del recurso AWS sin
+      que crees ni pagues un health check</td>
+      <td>No hay tal cosa: necesitas un health check explícito</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout win">
+  <span class="callout-title">La regla, en una frase</span>
+  <p><strong>Si el destino es un recurso AWS de la lista, ALIAS siempre.</strong> Es más
+  barato (gratis), funciona en el apex, se autoactualiza y trae health checking de regalo.
+  El CNAME queda para apuntar fuera de AWS y para lo que ACM te pida verbatim.</p>
+</div>
+
+<h3>Routing policies: siete formas de responder a la misma pregunta</h3>
+<p>La política se elige <strong>por registro</strong>, y todos los registros que compiten
+comparten nombre y tipo, distinguiéndose por un <code>set_identifier</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Política</th><th>Decide según</th><th>Cuándo la quieres</th><th>Precio/millón</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Simple</strong></td><td>Nada: un valor, siempre el mismo</td>
+      <td>El 95 % de los casos, incluido el proyecto 05</td><td>0,40 USD</td></tr>
+    <tr><td><strong>Weighted</strong></td><td>Un peso relativo que fijas tú</td>
+      <td>Canary por DNS, blue/green, repartir carga entre dos proveedores. Peso 0 = apagado</td>
+      <td>0,40 USD</td></tr>
+    <tr><td><strong>Latency</strong></td><td>La región AWS con menor latencia <em>medida</em>
+      hasta el resolver</td>
+      <td>Mismo servicio desplegado en varias regiones y quieres que cada usuario caiga en
+      la más rápida. <strong>No</strong> es «la más cercana en el mapa»</td>
+      <td>0,60 USD</td></tr>
+    <tr><td><strong>Failover</strong></td><td>La salud de un health check:
+      <code>PRIMARY</code> si está sano, si no <code>SECONDARY</code></td>
+      <td>Activo-pasivo puro. El clásico: primario el ALB, secundario un bucket S3 con
+      «volvemos en 10 minutos»</td>
+      <td>0,40 USD</td></tr>
+    <tr><td><strong>Geolocation</strong></td><td><em>Dónde está el usuario</em>: continente,
+      país o subdivisión. Es un <strong>mapa político</strong></td>
+      <td>Obligaciones legales («los datos de la UE se sirven desde la UE»), idioma,
+      contenido bloqueado por país. Pon siempre un registro por defecto (<code>*</code>) o
+      quien no case no recibe respuesta</td>
+      <td>0,70 USD</td></tr>
+    <tr><td><strong>Geoproximity</strong></td><td><em>Dónde están tus recursos</em>:
+      distancia geográfica usuario↔recurso, con un <code>bias</code> de −99 a +99 que
+      encoge o expande la zona de influencia de cada uno</td>
+      <td>Mover tráfico entre datacenters de forma continua y gradual. La fórmula real es
+      <code>distancia_sesgada = distancia · [1 − (bias/100)]</code></td>
+      <td>0,70 USD</td></tr>
+    <tr><td><strong>IP-based</strong></td><td>El bloque CIDR de origen, contra una
+      <em>CIDR collection</em> que tú cargas</td>
+      <td>Sabes qué ISP usa cada usuario y quieres decidir por rango («los de este operador,
+      a este POP»). Nicho: CDNs y telcos</td>
+      <td>0,80 USD</td></tr>
+    <tr><td><strong>Multivalue</strong></td><td>Azar: devuelve hasta <strong>8</strong>
+      registros sanos, barajados</td>
+      <td>Reparto pobre pero con health checking, cuando no quieres pagar un balanceador.
+      No es un balanceador</td>
+      <td>0,40 USD</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Geolocation vs geoproximity: la diferencia real</span>
+  <p>Suenan igual y hacen cosas opuestas. <strong>Geolocation mira al usuario</strong> y
+  responde a la pregunta «¿desde qué país me consultan?» — la respuesta es una regla
+  discreta, legal, de sí o no: si vienes de Francia, esto. <strong>Geoproximity mira a tus
+  recursos</strong> y responde a «¿cuál de mis servidores está más cerca de quien
+  pregunta?» — la respuesta es continua, geométrica, y ajustable con el
+  <code>bias</code>.</p>
+  <p>El test que las separa: si mañana apagas el datacenter de Frankfurt, una regla
+  <em>geolocation</em> para Alemania sigue apuntando a Frankfurt (tienes que editarla a
+  mano); una regla <em>geoproximity</em> redistribuye Alemania entre los vecinos sola. Usa
+  geolocation cuando la frontera es un requisito legal; geoproximity cuando la frontera es
+  una consecuencia de dónde pusiste las máquinas.</p>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La advertencia honesta: el DNS no es un balanceador</span>
+  <p>Todas estas políticas reparten tráfico decidiendo <strong>qué responden a una
+  pregunta</strong>. Y esa respuesta la cachean el resolver del ISP, el sistema operativo,
+  la JVM y el navegador, cada uno con sus propias reglas y algunos ignorando tu TTL. Las
+  consecuencias, sin adornos:</p>
+  <ul>
+    <li><strong>El failover no es instantáneo.</strong> Suma: 3 fallos consecutivos × 30 s
+    de intervalo (≈ 90 s, o ≈ 30 s con <em>fast interval</em>) + el TTL del registro + lo
+    que cada caché decida ignorar. Un failover DNS «rápido» se mide en minutos, no en
+    segundos.</li>
+    <li><strong>El reparto es por resolver, no por usuario.</strong> Un weighted 95/5 puede
+    mandarte el 30 % del tráfico real si el resolver que cayó en el 5 % resulta ser el de un
+    operador grande. Para un canary de verdad, el reparto va en el <a
+    href="./aws-elb.html">balanceador</a> o en el CDN, no en el DNS.</li>
+    <li><strong>Un cliente ya conectado no se entera.</strong> El DNS solo interviene al
+    abrir la conexión. Sacar un servidor de la rotación no cierra las sesiones que ya
+    tenía.</li>
+  </ul>
+  <p>Puesto en limpio, y por eso este curso tiene fichas separadas: <strong><a
+  href="./aws-elb.html">ELB</a> reparte conexiones, en milisegundos, dentro de una región;
+  Route 53 reparte respuestas, en minutos, entre regiones.</strong> Cada uno reparte tráfico
+  en un sentido distinto, y el segundo no sustituye al primero.</p>
+</div>
+
+<h3>Health checks: las tres clases</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Qué vigila</th><th>Terraform (<code>type</code>)</th><th>Precio/mes</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Endpoint</strong></td>
+      <td>Una IP o FQDN, por <code>HTTP</code>, <code>HTTPS</code> o <code>TCP</code>, con
+      <em>string matching</em> opcional sobre los primeros 5 120 bytes del body</td>
+      <td><code>HTTP</code> · <code>HTTPS</code> · <code>TCP</code> ·
+      <code>HTTP_STR_MATCH</code> · <code>HTTPS_STR_MATCH</code></td>
+      <td>0,50 USD (endpoint AWS) / 0,75 USD (fuera de AWS)</td></tr>
+    <tr><td><strong>Calculated</strong></td>
+      <td>Otros health checks: hasta <strong>255 hijos</strong>, y tú fijas cuántos deben
+      estar sanos para que el padre lo esté</td>
+      <td><code>CALCULATED</code></td>
+      <td>0,50 USD (se factura como endpoint AWS)</td></tr>
+    <tr><td><strong>CloudWatch alarm</strong></td>
+      <td>El <em>flujo de datos</em> de una alarma de <a href="./aws-cloudwatch.html">CloudWatch</a>
+      (no su estado: <code>SetAlarmState</code> no lo mueve). Es la puerta a vigilar
+      cualquier métrica: errores 5xx, latencia p99, profundidad de cola</td>
+      <td><code>CLOUDWATCH_METRIC</code></td>
+      <td>0,50 USD (se factura como endpoint AWS)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Lo que hay que saber para no interpretarlos mal:</p>
+<ul>
+  <li><strong>Los checkers están repartidos por el mundo y no se coordinan.</strong> Route
+  53 agrega sus votos: si <strong>más del 18 %</strong> de los checkers dice «sano», el
+  endpoint es sano. El umbral es deliberadamente bajo para que una partición de red que
+  aísle tu endpoint de unas cuantas ubicaciones no lo declare caído.</li>
+  <li><strong>Intervalo 30 s (estándar) o 10 s (<em>fast</em>, +1,00 USD/mes).</strong> El
+  <code>failure_threshold</code> son fallos consecutivos: por defecto 3.</li>
+  <li><strong>Un health check nuevo se considera sano</strong> hasta que hay datos
+  suficientes. Y uno <code>disabled</code> se considera sano <em>siempre</em> — si querías
+  sacar un recurso de rotación, lo que buscas es <code>invert_healthcheck</code>, no
+  <code>disabled</code>.</li>
+  <li><strong>Los HTTPS health checks NO validan el certificado.</strong> Un cert caducado
+  no hace fallar el check. Si te importa, el que valida es el navegador de tus usuarios,
+  no Route 53.</li>
+  <li><strong>Para recursos AWS con ALIAS, no crees health checks.</strong> Pon
+  <code>evaluate_target_health = true</code>. Los health checks de ELB y de buckets S3
+  website están provisionados por AWS y no se facturan.</li>
+</ul>
+
+<h2 id="por-dentro">Cómo funciona por dentro</h2>
+<p>El modelo mental mínimo para no cometer errores caros:</p>
+<ul>
+  <li><strong>La delegación es una cadena de confianza, no una base de datos central.</strong>
+  Un resolver pregunta a la raíz, la raíz le manda a los servidores de <code>.com</code>,
+  y <code>.com</code> le devuelve <em>tus cuatro NS</em>. Route 53 solo controla el último
+  eslabón. Los tres primeros no los toca nadie, y ahí es donde vive el retardo de 48 h
+  cuando cambias de proveedor DNS.</li>
+  <li><strong>Nada de esto es «propagación».</strong> No hay un empujón que recorra el
+  mundo: hay <em>expiración</em> de cachés. Cuando alguien dice «espera a que propague»
+  quiere decir «espera a que caduquen los TTL que tú mismo pusiste». Corolario práctico:
+  <strong>baja el TTL a 60 s el día antes</strong> de una migración y súbelo después.</li>
+  <li><strong>Anycast y 100 % de SLA.</strong> Las mismas IPs de name server se anuncian
+  desde decenas de sitios; el routing de internet entrega tu consulta al más cercano. Route
+  53 es el único servicio de AWS con un SLA de disponibilidad del 100 %.</li>
+  <li><strong>El control plane es <code>us-east-1</code>, el data plane es global.</strong>
+  Distinción que importa en un incidente: si la API de Route 53 no está disponible, tus
+  registros <em>siguen respondiendo</em> — lo que no puedes es cambiarlos. Justo eso ataca
+  el <strong>accelerated recovery</strong> de 2025 (ver <a href="#novedades">novedades</a>).</li>
+  <li><strong>Las escrituras son transaccionales por zona y eventualmente consistentes en
+  la flota.</strong> Un <code>ChangeResourceRecordSets</code> pasa por
+  <code>PENDING</code> → <code>INSYNC</code>; hasta el <code>INSYNC</code> puedes obtener
+  respuestas viejas de algunos servidores. Terraform espera a que la operación termine.</li>
+  <li><strong>El apex es especial.</strong> Ahí viven obligatoriamente <code>NS</code> y
+  <code>SOA</code>, y por eso el RFC prohíbe el CNAME: un CNAME no admite hermanos. El
+  ALIAS existe exactamente para saltarse esa restricción sin romper el protocolo.</li>
+</ul>
+
+<h2 id="coste">Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en la <a
+href="https://aws.amazon.com/route53/pricing/">página de precios de Route 53</a> (regiones
+AWS estándar; GovCloud es más caro) y, para los dominios, en la <a
+href="https://d32ze2gidvkk54.cloudfront.net/Amazon_Route_53_Domain_Registration_Pricing_20140731.pdf">tabla
+de precios por TLD</a>. Los precios de dominio cambiaron el <strong>1 de julio de
+2026</strong>: el <code>.com</code> pasó de 15,00 a 16,00 USD/año.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Hosted zone</strong> (pública o privada)</td>
+      <td><span class="tag-cost hour">por mes</span></td>
+      <td><strong>0,50 USD/mes</strong> (primeras 25)</td>
+      <td><strong>No prorrateado.</strong> Se cobra al crearla y el día 1 de cada mes.
+      Zona 26 en adelante: 0,10 USD/mes</td></tr>
+    <tr><td>Zona borrada dentro de las 12 h de creada</td>
+      <td><span class="tag-cost free">gratis</span></td><td>0,00 USD</td>
+      <td>Ventana explícita «para permitir pruebas». Las queries de esas 12 h sí se cobran</td></tr>
+    <tr><td>Registros por encima de 10 000 en una zona</td>
+      <td><span class="tag-cost usage">por uso</span></td><td>0,0015 USD/mes cada uno</td>
+      <td>Irrelevante salvo que generes registros por máquina</td></tr>
+    <tr><td><strong>Queries ALIAS a recursos AWS</strong></td>
+      <td><span class="tag-cost free">gratis</span></td><td><strong>0,00 USD</strong></td>
+      <td>ELB, CloudFront, API Gateway, S3 website, VPC endpoints, Global Accelerator,
+      Beanstalk, App Runner, AppSync, OpenSearch, Lightsail</td></tr>
+    <tr><td>Queries a zonas privadas</td>
+      <td><span class="tag-cost free">gratis</span></td><td>0,00 USD</td><td>Sin límite</td></tr>
+    <tr><td>Queries estándar (zona pública)</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td>0,40 USD/millón (primeros 1 000 M/mes)<br>0,20 USD/millón por encima</td>
+      <td>Prorrateado: 100 000 queries = 0,04 USD</td></tr>
+    <tr><td>Queries latency-based</td><td><span class="tag-cost usage">por uso</span></td>
+      <td>0,60 / 0,30 USD/millón</td><td>100 000 queries = 0,06 USD</td></tr>
+    <tr><td>Queries geolocation / geoproximity</td><td><span class="tag-cost usage">por uso</span></td>
+      <td>0,70 / 0,35 USD/millón</td><td></td></tr>
+    <tr><td>Queries IP-based</td><td><span class="tag-cost usage">por uso</span></td>
+      <td>0,80 / 0,40 USD/millón</td><td>La política más cara del catálogo</td></tr>
+    <tr><td><strong>Health check</strong>, endpoint AWS</td>
+      <td><span class="tag-cost hour">por mes</span></td>
+      <td><strong>0,00 USD los 50 primeros</strong>, luego 0,50 USD/mes</td>
+      <td>Prorrateado. Incluye calculated y CloudWatch-metric</td></tr>
+    <tr><td>Health check, endpoint fuera de AWS</td>
+      <td><span class="tag-cost hour">por mes</span></td><td>0,75 USD/mes</td>
+      <td>Sin capa gratuita</td></tr>
+    <tr><td>Opciones del health check (HTTPS, string match, fast interval, latencia)</td>
+      <td><span class="tag-cost hour">por mes</span></td>
+      <td>+1,00 USD/mes (AWS) · +2,00 USD/mes (fuera)</td>
+      <td><strong>Por cada opción activada</strong>, no por check</td></tr>
+    <tr><td>Health checks de ELB y de buckets S3 website</td>
+      <td><span class="tag-cost free">gratis</span></td><td>0,00 USD</td>
+      <td>Los provisiona AWS; no los crees tú</td></tr>
+    <tr><td><strong>Dominio <code>.com</code></strong></td>
+      <td><span class="tag-cost hour">por año</span></td>
+      <td><strong>16,00 USD/año</strong> (desde 2026-07-01)</td>
+      <td>Registro, renovación y transferencia. WHOIS privacy: 0,00 USD. Restauración tras
+      expirar: 57,00 USD. Registro de 1 a 10 años</td></tr>
+    <tr><td>Resolver de la VPC (el «.2»)</td>
+      <td><span class="tag-cost free">gratis</span></td><td>0,00 USD</td>
+      <td>«<em>Queries that resolve locally using the Route 53 Resolver will not be
+      charged</em>»</td></tr>
+    <tr><td><strong>Resolver endpoint</strong> (inbound u outbound)</td>
+      <td><span class="tag-cost hour">por hora</span></td>
+      <td><strong>0,125 USD/h por ENI</strong></td>
+      <td>Mínimo <strong>dos</strong> ENIs por endpoint ⇒ <strong>0,25 USD/h ≈ 182
+      USD/mes</strong> por endpoint. Más 0,40 USD/millón de queries que lo atraviesen</td></tr>
+    <tr><td>DNS Firewall</td><td><span class="tag-cost usage">por uso</span></td>
+      <td>0,60 / 0,40 USD/millón de queries inspeccionadas</td>
+      <td>+0,0005 USD/mes por dominio en listas propias. <em>Advanced</em>: 0,16 USD/h por
+      rule group y VPC</td></tr>
+    <tr><td>DNSSEC (la KSK)</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><strong>1,00 USD/mes</strong> de KMS</td>
+      <td>El servicio de firma no cobra; lo que cobra es la clave gestionada de <a
+      href="https://aws.amazon.com/kms/pricing/">KMS</a>: 1,00 USD/mes por clave, prorrateado</td></tr>
+    <tr><td>Query logging</td><td><span class="tag-cost usage">por uso</span></td>
+      <td>0,00 USD de Route 53</td>
+      <td>Pero pagas el destino: CloudWatch Logs, S3 o Firehose. Un dominio con tráfico
+      genera <em>muchas</em> líneas</td></tr>
+    <tr><td>Traffic Flow</td><td><span class="tag-cost hour">por mes</span></td>
+      <td>50,00 USD por policy record/mes</td>
+      <td>Caro y evitable: casi todo se hace con registros normales</td></tr>
+    <tr><td>Route 53 Profiles</td><td><span class="tag-cost hour">por hora</span></td>
+      <td>0,75 USD/h por cuenta (hasta 100 asociaciones)</td>
+      <td>≈ 540 USD/mes. Es una herramienta de organización multi-cuenta</td></tr>
+    <tr><td>Global Resolver</td><td><span class="tag-cost hour">por hora</span></td>
+      <td>5,00 USD/h las dos primeras regiones</td>
+      <td>≈ 3 600 USD/mes. Producto de empresa grande. Ver <a href="#novedades">novedades</a></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios de regiones AWS estándar, verificados el <strong>2026-08-30</strong>
+en <a href="https://aws.amazon.com/route53/pricing/">aws.amazon.com/route53/pricing</a>.
+Cámbialos si han pasado meses — la tabla de dominios ya cambió este mismo año.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Tu factura del proyecto 05, y lo que sorprende</span>
+  <p>El proyecto <code>05-edge-cdn</code> con un dominio propio: <strong>0,50 USD/mes de
+  hosted zone</strong> y <strong>0,00 USD de queries</strong>, porque todos los registros
+  que apuntan a CloudFront son ALIAS. Si además compras el <code>.com</code> por Route 53,
+  son 16 USD más una vez al año. Total: <strong>≈ 6 USD al año</strong> de DNS, o ≈ 22 USD
+  con dominio incluido.</p>
+  <p>Lo que sorprende de verdad, en orden:</p>
+  <ul>
+    <li><strong>La zona no se prorratea.</strong> Crear una zona el día 30 y borrarla el 31
+    cuesta 0,50 USD completos, y otros 0,50 el día 1 si sobrevive. Un pipeline de CI que
+    crea y destruye una zona por PR paga medio dólar por PR. La única salida es la ventana
+    de <strong>12 horas</strong>: por debajo de eso, gratis.</li>
+    <li><strong>Los resolver endpoints son la bomba.</strong> Un solo outbound endpoint
+    (dos ENIs obligatorias) son <strong>182 USD/mes</strong> corriendo, hagas o no una sola
+    consulta. Es más caro que un NAT Gateway. Si alguien «prueba» uno y se olvida, se nota
+    en la factura antes que ninguna otra pieza de esta ficha.</li>
+    <li><strong>Las opciones de health check se cobran por opción.</strong> Un check HTTPS
+    con string matching y fast interval son tres opciones: 0,50 + 3,00 = 3,50 USD/mes por
+    un solo check.</li>
+    <li><strong>El query logging no lo cobra Route 53, lo cobra CloudWatch.</strong> Un
+    dominio con tráfico serio puede generar más coste de logs que de DNS.</li>
+  </ul>
+</div>
+
+<h2 id="limites">Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/general/latest/gr/r53.html">Route
+53 endpoints and quotas</a>, consultada el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Hosted zones por cuenta</td><td><code>500</code></td><td>Sí</td></tr>
+    <tr><td>Registros por hosted zone</td><td><code>10 000</code></td><td>Sí — y por encima se cobran</td></tr>
+    <tr><td>Dominios registrados por cuenta</td><td><code>20</code></td><td>Sí</td></tr>
+    <tr><td>Health checks por cuenta</td><td><code>200</code></td><td>Sí</td></tr>
+    <tr><td>Hijos de un calculated health check</td><td><code>255</code></td><td><strong>No</strong></td></tr>
+    <tr><td>VPCs asociadas a una private hosted zone</td><td><code>300</code></td><td>Sí</td></tr>
+    <tr><td>Respuestas de un multivalue answer</td><td><code>8</code></td><td><strong>No</strong> — es del diseño</td></tr>
+    <tr><td>Resolver endpoints por región</td><td><code>4</code></td><td>Sí</td></tr>
+    <tr><td>IPs por resolver endpoint</td><td><code>6</code> (mínimo 2)</td><td>Sí</td></tr>
+    <tr><td>Reglas de resolver por región</td><td><code>1 000</code></td><td>Sí</td></tr>
+    <tr><td>Rule groups de DNS Firewall por VPC</td><td><code>5</code></td><td><strong>No</strong></td></tr>
+    <tr><td>CIDR collections por cuenta</td><td><code>5</code></td><td>Sí</td></tr>
+    <tr><td>Traffic flow policies</td><td><code>50</code></td><td>Sí</td></tr>
+    <tr><td>Name servers de una zona</td><td><code>4</code>, asignados por AWS</td>
+      <td><strong>No</strong> — solo se eligen creando la zona con un reusable delegation set</td></tr>
+    <tr><td>TTL máximo con DNSSEC activo</td><td><code>1 semana</code></td>
+      <td><strong>No</strong> — TTLs mayores se recortan en silencio</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="cuando-no">Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Tus destinos son recursos AWS: el ALIAS te da apex, queries gratis y health checking
+    en un solo registro.</li>
+    <li>Quieres el DNS en el mismo <code>terraform apply</code> que el CDN y el
+    certificado. La validación de ACM se automatiza sola.</li>
+    <li>Necesitas nombres privados dentro de una VPC sin montar un servidor DNS.</li>
+    <li>Necesitas failover, weighted o latency con health checks gestionados.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Ya tienes el dominio y el DNS funcionando fuera y nada te apunta a AWS: 0,50 USD/mes
+    por reencuadrar algo que ya funciona no compra nada.</li>
+    <li>Quieres un balanceador. El DNS reparte con minutos de latencia y sin control sobre
+    las cachés.</li>
+    <li>Quieres «resolver nombres entre VPCs» y te ofrecen resolver endpoints: entre VPCs de
+    AWS basta con asociar la zona privada, gratis.</li>
+    <li>Necesitas registrar un dominio premium o un TLD que Route 53 no lista.</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><a href="./aws-elb.html">ELB</a></td>
+      <td>El ELB reparte <strong>conexiones</strong> en milisegundos y saca a un target de
+      rotación en segundos. Route 53 reparte <strong>respuestas</strong> y depende de
+      cachés que no controla</td>
+      <td>Siempre que el reparto sea dentro de una región. Route 53 solo entra cuando hay
+      varias regiones o varios proveedores</td></tr>
+    <tr><td>CloudFront</td>
+      <td>CloudFront acerca el <em>contenido</em>; Route 53 acerca la <em>respuesta
+      DNS</em>. Son complementarios, no alternativos: el proyecto 05 usa los dos</td>
+      <td>Nunca eliges «uno u otro». Si ya tienes CloudFront, la latency routing de Route 53
+      normalmente sobra: el CDN ya resuelve la cercanía</td></tr>
+    <tr><td>Registrador externo (Namecheap, Cloudflare, GoDaddy…)</td>
+      <td>El registrador solo es dueño del contrato del nombre. El DNS lo puede servir
+      cualquiera</td>
+      <td>Si el dominio ya está fuera: <strong>quédate donde está</strong> y cambia solo los
+      NS. Transferir cuesta un año extra de registro y bloquea el dominio 60 días</td></tr>
+    <tr><td>Zona privada vs <code>/etc/hosts</code></td>
+      <td>La zona privada es una fuente única para toda la VPC, versionada en Terraform. El
+      <code>/etc/hosts</code> es un fichero por máquina que nadie recuerda haber tocado</td>
+      <td>Un solo host, una sola vez, y sabes que lo vas a borrar hoy. Con dos máquinas ya
+      pierde: 0,50 USD/mes es más barato que un nombre desincronizado</td></tr>
+    <tr><td>Resolver endpoints vs asociar la zona</td>
+      <td>Los endpoints existen para que el DNS <strong>cruce la frontera</strong> entre AWS
+      y una red que no es AWS (VPN, Direct Connect, on-prem). Dentro de AWS no hacen falta</td>
+      <td>Solo con red híbrida real. Si no tienes on-prem, un endpoint es tirar 182 USD/mes.
+      <strong>Este curso no los necesita en ningún proyecto</strong></td></tr>
+    <tr><td>AWS Cloud Map</td>
+      <td>Cloud Map es el antiguo «Route 53 auto naming», ya separado: service discovery
+      para microservicios, con registro y baja automáticos</td>
+      <td>Cuando los nombres los crean y destruyen los propios servicios al arrancar, no tú
+      en el <code>apply</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="novedades">Novedades 2024-2026</h2>
+<p>Casi todo lo que encontrarás en internet sobre Route 53 es de 2018 y sigue siendo
+correcto: el DNS cambia poco. Estas cuatro cosas son nuevas y los tutoriales antiguos no las
+mencionan.</p>
+<ul>
+  <li><strong>Accelerated recovery</strong> (noviembre 2025) — replica la hosted zone
+  pública de <code>us-east-1</code> a <code>us-west-2</code> y hace failover automático del
+  <em>control plane</em>, con un RTO de 60 minutos. Sirve para poder <em>cambiar</em>
+  registros durante una caída de <code>us-east-1</code>; el data plane nunca dependió de
+  ello. <strong>Sin coste adicional</strong>, solo para zonas públicas, y ya está en el
+  provider como <code>enable_accelerated_recovery</code> en <code>aws_route53_zone</code>
+  (<a href="https://aws.amazon.com/blogs/aws/amazon-route-53-launches-accelerated-recovery-for-managing-public-dns-records/">anuncio</a>).</li>
+  <li><strong>Route 53 Global Resolver</strong> (preview re:Invent 2025, GA marzo 2026) —
+  un resolver recursivo anycast alcanzable desde <em>cualquier sitio</em>, con filtrado de
+  dominios maliciosos y logging centralizado. Es lo que usarías para dar DNS corporativo a
+  portátiles fuera de la oficina. Precio: <strong>5,00 USD/h</strong> las dos primeras
+  regiones. Nada que ver con este curso, pero explica por qué la doc de «Resolver» de golpe
+  habla de tres cosas distintas.</li>
+  <li><strong>Route 53 Profiles</strong> — empaqueta zonas privadas, reglas de resolver y
+  rule groups de DNS Firewall en un objeto reutilizable que se comparte por AWS
+  Organizations. En 2025-2026 ganó configuraciones de query logging y permisos IAM
+  granulares. 0,75 USD/h por cuenta: es una herramienta de gobierno multi-cuenta.</li>
+  <li><strong>DNS Firewall Advanced</strong> — detección de DNS tunneling y de dominios
+  generados por algoritmo (DGA), incluidos los de diccionario desde finales de 2025.
+  0,16 USD/h por rule group y VPC.</li>
+</ul>
+<p class="small">Lo que <strong>no</strong> ha cambiado y verás repetido como si fuera
+noticia: el ALIAS existe desde 2011, las routing policies desde 2013-2014, y el precio de
+la hosted zone lleva en 0,50 USD/mes más de una década. Si un artículo te promete que
+«ahora Route 53 soporta CNAME en el apex», está describiendo el ALIAS de siempre.</p>
+
+<h2 id="terraform">En Terraform</h2>
+<p>El montaje completo del proyecto 05: zona, certificado ACM validado por DNS y el ALIAS
+al apex. Fíjate en que el registro de CloudFront <strong>no lleva <code>ttl</code> ni
+<code>records</code></strong>: eso es lo que lo convierte en ALIAS.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">zona + validación ACM + ALIAS al apex</span></div>
+<pre><code>resource "aws_route53_zone" "main" {
+  name = "midominio.com"
+
+  lifecycle {
+    prevent_destroy = true   # recrearla cambia los NS y rompe la delegación
+  }
+}
+
+# ACM te da los registros de validación; los creamos en la zona
+resource "aws_route53_record" "cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cdn.domain_validation_options :
+    dvo.domain_name =&gt; {
+      name  = dvo.resource_record_name
+      type  = dvo.resource_record_type
+      value = dvo.resource_record_value
+    }
+  }
+
+  zone_id         = aws_route53_zone.main.zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.value]
+  ttl             = 60
+  allow_overwrite = true    # el mismo valor puede repetirse entre SANs
+}
+
+# El registro que sirve el sitio: ALIAS de tipo A en el apex
+resource "aws_route53_record" "apex" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "midominio.com"
+  type    = "A"
+  # sin ttl y sin records: es lo que lo hace ALIAS
+
+  alias {
+    name                   = aws_cloudfront_distribution.web.domain_name
+    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+    evaluate_target_health = false
+  }
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong>Recrear la zona cambia los name servers</strong> y deja el dominio apuntando
+    a los viejos. Es la trampa cara de este servicio: ver el <a href="#tipos">recuadro de
+    arriba</a>. <code>prevent_destroy</code> no es paranoia aquí.</li>
+    <li><strong>El dominio no se destruye con <code>terraform destroy</code>.</strong> Y hay
+    dos recursos distintos que la gente confunde:
+      <ul>
+        <li><code>aws_route53domains_registered_domain</code> — <em>adopta</em> un dominio
+        que ya existe. «<em>terraform destroy does not delete the domain but does remove the
+        resource from Terraform state.</em>» Es el que quieres el 99 % de las veces.</li>
+        <li><code>aws_route53domains_domain</code> — este sí <strong>registra, renueva y
+        da de baja</strong>. Un <code>destroy</code> intenta borrar el registro de verdad
+        — y <strong>la cuota anual no se reembolsa</strong> («<em>AWS does not refund the
+        registration fee</em>»). Además borra la hosted zone pública que creó.</li>
+      </ul>
+      El dominio es un contrato anual, no una pieza de infraestructura efímera: aunque
+      «destruyas» todo, sigues siendo su titular hasta la fecha de expiración.</li>
+    <li><strong>Registrar un dominio crea una hosted zone que se cobra aparte.</strong> Y si
+    la borras y creas otra —muy típico al pasar a Terraform la zona que AWS te hizo sola—
+    la nueva trae NS distintos: hay que <strong>actualizar los name servers en el
+    registro</strong> (el bloque <code>name_server</code> del recurso de dominio). Si no lo
+    haces, dominio y zona quedan mirando cada uno para su lado.</li>
+    <li><strong><code>auto_renew</code> y <code>transfer_lock</code> vienen a
+    <code>true</code></strong> por defecto en el provider, que es lo correcto: sin auto-renew
+    pierdes el dominio en silencio, y sin transfer lock un secuestro de dominio es un correo.
+    El WHOIS privacy (<code>admin_privacy</code>, <code>registrant_privacy</code>,
+    <code>tech_privacy</code>) también es <code>true</code> por defecto y gratis en
+    <code>.com</code>. Los tres <em>privacy</em> deben valer lo mismo o la API falla.</li>
+    <li><strong>Un ALIAS no admite <code>ttl</code>.</strong> Ponerlo es un error de plan.
+    Y <code>alias</code> y <code>records</code> son mutuamente excluyentes: exactamente uno
+    de los dos.</li>
+    <li><strong>El <code>zone_id</code> del ALIAS no es el de tu zona</strong>, es el del
+    recurso destino. Tómalo siempre del atributo
+    (<code>aws_cloudfront_distribution.web.hosted_zone_id</code>,
+    <code>aws_lb.x.zone_id</code>); no lo copies a mano.</li>
+    <li><strong><code>allow_overwrite = false</code> por defecto</strong>: si el registro ya
+    existe fuera del state, el <code>apply</code> falla. Es el comportamiento correcto para
+    registros de servicio, y por eso los <code>NS</code>/<code>SOA</code> que nacen con la
+    zona necesitan <code>allow_overwrite = true</code> si quieres gestionarlos.</li>
+    <li><strong>Zonas privadas: no mezcles</strong> los bloques <code>vpc</code> en línea con
+    recursos <code>aws_route53_zone_association</code> para la misma zona — diff perpetuo. Y
+    una zona privada necesita <strong>al menos una VPC asociada en todo momento</strong>.</li>
+    <li><strong>Toda política de routing exige <code>set_identifier</code></strong> único, y
+    todos los registros que compiten deben compartir nombre y tipo. Olvidarlo da un error
+    poco descriptivo de la API.</li>
+    <li><strong>El certificado de CloudFront tiene que estar en <code>us-east-1</code></strong>
+    — es de ACM, no de Route 53, pero es el error que más veces rompe este proyecto. De ahí
+    el <code>provider</code> con <code>alias</code> del roadmap.</li>
+  </ul>
+</div>
+
+<h2 id="comprueba">Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · elegir entre variantes</p>
+  <p class="quiz-q">Proyecto 05: quieres que <code>midominio.com</code> (el apex, sin
+  <code>www</code>) sirva tu distribución de CloudFront. ¿Qué registro creas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El RFC prohíbe un CNAME en el apex porque ahí ya viven NS y SOA, y un CNAME no admite hermanos. El ALIAS es la extensión de AWS que resuelve exactamente ese caso: responde como un registro A normal, sigue los cambios de IP de CloudFront solo, y sus queries no se facturan.">ALIAS tipo A: el apex no admite registros CNAME</button></li>
+    <li><button data-correct="false" data-why="No se puede: el apex de una zona ya tiene NS y SOA, y el DNS no deja convivir un CNAME con otros registros. Aunque se pudiera, cada consulta se cobraría —el ALIAS a recursos AWS es gratis— y tendrías que gestionar el TTL tú.">CNAME hacia el dominio de la distribución, TTL bajo</button></li>
+    <li><button data-correct="false" data-why="CloudFront no tiene IPs fijas: son cientos de edge servers y cambian sin avisar. Cablear una IP en un registro A funciona la primera tarde y se rompe sin que nadie toque nada. El ALIAS existe para que Route 53 resuelva ese destino en cada consulta.">Un registro A con las IP fijas de CloudFront</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · coste</p>
+  <p class="quiz-q">Creas una hosted zone pública, no le pones ningún registro y no la
+  consulta nadie en todo el mes. ¿Qué te factura Route 53?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La hosted zone se cobra por existir, no por usarse: 0,50 USD/mes las primeras 25 zonas, y además no se prorratea (se cobra al crearla y el día 1 de cada mes). Es la primera pieza del curso que no es cero en reposo. La única excepción: borrarla dentro de las 12 horas de creada sale gratis.">0,50 USD por la zona, aunque nadie consulte nada</button></li>
+    <li><button data-correct="false" data-why="Las queries sí son por uso (0,40 USD/millón), pero la zona en sí tiene una cuota mensual fija. Confundir las dos líneas es lo que hace que alguien deje veinte zonas de pruebas creadas y luego no entienda los 10 USD del mes siguiente.">0,00 USD porque el servicio solo cobra por consulta</button></li>
+    <li><button data-correct="false" data-why="Route 53 no factura hosted zones por hora: la unidad es el mes y ni siquiera se prorratea. El cobro por hora en esta ficha existe, pero está en otro sitio: los resolver endpoints, a 0,125 USD por ENI y hora.">0,05 USD por hora mientras la zona esté creada</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · elegir la política</p>
+  <p class="quiz-q">Tienes la misma app desplegada y activa en Irlanda y en Virginia.
+  Quieres que cada usuario caiga en la más rápida <em>y</em> que una región caída salga de
+  la rotación sola. ¿Qué configuras?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Latency routing elige por latencia medida hasta el resolver, no por distancia en el mapa, y con health checks (o evaluate_target_health en un ALIAS) Route 53 deja de devolver la región enferma. Es activo-activo: las dos regiones sirven a la vez.">Latency con health checks y evaluate target health</button></li>
+    <li><button data-correct="false" data-why="Failover es activo-pasivo: el secundario no recibe nada mientras el primario esté sano. Cumple la parte de sacar la región caída, pero desperdicia la región de reserva y no acerca a nadie a nada. Sirve para un plan B, no para dos regiones activas.">Failover primario y secundario, con un health check</button></li>
+    <li><button data-correct="false" data-why="Weighted reparte por proporción fija, ignorando por completo dónde está el usuario: un australiano acabaría en Irlanda la mitad de las veces. Además, sin health checks asociados un peso 50 sigue devolviendo la región caída.">Weighted al cincuenta por ciento en ambas regiones</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · la trampa que cuesta un día</p>
+  <p class="quiz-q">El dominio está registrado en Route 53 y apunta a los NS de tu hosted
+  zone. Refactorizando, Terraform planea destruir y volver a crear
+  <code>aws_route53_zone.main</code>. ¿Qué pasa si le dejas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Los cuatro name servers se asignan por hosted zone y no se pueden cambiar después. La zona nueva sale con otro delegation set, el registro del dominio sigue apuntando a los viejos, y el dominio deja de resolver hasta que actualices los NS y expire el TTL del TLD (hasta 48 h). El antídoto es prevent_destroy, o un reusable delegation set si de verdad necesitas recrear.">Route 53 asigna name servers nuevos y la delegación rompe</button></li>
+    <li><button data-correct="false" data-why="No hay memoria del nombre de dominio: el delegation set se adjudica al crear la zona, y una zona nueva es una zona nueva aunque se llame igual. Solo un reusable delegation set, pasado en delegation_set_id al crearla, conserva los mismos cuatro servidores.">Route 53 conserva los name servers y todo sigue igual</button></li>
+    <li><button data-correct="false" data-why="Terraform no conoce esa relación: el dominio y la zona son recursos independientes, y en muchos montajes el dominio ni siquiera está en el state. Nada te va a frenar, y por eso el prevent_destroy en la zona no es opcional.">Terraform bloquea el destroy porque el dominio depende de ella</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-s3.html">Ficha: Amazon S3</a>
+    <a href="./aws-elb.html">Ficha: Elastic Load Balancing</a>
+    <a href="./aws-vpc.html">Ficha: Amazon VPC</a>
+    <a href="./aws-cloudwatch.html">Ficha: Amazon CloudWatch</a>
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html">Route 53
+    Developer Guide</a>, y dentro de ella las tres páginas que más rinden: <a
+    href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-choosing-alias-non-alias.html">ALIAS
+    vs CNAME</a>, <a
+    href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html">choosing
+    a routing policy</a> y <a
+    href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-determining-health-of-endpoints.html">cómo
+    se decide que un health check está sano</a>. Los precios, siempre en <a
+    href="https://aws.amazon.com/route53/pricing/">la página de precios</a> — cambian.
+    <br><br>
+    <b>Pregúntame.</b> Si en el proyecto 05 no te resuelve el dominio, la pregunta que
+    quieres hacerme es «¿los NS de mi registrador coinciden con los de mi hosted zone?».
+    Nueve de cada diez veces, ahí está el problema.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

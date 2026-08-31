@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon VPC</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon VPC</h1>
+  <p class="deck">Una red virtual privada dentro de una región de AWS: tú eliges el rango de
+  IPs, la troceas en subnets y decides, ruta a ruta, quién puede hablar con internet y quién
+  no. El servicio en sí no cuesta nada. Lo que cuesta —y mucho— son las tres o cuatro cajas
+  que se enchufan a él para que el tráfico salga: NAT Gateway, IPs públicas, endpoints de
+  interfaz. Esta ficha va sobre todo de esas cajas.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Red</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional — las subnets, zonales</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost free">gratis</span> la red · <span class="tag-cost hour">por hora</span> NAT, IPv4 pública, endpoints de interfaz</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>La VPC vacía sí (0,00 USD). Con NAT Gateway <strong>no</strong>: 0,045 USD/h aunque no pase un solo byte</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_vpc</code>, <code>aws_subnet</code>, <code>aws_route_table</code>, <code>aws_nat_gateway</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../ROADMAP.md">proyecto 04</a> (3 capas) y <a href="../ROADMAP.md">06</a> (EKS)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Una <strong>VPC</strong> es una red IP virtual que existe dentro de <em>una</em> región de
+AWS. Le das un bloque CIDR (por ejemplo <code>10.0.0.0/16</code>), lo partes en
+<strong>subnets</strong> —cada una anclada a una <em>sola</em> zona de disponibilidad— y a
+partir de ahí todo lo que lanzas dentro (una instancia EC2, una tarea de Fargate, una base
+RDS, una Lambda con configuración de VPC) recibe una IP privada de ese rango y solo puede
+hablar con lo que sus <strong>route tables</strong>, sus <strong>security groups</strong> y
+sus <strong>NACLs</strong> le permitan.</p>
+<p>El problema que resuelve no es «tener servidores»: es <strong>aislamiento por defecto</strong>.
+Sin VPC, todo lo que despliegas está en internet o no está. Con VPC, la posición por
+defecto de una base de datos es «inalcanzable desde fuera y punto», y hay que trabajar
+activamente para exponerla.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Un edificio de oficinas. La <strong>VPC</strong> es el edificio con su rango de números
+  de despacho; las <strong>subnets</strong> son las plantas (y cada planta está físicamente
+  en un edificio distinto del campus — eso es la AZ); la <strong>route table</strong> es el
+  plano de pasillos que dice a qué salida lleva cada planta; el <strong>Internet Gateway</strong>
+  es la puerta a la calle; el <strong>NAT Gateway</strong> es el conserje que sale a la calle
+  a hacerte los recados pero no deja entrar a nadie. Donde se rompe la analogía: en un
+  edificio real, quitar el plano de pasillos no impide caminar. Aquí <strong>la ruta
+  <em>es</em> el pasillo</strong>: si no está escrita en la route table, el paquete
+  simplemente no existe. No hay «puerta cerrada», hay «no hay puerta».</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Que la base de datos no tenga IP pública</h3><p>El caso número
+  uno. RDS en una subnet sin ninguna ruta a internet: aunque alguien robe la contraseña, no
+  hay camino desde fuera. Es el «aislada» del proyecto 04.</p></div>
+  <div class="ref-card"><h3>Poner un ALB delante de algo privado</h3><p>El load balancer vive
+  en subnets públicas y recibe de internet; las tareas de la app viven en subnets privadas y
+  <em>solo</em> aceptan tráfico del security group del ALB. Nadie llega a la app directamente.</p></div>
+  <div class="ref-card"><h3>Hablar con un servicio de AWS sin pasar por internet</h3><p>Un
+  VPC endpoint hace que las llamadas a S3, Secrets Manager o Bedrock salgan por la red de AWS
+  con IP privada. Ni NAT, ni IGW, ni tráfico que salga a la vista.</p></div>
+  <div class="ref-card"><h3>Conectar con la red de la empresa</h3><p>Site-to-Site VPN o
+  Direct Connect terminan en la VPC. El requisito duro que aparece siempre: los rangos CIDR
+  <strong>no pueden solaparse</strong> con los de casa.</p></div>
+  <div class="ref-card"><h3>Cumplir un requisito de auditoría</h3><p>«Demuéstrame que ese
+  servicio no puede alcanzar internet.» Con VPC la respuesta es un diagrama de route tables,
+  no una promesa. Los flow logs añaden la evidencia.</p></div>
+</div>
+
+<h2>El modelo mental: CIDR y planificación</h2>
+<p>Antes de escribir un solo recurso hay que decidir el rango, y esa decisión es
+<strong>casi irreversible</strong>: «no puedes aumentar ni disminuir el tamaño de un bloque
+CIDR existente». Se pueden <em>añadir</em> bloques secundarios (hasta 5 por defecto,
+ampliable a 50), pero el primario se queda como está para siempre.</p>
+<ul>
+  <li><strong>Usa RFC 1918.</strong> AWS lo recomienda explícitamente:
+  <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, <code>192.168.0.0/16</code>. Se puede
+  usar un rango públicamente enrutable, pero entonces esas IPs de internet dejan de ser
+  alcanzables desde tu VPC.</li>
+  <li><strong>Tamaños.</strong> La VPC va de <code>/16</code> (65 536 direcciones) a
+  <code>/28</code> (16). La subnet, exactamente el mismo rango: de <code>/28</code> a
+  <code>/16</code>.</li>
+  <li><strong>Prohibidos:</strong> <code>0.0.0.0/8</code>, <code>127.0.0.0/8</code>,
+  <code>169.254.0.0/16</code> (link-local) y <code>224.0.0.0/4</code> (multicast). Y un aviso
+  poco conocido: <strong>evita <code>172.17.0.0/16</code></strong>, porque servicios como
+  AWS Cloud9 y SageMaker AI lo usan internamente y te chocará.</li>
+  <li><strong>No solapes.</strong> Ni entre subnets de la misma VPC, ni con la red de casa,
+  ni con una VPC con la que vayas a hacer peering — el peering con CIDRs solapados
+  simplemente no se puede establecer. Por eso el «me pongo <code>10.0.0.0/16</code> en todo»
+  es la decisión que más tarde duele.</li>
+</ul>
+<div class="callout trap">
+  <span class="callout-title">Las cinco IPs que AWS se queda en cada subnet</span>
+  <p>«Las primeras cuatro direcciones IP y la última de cada bloque CIDR de subnet no están
+  disponibles para tu uso.» En un <code>10.0.0.0/24</code>:</p>
+  <ul>
+    <li><code>10.0.0.0</code> — dirección de red.</li>
+    <li><code>10.0.0.1</code> — el router de la VPC.</li>
+    <li><code>10.0.0.2</code> — <strong>el resolver DNS</strong> (base del rango + 2). Es
+    «el .2» del que habla todo el mundo.</li>
+    <li><code>10.0.0.3</code> — reservada por AWS para uso futuro.</li>
+    <li><code>10.0.0.255</code> — broadcast (que además no se soporta en una VPC).</li>
+  </ul>
+  <p>Consecuencia práctica: una subnet <code>/28</code> tiene 16 direcciones y solo
+  <strong>11 usables</strong>. Ese es el suelo real, y por eso los <code>/28</code> se
+  quedan cortos en cuanto metes un par de ENIs de endpoints.</p>
+</div>
+<p class="small">Regla de bolsillo que funciona: VPC <code>/16</code>, subnets
+<code>/20</code> (4 091 IPs usables cada una, el mismo tamaño que usa AWS en la VPC por
+defecto). Sobra sitio, sobran subnets, y nunca tendrás que hacer aritmética bajo presión.</p>
+
+<h2>Los tipos que existen</h2>
+
+<h3>Pública, privada, aislada: no es un atributo, es una ruta</h3>
+<p>Esta es <em>la</em> confusión del servicio, y la que más se pregunta en entrevistas. En la
+API de AWS <strong>no existe ningún campo «public = true»</strong> en una subnet. Lo único
+que distingue los tres tipos es <strong>a dónde apunta la ruta <code>0.0.0.0/0</code> de la
+route table asociada</strong>:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Su ruta <code>0.0.0.0/0</code> apunta a…</th><th>Qué puede hacer</th><th>Quién vive ahí en el proyecto 04</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Pública</strong></td>
+      <td>un <strong>Internet Gateway</strong></td>
+      <td>Sale a internet <em>y</em> puede recibir de internet, si el recurso tiene IP pública</td>
+      <td>El ALB. Y el NAT Gateway (zonal), que necesita vivir aquí.</td></tr>
+    <tr><td><strong>Privada</strong></td>
+      <td>un <strong>NAT Gateway</strong></td>
+      <td>Sale a internet; nadie de internet puede iniciar una conexión hacia dentro</td>
+      <td>Las tareas de la app.</td></tr>
+    <tr><td><strong>Aislada</strong></td>
+      <td><strong>nada</strong> — no hay ruta por defecto</td>
+      <td>Solo habla dentro de la VPC (ruta <code>local</code>) y con VPC endpoints</td>
+      <td>RDS.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Para saber de qué tipo es una subnet, <strong>no mires la subnet: mira su route
+  table</strong>. Y al revés — si mueves la asociación de la route table, una subnet «privada»
+  se vuelve pública sin tocar la subnet. En Terraform eso significa que el recurso que
+  decide la seguridad de tu red es <code>aws_route_table_association</code>, no
+  <code>aws_subnet</code>.</p>
+</div>
+<p><strong><code>map_public_ip_on_launch</code></strong> es lo más cerca que hay de un
+«atributo público», y confunde precisamente porque no hace lo que parece: solo decide si a
+las instancias lanzadas ahí <em>se les asigna una IPv4 pública automáticamente</em>. Por
+defecto es <code>false</code> en el provider. Los dos errores simétricos:</p>
+<ul>
+  <li><strong><code>true</code> sin ruta a IGW</strong>: pagas 0,005 USD/h por cada IP
+  pública que no sirve absolutamente para nada.</li>
+  <li><strong><code>false</code> con ruta a IGW</strong>: la subnet <em>es</em> pública, pero
+  tu instancia no tiene con qué salir. Síntoma clásico: «el ALB va y la instancia no baja
+  paquetes».</li>
+</ul>
+
+<h3>Las subnets son ZONALES — de ahí sale el <code>for_each</code> del proyecto 04</h3>
+<p>Una VPC es regional; una subnet vive en <strong>una sola AZ</strong> y no se mueve. Como
+la alta disponibilidad en AWS se compra poniendo copias en AZs distintas, el número de
+subnets de tu arquitectura es <em>capas × AZs</em>: tres capas por dos AZs son seis subnets;
+por tres AZs, nueve. Escribirlas a mano es el camino recto a copiar y pegar mal, y por eso
+el proyecto 04 usa <code>for_each</code> sobre las AZs. Ojo con el detalle que estropea el
+state: <strong>indexa por el nombre de la AZ, no por el índice de una lista</strong>. Si usas
+<code>count</code> sobre <code>data.aws_availability_zones</code> y AWS reordena o retira una
+zona, se recrean subnets que no habías tocado. Está desarrollado en
+<a href="./terraform-refactor.html">la ficha de refactor</a>.</p>
+
+<h3>Route tables, IGW y egress-only IGW</h3>
+<ul>
+  <li><strong>Route table.</strong> Toda VPC nace con una <em>main route table</em> que
+  contiene una única ruta: <code>&lt;cidr-de-la-vpc&gt; → local</code>. Esa ruta
+  <strong>no se puede borrar</strong>: es lo que hace que todo dentro de la VPC se hable. Una
+  subnet se asocia a <em>una</em> route table (si no la asocias explícitamente, hereda la
+  main — y ahí está el accidente clásico: la main lleva ruta a IGW y tu subnet «privada» no
+  lo era).</li>
+  <li><strong>Ruta más específica gana</strong> (longest prefix match). Por eso un gateway
+  endpoint funciona aunque haya una <code>0.0.0.0/0</code> hacia el IGW: la prefix list de S3
+  es más específica.</li>
+  <li><strong>Internet Gateway.</strong> Horizontal, redundante y gratis; no es un cuello de
+  botella y no cobra por hora. Uno por VPC como máximo. Solo hace algo si (a) hay ruta hacia
+  él y (b) el recurso tiene IP pública o Elastic IP.</li>
+  <li><strong>Egress-only Internet Gateway.</strong> El equivalente IPv6 del NAT: deja salir,
+  no deja entrar. La diferencia enorme es que <strong>no cobra por hora ni por GB</strong> —
+  con IPv6 no hace falta traducir direcciones, así que no hay una caja cara en medio. Es el
+  argumento económico serio a favor de IPv6 en AWS.</li>
+</ul>
+
+<h2>Cómo funciona por dentro</h2>
+
+<h3>NAT Gateway a fondo — el recurso que cronometra este curso</h3>
+<p>Un NAT Gateway traduce las IPs privadas de tus subnets a una IP pública única, de forma
+que las conexiones <strong>siempre se inician desde dentro</strong>. Los números que
+importan, del manual:</p>
+<ul>
+  <li><strong>5 Gbps de ancho de banda, escalando solo hasta 100 Gbps.</strong> Y un millón
+  de paquetes por segundo, escalando hasta diez millones. Pasado eso, descarta.</li>
+  <li><strong>55 000 conexiones simultáneas por cada destino único</strong> (IP + puerto +
+  protocolo). Se amplía asociando hasta 8 IPv4 al gateway. Es el límite que revienta en
+  cargas que martillean un mismo endpoint externo.</li>
+  <li><strong>No se le puede asociar un security group.</strong> Nunca. Se controla con la
+  NACL de su subnet, y ojo: usa los puertos 1024–65535.</li>
+  <li>Solo TCP, UDP e ICMP. Nada de otros protocolos.</li>
+  <li>Es <strong>zonal</strong>: «cada NAT gateway se crea en una zona de disponibilidad
+  concreta». Si comparten uno y esa AZ cae, las demás AZs pierden internet.</li>
+</ul>
+
+<p><strong>La decisión de arquitectura clásica: uno por AZ o uno compartido.</strong></p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Un NAT por AZ</th><th>Un NAT compartido</th></tr></thead>
+  <tbody>
+    <tr><td>Coste horario (2 AZ)</td><td><code>0,090 USD/h</code> ≈ 65 USD/mes</td><td><code>0,045 USD/h</code> ≈ 32 USD/mes</td></tr>
+    <tr><td>IPv4 públicas</td><td>2 × 0,005 USD/h</td><td>1 × 0,005 USD/h</td></tr>
+    <tr><td>Si cae una AZ</td><td>Las demás siguen saliendo</td><td><strong>Todas</strong> pierden internet</td></tr>
+    <tr><td>Transferencia entre AZ</td><td>Ninguna: cada subnet usa el suyo</td><td>+0,01 USD/GB en cada sentido para el tráfico que cruza de zona</td></tr>
+    <tr><td>Cuándo</td><td>Producción. Es lo que AWS recomienda literalmente.</td><td>Dev, laboratorio, y este curso: mitad de precio y el fallo de AZ da igual porque destruyes en dos horas.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Para un laboratorio hay una tercera vía honesta: la <strong>NAT instance</strong> — una
+EC2 <code>t4g.nano</code> haciendo de router con <code>source_dest_check = false</code>.
+Cuesta del orden de 0,004 USD/h más la IPv4, o sea <strong>unas diez veces menos</strong>
+que el NAT Gateway. A cambio: la mantienes tú, es un punto único de fallo, no escala sola y
+en Terraform es bastante más código. AWS la considera un patrón heredado. Está bien para
+ahorrar en un laboratorio de fin de semana; decir en una entrevista que la usarías en
+producción es una respuesta mala.</p>
+
+<div class="callout aws">
+  <span class="callout-title">Novedad 2025: NAT Gateway en modo <em>regional</em></span>
+  <p>En noviembre de 2025 AWS añadió el <strong>modo de disponibilidad regional</strong>: un
+  único NAT Gateway que «se expande y se contrae automáticamente por las AZs según la
+  presencia de tus cargas». Quita tres dolores de golpe: <strong>no necesita subnet
+  pública</strong> (es un recurso independiente con su propia route table), un solo ID de NAT
+  vale como destino en todas las route tables, y admite hasta <strong>32 IPs por AZ</strong>
+  en vez de 8. Dos avisos: puede tardar <strong>hasta 60 minutos</strong> en expandirse a una
+  AZ nueva, y <strong>no soporta NAT privado</strong> — para eso siguen los zonales. En
+  Terraform es <code>availability_mode = "regional"</code> con <code>vpc_id</code> en lugar de
+  <code>subnet_id</code>. Casi todo lo que hay escrito en internet sobre NAT en AWS es
+  anterior a esto y asume «uno por AZ, en subnet pública, siempre».</p>
+</div>
+
+<h3>Security Groups vs NACLs</h3>
+<p>Dos cortafuegos a dos alturas distintas. La tabla oficial, completa:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Característica</th><th>Security group</th><th>Network ACL</th></tr></thead>
+  <tbody>
+    <tr><td>Nivel de operación</td><td>Nivel de instancia (en realidad, de <strong>ENI</strong>)</td><td>Nivel de <strong>subnet</strong></td></tr>
+    <tr><td>Alcance</td><td>Todo lo asociado a ese security group</td><td>Todo lo que hay en las subnets asociadas</td></tr>
+    <tr><td>Tipo de regla</td><td><strong>Solo <code>allow</code></strong></td><td><code>allow</code> <strong>y</strong> <code>deny</code></td></tr>
+    <tr><td>Evaluación</td><td>Evalúa <strong>todas</strong> las reglas antes de decidir</td><td>Evalúa <strong>en orden ascendente</strong> hasta la primera que case</td></tr>
+    <tr><td>Tráfico de vuelta</td><td>Permitido automáticamente (<strong>stateful</strong>)</td><td>Hay que permitirlo explícitamente (<strong>stateless</strong>)</td></tr>
+    <tr><td>Referencia a otro grupo</td><td><strong>Sí</strong> — el superpoder</td><td>No: solo CIDRs</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>El patrón que hay que saber decir de memoria:</strong> el SG del ALB permite
+<code>443</code> desde <code>0.0.0.0/0</code>; el SG de la app permite el puerto de la app
+<em>desde el security group del ALB</em>, no desde un rango de IPs; el SG de RDS permite
+<code>5432</code> <em>desde el security group de la app</em>. Se llama <strong>referencia
+entre security groups</strong> y es lo que hace que la política sobreviva a que las tareas
+cambien de IP cincuenta veces al día. Escribir <code>10.0.1.0/24</code> ahí es la versión
+frágil de lo mismo.</p>
+<div class="callout trap">
+  <span class="callout-title">La trampa stateless</span>
+  <p>Casi todo el dolor con NACLs viene de la misma línea: <em>«Must be explicitly allowed
+  (stateless)»</em>. Si tu NACL permite entrante <code>443</code> pero no saliente
+  <code>1024–65535</code>, la petición <strong>llega</strong> y la respuesta
+  <strong>se muere</strong>. El síntoma es un timeout, no un rechazo, y por eso cuesta horas
+  encontrarlo. La recomendación de la propia AWS es clara: <em>«usa security groups como
+  mecanismo principal»</em> y las NACLs solo como guardarraíl de subnet o para denegar un
+  subconjunto concreto —lo único que un SG no sabe hacer, porque no tiene <code>deny</code>—.
+  <strong>En el proyecto 04, no toques las NACLs.</strong> La por defecto permite todo, y eso
+  está bien.</p>
+</div>
+<p><strong>El default security group y su trampa en Terraform.</strong> Toda VPC nace con un
+security group llamado <code>default</code> que permite <em>todo</em> el tráfico entre
+recursos que lo lleven puesto, y salida a todas partes. No se puede borrar. Los dos
+problemas: (1) cualquier recurso al que no le asignes SG explícitamente lo hereda, y ahí
+tienes una base de datos hablando con medio mundo sin que aparezca en tu código; (2)
+<code>aws_default_security_group</code> es un recurso raro — «Terraform no <em>crea</em> este
+recurso, intenta <em>adoptarlo</em>», y al adoptarlo «elimina inmediatamente todas las reglas
+de entrada y de salida». Es exactamente lo que quieres (dejarlo vacío y que nadie lo use por
+accidente), pero conviene saber que un <code>apply</code> aparentemente inocente vacía un
+grupo que puede estar en uso.</p>
+
+<h3>DNS dentro de la VPC</h3>
+<ul>
+  <li><strong><code>enableDnsSupport</code></strong> — «determina si la VPC soporta
+  resolución DNS a través del servidor DNS proporcionado por Amazon». Por defecto
+  <strong><code>true</code></strong>.</li>
+  <li><strong><code>enableDnsHostnames</code></strong> — «determina si la VPC soporta asignar
+  nombres DNS públicos a instancias con IP pública». Por defecto
+  <strong><code>false</code></strong>, <em>salvo</em> en la VPC por defecto. Y en el provider
+  de Terraform también es <code>false</code>: es el argumento que la gente olvida.</li>
+  <li>El resolver está en <strong>la base del rango primario + 2</strong>
+  (<code>10.0.0.2</code>), y también en <code>169.254.169.253</code> y
+  <code>fd00:ec2::253</code>. <strong>No se puede filtrar con NACLs ni con security
+  groups</strong>: las reglas no le aplican.</li>
+  <li><strong>El requisito que rompe los VPC endpoints</strong>: «si usas nombres DNS
+  personalizados definidos en una private hosted zone de Route 53, o usas DNS privado con
+  interface VPC endpoints, <strong>debes poner los dos atributos a <code>true</code></strong>».
+  Si tu endpoint de Secrets Manager no intercepta las llamadas, mira esto antes que nada.</li>
+  <li>Límite duro: <strong>1024 paquetes por segundo por ENI</strong> hacia direcciones
+  link-local, agregando DNS + IMDS + NTP. No es ajustable.</li>
+  <li>Las <strong>private hosted zones</strong> de Route 53 son el mecanismo para tener
+  <code>db.interno.example.com</code> resolviendo a una IP privada solo dentro de tus VPCs.
+  Se desarrollará en la ficha de Route 53, todavía pendiente.</li>
+</ul>
+
+<h3>VPC endpoints: la sección que decide tu factura</h3>
+<p>Un VPC endpoint hace que las llamadas a la API de un servicio de AWS salgan por la red de
+AWS en lugar de por internet. Hay <strong>dos familias</strong>, y confundirlas es un error
+de cientos de dólares:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Gateway endpoint</th><th>Interface endpoint (PrivateLink)</th></tr></thead>
+  <tbody>
+    <tr><td>Servicios</td><td><strong>Solo S3 y DynamoDB</strong></td><td>Casi todos: Secrets Manager, SSM, ECR, KMS, SQS, Bedrock, CloudWatch Logs…</td></tr>
+    <tr><td>Cómo funciona</td><td>Una <strong>ruta</strong> hacia una prefix list en tu route table</td><td>Una <strong>ENI con IP privada</strong> en cada subnet que elijas</td></tr>
+    <tr><td>Coste</td><td><strong>0,00 USD.</strong> «There is no additional charge for using gateway endpoints»</td><td><code>0,01 USD/h</code> por endpoint <strong>y por AZ</strong> + <code>0,01 USD/GB</code></td></tr>
+    <tr><td>Alcanzable desde</td><td>Solo desde la propia VPC (no desde on-premises ni desde una VPC con peering)</td><td>Desde la VPC, y también desde on-premises vía VPN/Direct Connect</td></tr>
+    <tr><td>DNS</td><td>No cambia nada: sigues llamando al endpoint público</td><td><code>private_dns_enabled</code> hace que el nombre público resuelva a la IP privada</td></tr>
+    <tr><td>Política de endpoint</td><td>Sí</td><td>Sí (en la mayoría)</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout win">
+  <span class="callout-title">La respuesta correcta a «mi app privada solo llama a S3»</span>
+  <p><strong>Gateway endpoint. Cuesta cero.</strong> No un NAT Gateway de 32 USD/mes, y
+  tampoco un interface endpoint de S3 (que existe, y sí cobra). Es el consejo que da la
+  propia documentación de NAT: «si la mayor parte del tráfico va a servicios que soportan
+  endpoints, crea un endpoint». Un gateway endpoint de S3 más otro de DynamoDB son
+  <strong>0,00 USD/h y 0,00 USD/GB</strong>, para siempre, y se pueden dejar desplegados sin
+  mirar el reloj.</p>
+</div>
+<p><strong>Los números de la decisión NAT vs endpoints</strong> (us-east-1, verificados el
+2026-08-30). El cargo de interfaz es <em>por endpoint y por AZ</em>, así que se multiplica
+por el número de zonas — es el detalle que sorprende:</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Montaje</th><th>USD/h</th><th>USD/mes (720 h)</th><th>Datos</th></tr></thead>
+  <tbody>
+    <tr><td>Gateway endpoint S3 + DynamoDB (cualquier nº de AZs)</td><td><strong>0,000</strong></td><td><strong>0,00</strong></td><td>0,00 USD/GB</td></tr>
+    <tr><td>1 interface endpoint × 1 AZ</td><td>0,010</td><td>7,20</td><td>0,01 USD/GB</td></tr>
+    <tr><td>1 interface endpoint × 3 AZ</td><td>0,030</td><td>21,60</td><td>0,01 USD/GB</td></tr>
+    <tr><td>3 interface endpoints × 3 AZ</td><td>0,090</td><td>64,80</td><td>0,01 USD/GB</td></tr>
+    <tr><td>1 NAT Gateway compartido</td><td>0,045 + 0,005 (IPv4)</td><td>36,00</td><td><strong>0,045 USD/GB</strong></td></tr>
+    <tr><td>1 NAT Gateway por AZ × 3 AZ</td><td>0,135 + 0,015 (IPv4)</td><td>108,00</td><td>0,045 USD/GB</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>El criterio, con el punto de cruce puesto:</strong></p>
+<ul>
+  <li>¿Solo S3 y/o DynamoDB? → <strong>gateway endpoints</strong>. Cero. No hay debate.</li>
+  <li>¿Uno o dos servicios más (Secrets Manager, SSM…) y nada de internet abierto? →
+  <strong>interface endpoints</strong>. Con 3 AZs, dos endpoints ya cuestan más que un NAT
+  compartido (0,06 &gt; 0,045) pero menos que tres NATs (0,06 &lt; 0,135) — y a cambio no
+  tienes salida a internet en absoluto, que suele ser el objetivo.</li>
+  <li>¿A partir de <strong>cinco</strong> interface endpoints con 3 AZs? → sale más barato el
+  NAT por AZ (0,15 &gt; 0,135), y encima con salida general. Ahí se cruza la línea.</li>
+  <li>¿Necesitas <code>apt install</code>, un webhook externo, la API de Stripe? → <strong>no
+  hay endpoint que valga</strong>: NAT o nada.</li>
+  <li>Y el argumento que no es de coste: los endpoints te dejan escribir «esta subnet
+  <em>no puede</em> alcanzar internet» como un hecho de la route table, no como una promesa.
+  Un NAT abre la puerta a todo.</li>
+</ul>
+
+<h3>Flow logs, peering, Transit Gateway, VPC por defecto</h3>
+<ul>
+  <li><strong>Flow logs.</strong> Registran metadatos de las conexiones (origen, destino,
+  puertos, bytes, <code>ACCEPT</code>/<code>REJECT</code>) — <em>no</em> el contenido de los
+  paquetes. Se activan a nivel de VPC, subnet o ENI, y van a CloudWatch Logs, S3 o Firehose.
+  «Se recogen fuera del camino del tráfico», así que no añaden latencia. Lo que sí añaden es
+  factura: se cobran como <em>vended logs</em>, <strong>0,50 USD/GB los primeros 10 TB</strong>,
+  más lo que cueste el destino. Actívalos para depurar un security group y apágalos después;
+  déjalos en una VPC ruidosa y aparecen en la factura. Ver <a href="./aws-cloudwatch.html">la
+  ficha de CloudWatch</a>.</li>
+  <li><strong>VPC peering.</strong> Une dos VPCs uno a uno. El recurso es gratis; los datos
+  cuestan 0,01 USD/GB en cada sentido. <strong>No es transitivo</strong>: si A ve a B y B ve
+  a C, A no ve a C. Con tres VPCs son 3 peerings; con diez, 45. Ese crecimiento cuadrático es
+  exactamente el motivo de existir del <strong>Transit Gateway</strong>, que es un hub
+  central — a 0,05 USD/h por cada attachment más 0,02 USD/GB. Criterio corto: hasta unas
+  tres o cuatro VPCs, peering; a partir de ahí, Transit Gateway. En este curso no hace falta
+  ninguno de los dos.</li>
+  <li><strong>La VPC por defecto.</strong> AWS te crea una en cada región:
+  <code>172.31.0.0/16</code>, una subnet <code>/20</code> <em>pública</em> en cada AZ, un
+  Internet Gateway y una ruta <code>0.0.0.0/0</code> hacia él en la main route table. Existe
+  para que puedas lanzar una EC2 en dos minutos sin saber nada de redes. Por qué <strong>no
+  usarla</strong> en un proyecto: todas sus subnets son públicas, su CIDR es el mismo en todas
+  las cuentas del planeta (garantía de solape el día que hagas peering), y —lo que más
+  importa aquí— <strong>no está en tu código</strong>: nada de lo que hace aparece en tu
+  Terraform. Detalle jugoso: AWS crea esos recursos por ti y «las políticas de IAM no aplican
+  a estas acciones», así que un <code>Deny</code> sobre <code>CreateInternetGateway</code> no
+  impide que la VPC por defecto tenga uno.</li>
+  <li><strong>Reachability Analyzer.</strong> Le das origen y destino y te dice si hay camino
+  y, si no lo hay, <em>qué componente lo bloquea</em>. Vale su peso en oro cuando llevas
+  cuarenta minutos con un timeout. <strong>0,10 USD por análisis</strong> — barato, pero es
+  por uso, no gratis. Su pariente Network Access Analyzer cuesta 0,002 USD por ENI analizada.</li>
+  <li><strong>VPC Block Public Access.</strong> Un interruptor a nivel de cuenta y región que
+  bloquea todo el tráfico hacia y desde los internet gateways, con exclusiones explícitas
+  (50 por defecto). Es el cinturón de seguridad para «que nadie de mi organización exponga
+  nada por accidente».</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en la región <code>us-east-1</code>,
+contra la <a href="https://aws.amazon.com/vpc/pricing/">página de precios de VPC</a>, la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/current/us-east-1/index.json">Price
+List API de AmazonVPC</a> (publicación 2026-07-24) y
+<a href="https://aws.amazon.com/privatelink/pricing/">AWS PrivateLink pricing</a>. Cámbialos
+si han pasado meses.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>VPC, subnets, route tables, IGW, egress-only IGW, security groups, NACLs, DHCP options</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td><strong>NAT Gateway</strong> — existencia</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,045 USD/h</code> ≈ 32,40 USD/mes</td></tr>
+    <tr><td><strong>NAT Gateway</strong> — datos</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,045 USD/GB</code> procesado</td></tr>
+    <tr><td><strong>IPv4 pública</strong> (en uso o inactiva)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,005 USD/h</code> ≈ 3,60 USD/mes por IP</td></tr>
+    <tr><td>Gateway endpoint (S3, DynamoDB)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Interface endpoint (PrivateLink)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,01 USD/h</code> por endpoint <strong>y por AZ</strong></td></tr>
+    <tr><td>Interface endpoint — datos</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,01 USD/GB</code> (hasta 1 PB; luego 0,006 y 0,004)</td></tr>
+    <tr><td>Gateway Load Balancer endpoint</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,01 USD/h</code> + <code>0,0035 USD/GB</code></td></tr>
+    <tr><td>Transferencia entre AZ de la misma región</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,01 USD/GB</code> <strong>en cada dirección</strong></td></tr>
+    <tr><td>VPC peering (el recurso)</td><td><span class="tag-cost free">gratis</span></td><td>Solo pagas los datos, 0,01 USD/GB por sentido</td></tr>
+    <tr><td>Transit Gateway</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,05 USD/h</code> por attachment + <code>0,02 USD/GB</code></td></tr>
+    <tr><td>Flow logs (vended logs)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD/GB</code> los primeros 10 TB + el destino</td></tr>
+    <tr><td>Reachability Analyzer</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD</code> por análisis</td></tr>
+    <tr><td>Network Access Analyzer</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,002 USD</code> por ENI analizada</td></tr>
+    <tr><td>Site-to-Site VPN</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,05 USD/h</code> por conexión</td></tr>
+    <tr><td>Client VPN</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,10 USD/h</code> por asociación + <code>0,05 USD/h</code> por conexión</td></tr>
+    <tr><td>Traffic Mirroring</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,015 USD</code> por sesión-hora</td></tr>
+    <tr><td>IPAM (tier avanzado)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,00027 USD</code> por IP activa y hora</td></tr>
+    <tr><td>VPC Encryption Controls</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,15 USD/h</code> por VPC no vacía</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p><strong>Uno: la IPv4 pública ya no es gratis.</strong> Desde el <strong>1 de febrero de
+  2024</strong> AWS cobra «0,005 USD por IP y hora para todas las direcciones IPv4 públicas,
+  estén asociadas a un servicio o no». Miles de tutoriales —y bastantes cursos que siguen
+  vivos— dicen que una Elastic IP <em>adjunta</em> es gratis y que solo se paga la que está
+  suelta. <strong>Eso era verdad hasta enero de 2024 y hoy es falso.</strong> Cada IP del
+  montaje cuenta: la del NAT, la de cada nodo del ALB, la de cada instancia pública. Son
+  3,60 USD/mes por cabeza.</p>
+  <p><strong>Dos: el NAT Gateway cobra dos veces.</strong> 0,045 USD/h por existir <em>más</em>
+  0,045 USD/GB por cada gigabyte que atraviesa. El GB por NAT cuesta lo mismo que una hora
+  de NAT, y ese cargo se aplica también al tráfico hacia S3 — que podría ser gratis con un
+  gateway endpoint. Es la factura sorpresa más repetida de AWS.</p>
+  <p><strong>Tres: el endpoint de interfaz se multiplica por AZs.</strong> «Se te factura cada
+  hora que tu VPC endpoint permanece provisionado <em>en cada zona de disponibilidad</em>».
+  Un endpoint en 3 AZs no cuesta 7,20 USD/mes: cuesta 21,60. Y suele haber más de un
+  endpoint.</p>
+</div>
+
+<div class="callout cost">
+  <span class="callout-title">El cronómetro del proyecto 04</span>
+  <p>El ROADMAP marca ~0,15 USD/h. Sale exactamente de aquí, con dos AZs:</p>
+  <div class="code">
+    <div class="code-label"><span>cuenta de la sesión</span><span class="tag">us-east-1</span></div>
+<pre><code>2 × NAT Gateway          2 × 0,045 = 0,090 USD/h
+2 × IPv4 del NAT         2 × 0,005 = 0,010 USD/h
+1 × ALB                            = 0,023 USD/h
+2 × IPv4 del ALB         2 × 0,005 = 0,010 USD/h
+1 × RDS db.t4g.micro               = 0,017 USD/h
+                                     ─────────────
+                                     0,150 USD/h   →  3,60 USD/día
+                                                      108 USD/mes</code></pre>
+  </div>
+  <p>Con un techo de <strong>30 USD/mes</strong>, esto son <strong>200 horas de vida
+  total</strong> para todo el proyecto — y eso gastando el presupuesto entero en él. Sesión
+  de dos horas: 0,30 USD. Fin de semana olvidado: 7,20 USD. Un mes olvidado: se come el
+  presupuesto de tres meses y medio. <strong>Mira el reloj antes del <code>apply</code> y
+  pon la alarma en el móvil.</strong> Bajar a un solo NAT compartido deja la cuenta en unos
+  0,10 USD/h; usar egress-only IGW con IPv6 la bajaría más, pero eso es otro proyecto.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/vpc/latest/userguide/amazon-vpc-limits.html">Amazon
+VPC quotas</a> y <a href="https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-limits-endpoints.html">AWS
+PrivateLink quotas</a>, consultadas el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>VPCs por región</td><td><strong>5</strong></td><td>Sí — y sube el de IGW en la misma cantidad</td></tr>
+    <tr><td>Subnets por VPC</td><td>200</td><td>Sí</td></tr>
+    <tr><td>Tamaño del CIDR (VPC y subnet)</td><td><code>/16</code> … <code>/28</code></td><td><strong>No</strong> — y no se puede redimensionar</td></tr>
+    <tr><td>Bloques CIDR IPv4 por VPC</td><td>5</td><td>Sí, hasta 50</td></tr>
+    <tr><td>IPs usables por subnet</td><td>Tamaño <strong>− 5</strong></td><td><strong>No</strong></td></tr>
+    <tr><td>Internet gateways por VPC</td><td><strong>1</strong></td><td>No — uno adjunto a la vez</td></tr>
+    <tr><td>NAT gateways por AZ</td><td>5</td><td>Sí</td></tr>
+    <tr><td>Elastic IPs por región</td><td><strong>5</strong></td><td>Sí — se choca antes de lo que parece</td></tr>
+    <tr><td>Route tables por VPC / rutas por route table</td><td>200 / 500</td><td>Sí (rutas, hasta 1 000)</td></tr>
+    <tr><td>Reglas por security group</td><td><strong>60</strong></td><td>Sí — cuenta aparte entrada/salida e IPv4/IPv6</td></tr>
+    <tr><td>Security groups por ENI</td><td><strong>5</strong></td><td>Sí, hasta 16 — pero SGs/ENI × reglas/SG ≤ 1 000</td></tr>
+    <tr><td>Security groups por región</td><td>2 500</td><td>Sí</td></tr>
+    <tr><td>Reglas por NACL</td><td><strong>20</strong></td><td>Sí, hasta 40 por sentido (y avisan del impacto en rendimiento)</td></tr>
+    <tr><td>Interface + GWLB endpoints por VPC</td><td>50</td><td>Sí</td></tr>
+    <tr><td>Gateway endpoints por región</td><td>20</td><td>Sí (hasta 255 por VPC)</td></tr>
+    <tr><td>Tamaño de una política de endpoint</td><td>20 480 caracteres</td><td><strong>No</strong></td></tr>
+    <tr><td>ENIs por región (por AZ)</td><td>5 000</td><td>Sí</td></tr>
+    <tr><td>Conexiones simultáneas del NAT por destino único</td><td><strong>55 000</strong></td><td>No directamente — se amplía con más IPs (8 zonal, 32 regional)</td></tr>
+    <tr><td>Ancho de banda de un NAT Gateway</td><td>5 Gbps → 100 Gbps</td><td>Automático</td></tr>
+    <tr><td>Consultas link-local por ENI (DNS + IMDS + NTP)</td><td>1 024 paquetes/s</td><td><strong>No</strong></td></tr>
+    <tr><td>Network Address Usage por VPC</td><td>64 000</td><td>Sí, hasta 256 000</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Necesitas una VPC si</h3>
+    <ul>
+      <li>Corres algo que <strong>no es serverless gestionado</strong>: EC2, ECS/Fargate, EKS.</li>
+      <li>Tienes una base de datos que no debe tener endpoint público: RDS, ElastiCache, OpenSearch.</li>
+      <li>Te conectas a la red corporativa por VPN o Direct Connect.</li>
+      <li>Un requisito de cumplimiento exige demostrar el aislamiento de red.</li>
+      <li>Necesitas IPs fijas de salida para el <em>allowlist</em> de un tercero.</li>
+    </ul>
+  </div>
+  <div class="no"><h3>No necesitas VPC si</h3>
+    <ul>
+      <li>Todo lo tuyo es <strong>serverless público gestionado</strong>: Lambda, API Gateway, S3, DynamoDB, SQS, SNS, EventBridge.</li>
+      <li>Tu Lambda solo habla con APIs de AWS y con internet.</li>
+      <li>Estás metiendo la Lambda en una VPC «por seguridad», sin nada privado que alcanzar.</li>
+      <li>El único motivo es «es lo que se hace»: pagarás un NAT de 32 USD/mes por nada.</li>
+    </ul>
+  </div>
+</div>
+<div class="callout win">
+  <span class="callout-title">Los proyectos 01, 02 y 03 de este curso viven sin VPC</span>
+  <p>Y hay que decirlo con estas palabras: <strong>serverless público gestionado</strong>.
+  Una Lambda que lee de DynamoDB y escribe en S3 detrás de un API Gateway no necesita —ni
+  quiere— una VPC. Corre en una red que gestiona AWS, tiene salida a internet, no cobra nada
+  por estar parada, y el aislamiento lo dan <strong>IAM y las políticas de recurso</strong>,
+  no las rutas. Meterla en una VPC no la hace más segura: la hace más cara (NAT o endpoints),
+  más lenta de desplegar (la ENI tarda) y más frágil. La VPC aparece en el proyecto 04 porque
+  ahí entra <strong>RDS</strong>, que no tiene otra forma de existir. <strong>La VPC no es una
+  medida de seguridad que se añade: es una consecuencia de correr cosas que viven en una
+  red.</strong></p>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td>Security group como «cortafuegos de red»</td><td>El SG filtra por ENI y no sabe decir <code>deny</code>; la NACL filtra por subnet y sí</td><td>Necesitas bloquear una IP concreta para toda una subnet</td></tr>
+    <tr><td>NAT Gateway vs Internet Gateway</td><td>El IGW es bidireccional y gratis; el NAT es solo de salida y cobra por hora y por GB</td><td>El recurso debe recibir conexiones de internet: IGW + IP pública</td></tr>
+    <tr><td>VPC endpoint vs NAT Gateway</td><td>El endpoint da acceso a <em>un servicio</em>; el NAT da acceso a <em>todo internet</em></td><td>Necesitas descargar paquetes o llamar a APIs de terceros</td></tr>
+    <tr><td>Peering vs Transit Gateway</td><td>El peering es punto a punto y no transitivo; el TGW es un hub y cobra por attachment</td><td>Pasas de tres o cuatro VPCs: TGW</td></tr>
+    <tr><td>AWS PrivateLink vs VPN</td><td>PrivateLink expone <em>un servicio</em>; la VPN une <em>dos redes</em></td><td>Necesitas alcanzar muchos hosts de la otra punta: VPN/DX</td></tr>
+    <tr><td>VPC vs cuenta separada</td><td>La VPC aísla <em>red</em>; la cuenta aísla <em>permisos, cuotas y factura</em></td><td>El aislamiento que quieres es de blast radius: cuenta aparte</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Los patrones</h2>
+
+<h3>Las 3 capas del proyecto 04</h3>
+<figure>
+<svg viewBox="0 0 640 380" role="img" aria-label="Diagrama de la arquitectura de tres capas: internet entra por el Internet Gateway a las subnets públicas donde vive el ALB y el NAT Gateway; el ALB reparte a las subnets privadas donde corre la app; la app llega a RDS en las subnets aisladas y a S3 por un gateway endpoint gratis." style="font-family:var(--sans);font-size:11px">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-soft)"/>
+    </marker>
+  </defs>
+  <rect x="8" y="34" width="624" height="338" rx="8" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+  <text x="18" y="52" fill="var(--ink-faint)">VPC 10.0.0.0/16 · región us-east-1</text>
+
+  <text x="20" y="20" fill="var(--ink-soft)">internet</text>
+  <line x1="70" y1="16" x2="150" y2="16" stroke="var(--ink-soft)" marker-end="url(#a)"/>
+  <rect x="152" y="4" width="120" height="24" rx="4" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="212" y="20" text-anchor="middle" fill="var(--ink)">Internet Gateway</text>
+  <line x1="212" y1="28" x2="212" y2="64" stroke="var(--ink-soft)" marker-end="url(#a)"/>
+
+  <rect x="24" y="66" width="592" height="76" rx="6" fill="var(--bg-sunk)" stroke="var(--rule)"/>
+  <text x="34" y="82" fill="var(--ink-faint)">PÚBLICA · 0.0.0.0/0 → IGW · una por AZ</text>
+  <rect x="140" y="90" width="140" height="40" rx="4" fill="var(--ok-bg)" stroke="var(--ok)"/>
+  <text x="210" y="107" text-anchor="middle" fill="var(--ink)">ALB</text>
+  <text x="210" y="121" text-anchor="middle" fill="var(--ink-faint)">IPv4 pública ×2</text>
+  <rect x="330" y="90" width="150" height="40" rx="4" fill="var(--danger-bg)" stroke="var(--danger)"/>
+  <text x="405" y="107" text-anchor="middle" fill="var(--ink)">NAT Gateway ×2</text>
+  <text x="405" y="121" text-anchor="middle" fill="var(--ink-faint)">0,045 USD/h cada uno</text>
+
+  <line x1="210" y1="130" x2="210" y2="168" stroke="var(--ink-soft)" marker-end="url(#a)"/>
+  <text x="218" y="152" fill="var(--ink-faint)">SG del ALB → SG de la app</text>
+  <line x1="405" y1="168" x2="405" y2="132" stroke="var(--ink-soft)" marker-end="url(#a)"/>
+
+  <rect x="24" y="170" width="592" height="76" rx="6" fill="var(--bg-sunk)" stroke="var(--rule)"/>
+  <text x="34" y="186" fill="var(--ink-faint)">PRIVADA · 0.0.0.0/0 → NAT · una por AZ</text>
+  <rect x="140" y="194" width="230" height="40" rx="4" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="255" y="218" text-anchor="middle" fill="var(--ink)">la app (ECS / EC2)</text>
+  <rect x="410" y="194" width="180" height="40" rx="4" fill="var(--ok-bg)" stroke="var(--ok)"/>
+  <text x="500" y="211" text-anchor="middle" fill="var(--ink)">gateway endpoint S3</text>
+  <text x="500" y="225" text-anchor="middle" fill="var(--ink-faint)">0,00 USD/h · 0,00 USD/GB</text>
+  <line x1="370" y1="214" x2="406" y2="214" stroke="var(--ok)" marker-end="url(#a)"/>
+
+  <line x1="255" y1="234" x2="255" y2="272" stroke="var(--ink-soft)" marker-end="url(#a)"/>
+  <text x="263" y="256" fill="var(--ink-faint)">SG de la app → SG de RDS · 5432</text>
+
+  <rect x="24" y="274" width="592" height="76" rx="6" fill="var(--bg-sunk)" stroke="var(--rule)"/>
+  <text x="34" y="290" fill="var(--ink-faint)">AISLADA · sin ruta 0.0.0.0/0 · una por AZ</text>
+  <rect x="140" y="298" width="230" height="40" rx="4" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="255" y="322" text-anchor="middle" fill="var(--ink)">RDS (sin IP pública)</text>
+  <text x="410" y="317" fill="var(--ink-faint)">no hay camino desde internet:</text>
+  <text x="410" y="331" fill="var(--ink-faint)">no existe la ruta, no está cerrada</text>
+</svg>
+<figcaption>Nueve subnets si son tres AZs, seis si son dos. Lo único que separa las tres
+capas es la ruta <code>0.0.0.0/0</code> de su route table. Todo lo que cobra por hora está
+en la fila de arriba.</figcaption>
+</figure>
+
+<h3>Lambda en VPC sin NAT: el montaje que casi nadie escribe</h3>
+<p>Una Lambda que necesita leer de una RDS privada <em>y</em> escribir en S3. La respuesta
+que da internet es «mete la Lambda en la subnet privada y pon un NAT». La respuesta correcta
+casi siempre es:</p>
+<ul>
+  <li>Lambda en las <strong>subnets privadas</strong>, sin ruta a NAT ninguna.</li>
+  <li><strong>Gateway endpoint de S3</strong> en la route table de esas subnets — 0,00 USD.</li>
+  <li>Interface endpoints solo para lo que de verdad haga falta (Secrets Manager para la
+  contraseña de la RDS, por ejemplo) — 0,01 USD/h por AZ.</li>
+  <li>El SG de la Lambda como <em>origen</em> permitido en el SG de la RDS.</li>
+</ul>
+<p>Resultado: cero salida a internet, cero NAT, y la factura de red baja de 32 USD/mes a
+7 USD o a cero. Los detalles de qué le pasa a la Lambda al entrar en la VPC —las Hyperplane
+ENI, los permisos <code>ec2:*NetworkInterface</code>, el estado <code>Pending</code> del
+despliegue, y la ENI que se recupera a los 14 días sin invocar— están en
+<a href="./aws-lambda.html#lambda-en-vpc">la ficha de Lambda</a> y no se repiten aquí. La
+frase que resume las dos fichas: <strong>si tu Lambda no necesita hablar con nada privado,
+no la metas en una VPC; y si la metes, casi nunca necesita un NAT.</strong></p>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el esqueleto de las tres capas</span></div>
+<pre><code>data "aws_region" "actual" {}
+
+data "aws_availability_zones" "disponibles" {
+  state = "available"
+}
+
+locals {
+  # indexa por NOMBRE de AZ, nunca por posición: la posición se mueve
+  azs = toset(slice(data.aws_availability_zones.disponibles.names, 0, 2))
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true   # es el default, pero se escribe para que se vea
+  enable_dns_hostnames = true   # el default es FALSE: sin esto no hay DNS privado de endpoints
+  tags = { Name = "three-tier" }
+}
+
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_subnet" "publica" {
+  for_each                = local.azs
+  vpc_id                  = aws_vpc.main.id
+  availability_zone       = each.key
+  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 4, index(tolist(local.azs), each.key))
+  map_public_ip_on_launch = true
+}
+
+resource "aws_route_table" "publica" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id   # &lt;- esto, y solo esto, la hace pública
+  }
+}
+
+resource "aws_route_table_association" "publica" {
+  for_each       = aws_subnet.publica
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.publica.id
+}
+
+# --- lo que cobra por hora: NAT + su Elastic IP, uno por AZ ---
+resource "aws_eip" "nat" {
+  for_each = local.azs
+  domain   = "vpc"
+}
+
+resource "aws_nat_gateway" "nat" {
+  for_each      = local.azs
+  allocation_id = aws_eip.nat[each.key].id
+  subnet_id     = aws_subnet.publica[each.key].id   # el NAT vive en la PÚBLICA
+  depends_on    = [aws_internet_gateway.igw]        # obligatorio: si no, falla el apply
+}
+
+# --- el endpoint gratis: S3 sin pasar por el NAT ---
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${data.aws_region.actual.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [for rt in aws_route_table.privada : rt.id]
+}
+
+# --- el patrón SG → SG ---
+resource "aws_security_group" "app" {
+  name   = "app"
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "app_desde_alb" {
+  security_group_id            = aws_security_group.app.id
+  referenced_security_group_id = aws_security_group.alb.id   # no un CIDR
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, por orden de dolor</span>
+  <ul>
+    <li><strong>El NAT Gateway necesita <code>depends_on = [aws_internet_gateway.igw]</code>.</strong>
+    Terraform no ve esa dependencia (no hay referencia entre los recursos) y AWS falla la
+    creación si el IGW aún no está adjunto. Es el error número uno del proyecto 04.</li>
+    <li><strong>Reglas en línea vs recursos de regla: no los mezcles.</strong> El provider
+    lo dice en mayúsculas: usar <code>ingress</code>/<code>egress</code> dentro de
+    <code>aws_security_group</code> junto a <code>aws_vpc_security_group_ingress_rule</code>
+    «puede causar conflictos, diferencias perpetuas y reglas sobrescritas». La práctica
+    actual recomendada son los recursos <code>aws_vpc_security_group_*_rule</code>, uno por
+    CIDR. Y <code>aws_security_group_rule</code> (sin el <code>vpc_</code>) es la generación
+    anterior: la mitad de los ejemplos de internet lo usan.</li>
+    <li><strong>Terraform borra la regla de salida por defecto.</strong> AWS crea todo
+    security group nuevo con un <code>ALLOW ALL</code> saliente; «Terraform eliminará esta
+    regla por defecto» y hay que reescribirla si la quieres. Síntoma: la app no puede llamar
+    a nada y el security group parece vacío pero correcto.</li>
+    <li><strong>Cambiar <code>name</code> o <code>description</code> de un security group
+    fuerza recrearlo</strong> — y el destroy falla si hay algo asociado. Se arregla con
+    <code>lifecycle { create_before_destroy = true }</code> y <code>name_prefix</code>.</li>
+    <li><strong><code>aws_default_security_group</code> adopta, no crea.</strong> Al aplicarlo
+    «elimina inmediatamente todas las reglas de entrada y de salida» del grupo por defecto.
+    Es lo que quieres para dejarlo inservible a propósito, pero no lo apliques a ciegas en
+    una cuenta con cosas dentro. Mismo aviso para <code>aws_default_route_table</code>,
+    <code>aws_default_network_acl</code> y <code>aws_default_vpc</code>.</li>
+    <li><strong>El <code>destroy</code> se atasca por dependencias que no escribiste tú.</strong>
+    ENIs de Lambda que tardan hasta 20 minutos, security groups que otro servicio dejó
+    asociados, endpoints que crea GuardDuty solo (el provider ya los limpia si están
+    etiquetados <code>GuardDutyManaged=true</code>). Si el destroy cuelga, mira ENIs
+    huérfanas antes de dar por perdida la VPC.</li>
+    <li><strong>Un <code>terraform destroy</code> incompleto deja Elastic IPs sueltas</strong>,
+    y desde 2024 una EIP suelta cobra igual que una en uso: 0,005 USD/h. Compruébalo al
+    cerrar la sesión.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · coste y criterio</p>
+  <p class="quiz-q">Tu app corre en una subnet privada del proyecto 04 y lo único que llama
+  desde ahí es la API de S3, en la misma región. ¿Qué le pones para que funcione?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Gateway endpoint: «there is no additional charge for using gateway endpoints». Solo existe para S3 y DynamoDB, se declara como una ruta hacia una prefix list, y con él la subnet sigue sin tener ninguna salida a internet. Cero por hora, cero por GB, y se puede dejar desplegado sin mirar el reloj.">Gateway endpoint de S3: cero dólares al mes</button></li>
+    <li><button data-correct="false" data-why="Funciona, pero es la respuesta cara: 0,045 USD/h por existir más 0,045 USD/GB por cada gigabyte hacia S3, cuando ese mismo tráfico por un gateway endpoint es gratis. Además abre la subnet a todo internet, que era justo lo que querías evitar.">NAT Gateway compartido: unos treinta dólares al mes</button></li>
+    <li><button data-correct="false" data-why="S3 tiene interface endpoint, sí, pero cobra 0,01 USD/h por AZ más 0,01 USD/GB, y no aporta nada aquí: su ventaja es ser alcanzable desde on-premises o desde otra VPC. Dentro de la propia VPC, el gateway hace lo mismo por cero.">Interface endpoint de S3: siete dólares al mes</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · el modelo</p>
+  <p class="quiz-q">Abres la consola y quieres saber si una subnet es privada. ¿Qué es lo que
+  realmente la hace privada?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="No existe ningún atributo «private» en una subnet: lo único que la define es a dónde apunta la ruta por defecto de la route table asociada — IGW (pública), NAT (privada) o ninguna (aislada). Por eso el recurso que decide la seguridad de tu red es aws_route_table_association.">Su route table redirige 0.0.0.0/0 hacia el NAT Gateway asociado</button></li>
+    <li><button data-correct="false" data-why="Ese atributo solo decide si las instancias lanzadas ahí reciben IPv4 pública automáticamente. Una subnet con map_public_ip_on_launch a false pero con ruta al IGW sigue siendo pública: basta asignar una Elastic IP a mano para salir y entrar.">Su atributo map_public_ip_on_launch está puesto a false en el recurso</button></li>
+    <li><button data-correct="false" data-why="El security group filtra por ENI y es independiente del enrutado; puedes tener un SG cerradísimo en una subnet con ruta al IGW, y sigue siendo una subnet pública. Además un SG solo tiene reglas allow: no sabe denegar nada explícitamente.">Su security group deniega todo el tráfico entrante desde internet</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · el cronómetro</p>
+  <p class="quiz-q">Aplicas el proyecto 04 completo en dos AZs: un NAT por AZ, un ALB
+  público y una RDS <code>db.t4g.micro</code>. ¿Qué te está costando por hora?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Dos NAT a 0,045 más sus dos IPv4 a 0,005, el ALB a 0,023 con dos IPv4 más, y la RDS a 0,017: suman 0,150 USD/h. Son 3,60 USD al día, y con un techo de 30 USD/mes te da unas 200 horas de vida total para todo el proyecto.">Unos 0,15 USD/h: NAT, ALB, RDS y las IPv4</button></li>
+    <li><button data-correct="false" data-why="La VPC en sí sí es gratis — subnets, route tables, IGW, security groups y NACLs no cobran nada. Pero las cajas que le enchufas para que el tráfico salga cobran por hora exista o no tráfico, y aquí hay cinco de ellas.">Unos 0,00 USD/h: la red no cobra en reposo</button></li>
+    <li><button data-correct="false" data-why="Esa sería la cuenta de un solo NAT y olvidando todo lo demás. Faltan el segundo NAT, el ALB, la RDS y —desde febrero de 2024— las cuatro direcciones IPv4 públicas a 0,005 USD/h cada una, que casi nadie suma.">Unos 0,04 USD/h: solo el NAT cobra por hora</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · elegir el cortafuegos</p>
+  <p class="quiz-q">Añades una NACL a la subnet privada que permite entrante en el puerto
+  8080. El ALB da timeout. ¿Qué ha pasado?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es la trampa clásica: «return traffic must be explicitly allowed (stateless)». La petición entra por 8080, pero la respuesta sale por un puerto efímero del rango 1024–65535 y tu NACL no lo permite. Da timeout en vez de rechazo, y por eso cuesta horas encontrarlo.">La NACL es stateless: falta la regla saliente de respuesta</button></li>
+    <li><button data-correct="false" data-why="Es al revés: el security group es stateful y permite automáticamente el tráfico de vuelta de una conexión que él mismo autorizó. La stateless es la NACL, y por eso hay que escribirle las dos direcciones a mano.">El security group es stateless y bloquea el tráfico devuelto</button></li>
+    <li><button data-correct="false" data-why="No hay tal orden entre capas distintas: la NACL filtra en la frontera de la subnet y el security group en la ENI, y ambos deben permitir el paquete. Cambiar el orden mental no arregla nada porque el problema es la regla de salida que falta.">Las NACL se evalúan después del security group del ALB</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-lambda.html#lambda-en-vpc">Lambda dentro de una VPC</a>
+    <a href="./aws-fundamentos.html">Fundamentos: los tres modelos de coste</a>
+    <a href="./aws-cloudwatch.html">Ficha: CloudWatch (flow logs)</a>
+    <a href="./aws-budgets.html">Ficha: Budgets (la alarma del NAT)</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html">Amazon VPC
+    User Guide</a> (empieza por <em>Subnets</em> y <em>Route tables</em>), la <a
+    href="https://docs.aws.amazon.com/vpc/latest/privatelink/concepts.html">AWS PrivateLink
+    Guide</a> para los endpoints, y <a href="https://aws.amazon.com/vpc/pricing/">Amazon VPC
+    Pricing</a> — vuelve a esa página antes de cada sesión larga del proyecto 04, porque los
+    precios de esta ficha llevan fecha.
+    <br><br>
+    <b>Pregúntame.</b> Dibújame tu proyecto 04 en cuatro líneas y te digo cuántas subnets
+    salen, dónde va cada NAT, y qué línea de la factura vas a ver el día 3.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

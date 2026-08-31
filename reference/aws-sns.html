@@ -20,7 +20,8 @@
     <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> sin coste en reposo</dd></div>
     <div><dt>¿Se puede dejar puesto?</dt><dd>Sí. Un topic parado cuesta 0,00 USD.</dd></div>
     <div><dt>Recursos Terraform</dt><dd><code>aws_sns_topic</code>, <code>aws_sns_topic_subscription</code>, <code>aws_sns_topic_policy</code></dd></div>
-    <div><dt>Aparece en</dt><dd>proyectos 00 y 02</dd></div>
+    <div><dt>Aparece en</dt><dd>proyecto 00 (la alarma del presupuesto, lección 02) y proyecto 02 (el aviso del pipeline, lección 14)</dd></div>
+    <div><dt>Verificado</dt><dd>2026-08-30, región <code>us-east-1</code></dd></div>
   </dl>
 </header>
 
@@ -71,24 +72,44 @@ endpoint HTTPS simultáneamente. Eso se llama <strong>fan-out</strong>.</p>
     <p>Con <em>filter policies</em>, un suscriptor recibe solo los mensajes con ciertos
     atributos. Evita tener un topic por cada variante de evento.</p>
   </div>
+  <div class="ref-card">
+    <h3>El final de un pipeline</h3>
+    <p>Tu lección 14: el procesador termina, publica «listo» y de ahí sale el correo al humano
+    <em>y</em> la copia a la cola del siguiente paso. Un solo <code>Publish</code> para las dos
+    audiencias, y añadir la tercera mañana no toca el procesador.</p>
+  </div>
 </div>
 
 <h2>Los tipos que existen</h2>
 
-<h3>Standard vs FIFO</h3>
+<h3 id="standard-vs-fifo">Standard vs FIFO</h3>
+
+<p>Un topic es Standard o FIFO y <strong>eso se decide al crearlo</strong>: no hay conversión.
+El nombre de un topic FIFO debe acabar en <code>.fifo</code>. Lo que cambia entre los dos no es
+solo el orden, sino <em>a quién puedes suscribir</em>, cuánto cuesta y qué funciones existen.</p>
 
 <div class="scroll-x">
 <table>
   <thead><tr><th></th><th>Standard</th><th>FIFO</th></tr></thead>
   <tbody>
-    <tr><td><b>Orden</b></td><td>Mejor esfuerzo, sin garantía</td><td>Estricto, garantizado</td></tr>
-    <tr><td><b>Duplicados</b></td><td>Posibles: el consumidor debe ser idempotente</td><td>Exactly-once, con deduplicación de 5 minutos</td></tr>
-    <tr><td><b>Rendimiento</b></td><td>Ilimitado</td><td><code>300 msg/s</code> o <code>10 MB/s</code> por topic</td></tr>
-    <tr><td><b>Destinos</b></td><td>Correo, SMS, HTTP/S, SQS, Lambda, push móvil, Firehose</td><td><strong>Solo colas SQS</strong></td></tr>
-    <tr><td><b>Coste de publicar</b></td><td><code>0,50 USD</code> por millón</td><td><code>0,30 USD</code> por millón + payload</td></tr>
+    <tr><td><b>Orden</b></td><td>Mejor esfuerzo, sin garantía</td><td>Estricto <em>dentro de cada</em> <code>MessageGroupId</code></td></tr>
+    <tr><td><b>Duplicados</b></td><td>Posibles: el consumidor debe ser idempotente</td><td>Deduplicación por <code>MessageDeduplicationId</code>, ventana de 5 minutos</td></tr>
+    <tr><td><b>Rendimiento</b></td><td>30 000 msg/s por cuenta y región en <code>us-east-1</code></td><td>3 000 msg/s o 20 MB/s por topic; 300 msg/s por message group en modo alto rendimiento</td></tr>
+    <tr><td><b>Destinos</b></td><td>Correo, SMS, HTTP/S, SQS, Lambda, push móvil, Firehose</td><td><strong>Solo colas SQS</strong> — FIFO <em>y también standard</em> desde septiembre de 2023</td></tr>
+    <tr><td><b>Suscripciones por topic</b></td><td><code>12 500 000</code></td><td><code>100</code></td></tr>
+    <tr><td><b>Topics por cuenta</b></td><td><code>100 000</code></td><td><code>1 000</code></td></tr>
+    <tr><td><b>Archive &amp; replay</b></td><td>No existe</td><td>Sí, hasta <strong>365 días</strong> (<code>archive_policy</code>)</td></tr>
+    <tr><td><b>Coste de publicar</b></td><td><code>0,50 USD</code> por millón</td><td><code>0,30 USD</code> por millón + <code>0,017 USD/GB</code> de payload</td></tr>
   </tbody>
 </table>
 </div>
+<p class="small">Cuotas verificadas el 2026-08-30 en
+<a href="https://docs.aws.amazon.com/general/latest/gr/sns.html">Service endpoints and quotas</a>.
+El dato de que un topic FIFO acepta también colas <em>standard</em> es de la
+<a href="https://docs.aws.amazon.com/sns/latest/dg/sns-release-notes.html">documentation
+history del 14 de septiembre de 2023</a>: mucho material anterior dice «solo FIFO→FIFO» y
+ya no es cierto. Lo que sí sigue siendo cierto es que un consumidor con cola standard
+detrás pierde la garantía de orden que pagó al elegir FIFO.</p>
 
 <div class="callout trap">
   <span class="callout-title">Un topic FIFO no puede mandarte un correo</span>
@@ -98,6 +119,41 @@ endpoint HTTPS simultáneamente. Eso se llama <strong>fan-out</strong>.</p>
   (<a href="https://docs.aws.amazon.com/sns/latest/dg/fifo-message-delivery.html">docs de SNS</a>)</p>
   <p>El motivo es coherente: esos destinos no pueden preservar el orden, así que AWS prefiere
   fallar a mentirte sobre la garantía. Si tu caso incluye un humano, es Standard.</p>
+  <p><strong>Y para llegar a una Lambda desde un topic FIFO hacen falta dos saltos</strong>:
+  suscribes una cola SQS al topic y disparas la función desde la cola. No hay suscripción
+  <code>lambda</code> directa en FIFO.</p>
+</div>
+
+<h3 id="fifo-alto-rendimiento">Alto rendimiento FIFO: <code>fifo_throughput_scope</code> (enero 2025)</h3>
+
+<p>El número que casi todo internet repite —«un topic FIFO hace 300 mensajes por segundo»—
+está obsoleto. Desde el
+<a href="https://aws.amazon.com/about-aws/whats-new/2025/01/high-throughput-mode-amazon-sns-fifo-topics">21
+de enero de 2025</a> el atributo <code>FifoThroughputScope</code> decide dos cosas a la vez, el
+techo de rendimiento <em>y</em> el alcance de la deduplicación:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>fifo_throughput_scope</code></th><th>Rendimiento</th><th>Deduplicación</th></tr></thead>
+  <tbody>
+    <tr><td><code>"Topic"</code> (por defecto)</td>
+      <td><strong>3 000 msg/s o 20 MB/s</strong> por topic, lo que se agote primero</td>
+      <td>Por <strong>topic</strong>: un id repetido en cualquier grupo se descarta</td></tr>
+    <tr><td><code>"MessageGroup"</code></td>
+      <td>El del topic Standard — hasta <strong>30 000 msg/s</strong> por cuenta en
+      <code>us-east-1</code>, con tope de 300 msg/s <em>por message group</em></td>
+      <td>Por <strong>message group</strong>: el mismo id en dos grupos distintos pasa dos veces</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Este interruptor no tiene vuelta atrás</span>
+  <p>AWS recomienda ponerlo <strong>al crear el topic</strong> porque el cambio a
+  <code>MessageGroup</code> <em>no se puede revertir</em> a <code>Topic</code>. Y el precio de
+  admisión es el mismo que en SQS: compras rendimiento pagando con una deduplicación más
+  débil. Si no tienes un problema de throughput —y en este curso no lo tienes— déjalo como
+  viene.</p>
 </div>
 
 <h3>Protocolos de suscripción</h3>
@@ -113,9 +169,13 @@ endpoint HTTPS simultáneamente. Eso se llama <strong>fan-out</strong>.</p>
     <tr><td><code>https</code></td><td>Endpoint web</td><td>Sí, automatizable</td><td>100k/mes gratis, luego 0,06 USD/100k</td></tr>
     <tr><td><code>sms</code></td><td>Teléfono</td><td>No</td><td>Varía mucho por país</td></tr>
     <tr><td><code>application</code></td><td>Push a móvil</td><td>No</td><td>1M/mes gratis, luego 0,50 USD/1M</td></tr>
+    <tr><td><code>firehose</code></td><td>Stream de Data Firehose → S3, Redshift, OpenSearch</td><td>No</td><td>0,19 USD/1M (+ lo que cobre Firehose)</td></tr>
   </tbody>
 </table>
 </div>
+<p class="small">La suscripción <code>firehose</code> es la única que necesita un rol:
+<code>subscription_role_arn</code> es obligatorio para ese protocolo. Y solo se admiten
+5 streams de Firehose por topic y propietario de suscripción.</p>
 
 <div class="callout aws">
   <span class="callout-title">El criterio de decisión</span>
@@ -141,54 +201,465 @@ endpoint HTTPS simultáneamente. Eso se llama <strong>fan-out</strong>.</p>
   diseño: es lo que impide que suscribas a un tercero sin su permiso.</li>
   <li><strong>Los permisos son de recurso, no de identidad.</strong> Para que otro servicio de
   AWS publique en tu topic, la autorización va en la política del <em>topic</em>, no en un rol.
-  Es el mismo modelo que un bucket policy de S3.</li>
+  Es la tercera casilla del mapa de IAM del curso —
+  <a href="./aws-iam.html">identidad / confianza / recurso</a> — y es «la misma clase» que
+  <code>aws_lambda_permission</code>: quien llega como <em>service principal</em>
+  (<code>budgets.amazonaws.com</code>, <code>events.amazonaws.com</code>,
+  <code>cloudwatch.amazonaws.com</code>) no asume ningún rol tuyo, así que la única forma de
+  autorizarlo es desde el lado del recurso.</li>
+  <li><strong>La entrega es por suscripción, no por topic.</strong> Cada suscripción tiene su
+  propia política de reintentos, su propia DLQ y su propio filtro. Que un suscriptor reciba el
+  mensaje no descuenta nada a los demás, y que otro lo pierda no te lo cuenta nadie. Es la misma
+  propiedad que en EventBridge, donde la unidad es la pareja regla×target.</li>
+  <li><strong>Lo que sale por el cable no es lo que publicaste.</strong> Salvo que actives
+  <em>raw message delivery</em>, SNS envuelve tu mensaje en un sobre JSON con firma, ARN del
+  topic y URL de baja. Ver <a href="#fanout">el patrón fanout</a>.</li>
+  <li><strong>Los filtros tardan hasta 15 minutos en aplicarse.</strong> La propia doc lo dice:
+  «Additions or changes to a subscription filter policy require up to 15 minutes to fully take
+  effect». Si cambias un filtro y pruebas a los treinta segundos, no estás probando lo que
+  crees.</li>
+</ul>
+
+<h2 id="fanout">El patrón fanout: SNS → N × SQS</h2>
+
+<p>Es <em>el</em> patrón de este servicio y la preparación directa de la lección 14. La idea en
+una frase: <strong>SNS aporta el reparto, SQS aporta la durabilidad</strong>. Un topic entrega
+una copia a cada cola suscrita; cada cola tiene su propio backlog, su propio ritmo de consumo,
+su propia <code>redrive_policy</code> y su propio equipo dueño. Añadir el consumidor número
+cuatro es una suscripción nueva y una cola nueva: el publicador no se entera.</p>
+
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">un Publish, tres backlogs independientes</span></div>
+<pre><code>                          ┌─▶ cola A ──▶ Lambda facturación   (su DLQ, su ritmo)
+  Publish ──▶ topic SNS ──┼─▶ cola B ──▶ Lambda almacén       (su DLQ, su ritmo)
+                          └─▶ cola C ──▶ Lambda analítica     (su DLQ, su ritmo)
+
+  Sin las colas:  Publish ──▶ topic ──▶ Lambda caída  ──▶  el mensaje SE PIERDE
+                                        (tras agotar reintentos, o al instante
+                                         si el fallo es de permisos)</code></pre>
+</div>
+
+<p><strong>Por qué no suscribir las tres Lambdas directamente al topic.</strong> Se puede, y es
+menos código. Lo que compras al meter la cola en medio:</p>
+<ul>
+  <li><strong>El mensaje espera.</strong> Un consumidor caído, saturado o desplegándose no
+  pierde nada: los mensajes se acumulan en su cola hasta 14 días.</li>
+  <li><strong>Reintentos con control tuyo.</strong> La política de reintentos de SNS no se
+  configura para SQS ni para Lambda (ver <a href="#fiabilidad">más abajo</a>). La de la cola sí:
+  <code>maxReceiveCount</code>, DLQ y <em>message move task</em> para reprocesar.</li>
+  <li><strong>Aislamiento entre consumidores.</strong> El CSV que envenena a analítica no toca
+  el backlog de facturación.</li>
+  <li><strong>Un techo de concurrencia por consumidor</strong> — el <code>maximum_concurrency</code>
+  del event source mapping — que no existe si SNS invoca la Lambda directamente.</li>
+</ul>
+<p>Todo lo que pasa <em>dentro</em> de la cola —visibility timeout, DLQ, lotes, ESM— está en la
+<a href="./aws-sqs.html">ficha de SQS</a> y no se repite aquí.</p>
+
+<h3>La política de recurso la necesita la COLA, no el topic</h3>
+
+<p>Es el error de montaje número uno del fanout, y es asimétrico: <strong>suscribir una cola a
+un topic no autoriza al topic a escribir en la cola</strong>. Hacen falta las dos piezas y viven
+en sitios distintos:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Quién actúa</th><th>Qué necesita</th><th>Dónde va</th></tr></thead>
+  <tbody>
+    <tr><td>Tú, o Budgets, o CloudWatch, publicando</td>
+      <td><code>SNS:Publish</code> sobre el ARN del topic</td>
+      <td><code>aws_sns_topic_policy</code> (o el rol, si es identidad tuya)</td></tr>
+    <tr><td>SNS entregando a la cola</td>
+      <td><code>sqs:SendMessage</code> con principal <code>sns.amazonaws.com</code> y condición
+      <code>aws:SourceArn</code> = ARN del topic</td>
+      <td><strong><code>aws_sqs_queue_policy</code></strong> — en la cola, no en el topic</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Sin la segunda, la suscripción se crea, el <code>apply</code> pasa, el
+<code>Publish</code> devuelve un <code>MessageId</code> y <strong>la cola sigue vacía</strong>.
+El detalle completo de la queue policy —y sus topes de 20 statements y 8 192 bytes— está en
+<a href="./aws-sqs.html">la ficha de SQS, sección «Quién puede escribir en la cola»</a>. Y la
+condición <code>aws:SourceArn</code> no es adorno: sin ella autorizas a <em>cualquier</em> topic
+del mundo a llenar tu cola (el <em>confused deputy</em>).</p>
+<p class="small">Dos restricciones más del fanout: la DLQ de una suscripción tiene que estar en
+<strong>la misma cuenta y región</strong> que la suscripción, y si la cola destino está cifrada
+con KMS, la clave debe ser <em>custom</em> con una política que autorice al principal de SNS —
+con <code>alias/aws/sqs</code> no funciona.</p>
+
+<h3 id="raw-message-delivery">El sobre JSON y la trampa del doble parseo</h3>
+
+<p>Por defecto, SNS <strong>no entrega tu mensaje: entrega un sobre que lo contiene</strong>. El
+mismo <code>Publish</code>, visto desde la cola, con <code>raw_message_delivery</code> apagado
+(izquierda, el default) y encendido (derecha):</p>
+
+<div class="code">
+  <div class="code-label"><span>lo que llega a la cola</span><span class="tag">json</span></div>
+<pre><code><b class="c">// raw_message_delivery = false  (POR DEFECTO)</b>
+{
+  <b class="s">"Type"</b>: <b class="s">"Notification"</b>,
+  <b class="s">"MessageId"</b>: <b class="s">"dc1e94d9-56c5-5e96-808d-cc7f68faa162"</b>,
+  <b class="s">"TopicArn"</b>: <b class="s">"arn:aws:sns:us-east-1:111122223333:pipeline-done"</b>,
+  <b class="s">"Subject"</b>: <b class="s">"Pipeline terminado"</b>,
+  <b class="s">"Message"</b>: <b class="s">"{\"fichero\":\"ventas.csv\",\"filas\":1240}"</b>,   <b class="c">&lt;-- tu JSON, COMO STRING</b>
+  <b class="s">"Timestamp"</b>: <b class="s">"2026-08-30T21:41:19.978Z"</b>,
+  <b class="s">"SignatureVersion"</b>: <b class="s">"1"</b>,
+  <b class="s">"Signature"</b>: <b class="s">"FMG5tlZhJNHLHUXvZgtZzlk24Fz..."</b>,
+  <b class="s">"SigningCertURL"</b>: <b class="s">"https://sns.us-east-1.amazonaws.com/...pem"</b>,
+  <b class="s">"UnsubscribeURL"</b>: <b class="s">"https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&amp;..."</b>
+}
+
+<b class="c">// raw_message_delivery = true</b>
+{<b class="s">"fichero"</b>:<b class="s">"ventas.csv"</b>,<b class="s">"filas"</b>:1240}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">El doble parseo: <code>JSON.parse(JSON.parse(body).Message)</code></span>
+  <p>Con el sobre puesto, el consumidor tiene que parsear <strong>dos veces</strong>: una el
+  sobre, otra el campo <code>Message</code>, que es <em>un string</em> que casualmente contiene
+  JSON. El síntoma cuando se te olvida no es una excepción clara: es
+  <code>record.fichero === undefined</code> y un rato mirando por qué el campo «no llega», o —
+  peor — un <code>typeof mensaje === "string"</code> que se cuela hasta producción.</p>
+  <p><strong>La regla operativa:</strong> si el suscriptor es una cola SQS tuya y el consumidor
+  solo necesita el cuerpo, pon <code>raw_message_delivery = true</code> y olvídate del sobre. Lo
+  que pierdes al hacerlo es real y hay que saberlo: te quedas sin <code>Subject</code>, sin
+  <code>TopicArn</code>, sin <code>MessageId</code> de SNS y sin la firma — o sea, sin poder
+  distinguir de qué topic vino un mensaje si un día suscribes dos topics a la misma cola.</p>
+  <p>Al revés, el sobre es <strong>obligatorio</strong> cuando el suscriptor es un endpoint
+  HTTP/S público que debe <em>verificar la firma</em> antes de fiarse, o cuando publicas más de
+  10 message attributes (abajo).</p>
+</div>
+
+<p>Dos detalles más de <code>raw_message_delivery</code>, verificados en la
+<a href="https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html">doc
+de raw message delivery</a>:</p>
+<ul>
+  <li><strong>Solo existe para SQS, HTTP/S y Firehose.</strong> No para <code>email</code>,
+  <code>lambda</code>, <code>sms</code> ni <code>application</code>.</li>
+  <li><strong>En HTTP/S y Firehose, activarlo tira los message attributes.</strong> «When you
+  enable raw message delivery for HTTP/S endpoints, the message body, client IP, and the
+  required headers are delivered. When you specify message attributes, it won't be sent.» En SQS
+  sí viajan, pero con el tope de 10 del punto siguiente.</li>
+  <li><strong>El límite de 10 atributos es de raw delivery, no de SNS.</strong> Con raw
+  <em>activado</em> hacia SQS, un mensaje con más de 10 message attributes
+  <strong>se descarta como error de cliente</strong> — sin excepción en el publicador. Para
+  mandar más de diez, hay que apagar raw delivery y volver al sobre.</li>
+</ul>
+
+<h2 id="filter-policies">Filter policies: filtrar sin montar un topic por variante</h2>
+
+<p>Sin filtro, un suscriptor recibe <strong>todo</strong> lo que se publica. Una
+<em>filter policy</em> es un JSON en la suscripción que describe qué mensajes quiere: las claves
+que nombra tienen que estar y valer alguno de los valores listados. Cada lista es un
+<strong>OR</strong>; claves distintas son <strong>AND</strong>; lo que la política no menciona se
+ignora. Es la misma semántica que el <code>event_pattern</code> de EventBridge.</p>
+
+<h3>Los dos ámbitos: atributos o cuerpo</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>filter_policy_scope</code></th><th>Mira…</th><th>Requisito</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><code>"MessageAttributes"</code> (por defecto)</td>
+      <td>Los <em>message attributes</em> que puso el publicador</td>
+      <td>Que el publicador se acuerde de ponerlos. Máximo 10 hacia SQS con raw delivery</td>
+      <td><span class="tag-cost free">gratis</span></td></tr>
+    <tr><td><code>"MessageBody"</code></td>
+      <td>El cuerpo del mensaje, campo a campo, con anidamiento</td>
+      <td>Que el payload sea <strong>JSON bien formado</strong>. Si no lo es, no casa nunca</td>
+      <td><span class="tag-cost usage">por uso</span> <code>0,09 USD/GB</code> escaneado</td></tr>
+  </tbody>
+</table>
+</div>
+<p>El <em>payload-based filtering</em> llegó el
+<a href="https://docs.aws.amazon.com/sns/latest/dg/sns-release-notes.html">22 de noviembre de
+2022</a>; el material anterior a esa fecha da por hecho que solo se puede filtrar por atributos.
+Si un tutorial te dice que tienes que duplicar el dato en un attribute para poder filtrarlo,
+está escrito antes de 2022.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Filtrar por atributos es gratis; filtrar por body se paga</span>
+  <p>Y se paga <strong>escanee lo que escanee</strong>: la Price List API tiene dos renglones,
+  <code>PL-Filter-Matched</code> y <code>PL-Filtered-Out</code>, ambos a
+  <strong>0,09 USD/GB</strong>. O sea, también pagas por los mensajes que el filtro
+  <em>descarta</em>. A escala de curso son céntimos; a escala de un topic con millones de
+  mensajes y un payload gordo, es el argumento para mover el dato discriminante a un message
+  attribute y volver al scope por defecto.</p>
+</div>
+
+<h3>Los operadores</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Operador</th><th>Ejemplo</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td>Valor exacto</td><td><code>{"estado": ["ok", "aviso"]}</code></td><td>El 90 % de los casos. Lista = OR</td></tr>
+    <tr><td><code>exists</code></td><td><code>{"error": [{"exists": true}]}</code></td><td>«Solo los mensajes que traen campo <code>error</code>». Con <code>false</code>, los que NO lo traen</td></tr>
+    <tr><td><code>prefix</code> / <code>suffix</code></td><td><code>{"clave": [{"suffix": ".csv"}]}</code></td><td>Rutas, nombres de fichero, códigos de región</td></tr>
+    <tr><td><code>anything-but</code></td><td><code>{"entorno": [{"anything-but": "dev"}]}</code></td><td>Lista negra. Admite strings, números y prefijos</td></tr>
+    <tr><td><code>numeric</code></td><td><code>{"filas": [{"numeric": [">=", 1000]}]}</code></td><td>Rangos: <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>, <code>=</code>, y rango cerrado con cuatro elementos</td></tr>
+    <tr><td><code>equals-ignore-case</code></td><td><code>{"tipo": [{"equals-ignore-case": "CSV"}]}</code></td><td>Desde noviembre de 2023. Evita listar las cuatro variantes de mayúsculas</td></tr>
+    <tr><td><code>cidr</code></td><td><code>{"ip": [{"cidr": "10.0.0.0/24"}]}</code></td><td>Subredes de origen</td></tr>
+    <tr><td><code>$or</code></td><td><code>{"$or": [{"a": ["x"]}, {"b": ["y"]}]}</code></td><td>OR entre <em>claves distintas</em> — lo único que la semántica AND no permitía</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/sns/latest/dg/sns-subscription-filter-policies.html">Amazon
+SNS subscription filter policies</a>, consultada el 2026-08-30. Cuotas:
+<strong>200 filter policies por topic</strong> y <strong>10 000 por cuenta</strong>
+(la de cuenta subió 50× en noviembre de 2022; si lees «200 por cuenta», es viejo).</p>
+
+<div class="callout aws">
+  <span class="callout-title">¿Filtro en SNS o bus de EventBridge? El criterio honesto</span>
+  <p>Los dos filtran por contenido con una sintaxis casi idéntica, así que la pregunta no se
+  resuelve mirando los operadores. Se resuelve mirando <strong>quién publica y cuántos destinos
+  hay</strong>:</p>
+  <ul>
+    <li><strong>Filtro en SNS</strong> cuando <em>tú</em> publicas, el mensaje ya existe y solo
+    quieres que cada suscriptor vea su parte. Es una línea en la suscripción, no añade una pieza
+    al diagrama y no cuesta nada si filtras por atributos. Y SNS escala a
+    <strong>12,5 millones de suscriptores</strong> por topic.</li>
+    <li><strong>Bus de EventBridge</strong> cuando el emisor es <em>AWS</em> (S3, CloudTrail,
+    ECS…) y no vas a poner tú los attributes, cuando quieres que consumidores futuros se
+    enganchen sin tocar nada del emisor, o cuando el destino no es un endpoint de SNS
+    (Step Functions, ECS task, API destination…). El precio: <strong>5 targets por regla</strong>
+    — y cuando chocas con ese tope, el patrón recomendado es poner un topic SNS de target y
+    hacer el abanico ahí.</li>
+  </ul>
+  <p>Los dos criterios completos —el reparto por contenido y el «entrega por pareja regla×target»—
+  están en <a href="./aws-eventbridge.html">la ficha de EventBridge</a> y no se repiten aquí. En
+  corto, desde el lado SNS: <strong>SNS difunde y recorta; EventBridge decide a quién.</strong>
+  No compiten tanto como parece: en un pipeline serio conviven, con el bus delante y el topic al
+  final para el aviso a humanos.</p>
+</div>
+
+<h2 id="fiabilidad">Reintentos, DLQ y visibilidad</h2>
+
+<p>«SNS no guarda nada» es cierto, pero no significa que se rinda al primer fallo. Cada
+protocolo tiene su <em>delivery policy</em>, y son sorprendentemente distintas:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Destino</th><th>Reintentos</th><th>Durante</th><th>¿Configurable?</th></tr></thead>
+  <tbody>
+    <tr><td><strong>SQS y Lambda</strong> (AWS managed)</td>
+      <td><strong>100 015 intentos</strong>: 3 inmediatos, 2 a 1 s, 10 con backoff exponencial de 1 a 20 s, y 100 000 cada 20 s</td>
+      <td><strong>23 días</strong></td>
+      <td><strong>No.</strong> Es fija</td></tr>
+    <tr><td><strong>HTTP/S</strong></td>
+      <td><code>numRetries</code> por defecto 3; el ejemplo de AWS sube a 50</td>
+      <td>Tope duro de <strong>3 600 s</strong> en total</td>
+      <td><strong>Sí</strong>, es el único: <code>delivery_policy</code> en topic o suscripción</td></tr>
+    <tr><td><strong>Correo, SMS y push móvil</strong> (customer managed)</td>
+      <td><strong>50 intentos</strong>: 2 a 10 s, 10 con backoff de 10 s a 10 min, y 38 cada 10 min</td>
+      <td><strong>6 horas</strong></td>
+      <td><strong>No</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html">Amazon
+SNS message delivery retries</a>, consultada el 2026-08-30.</p>
+
+<div class="callout why">
+  <span class="callout-title">Por qué 23 días de reintentos y aun así hace falta la cola</span>
+  <p>Que SNS reintente a SQS durante 23 días parece hacer redundante todo lo anterior. No lo es,
+  y la distinción es la clave del diseño: <strong>esos reintentos cubren que la
+  <em>cola</em> no esté disponible, no que tu <em>consumidor</em> falle</strong>. En cuanto SQS
+  acepta el mensaje, SNS ha terminado su trabajo y borra su copia. Lo que pase después —que la
+  Lambda reviente, que el CSV esté corrupto, que quieras reprocesar— es asunto de la cola, y por
+  eso la cola tiene su propio contador y su propia DLQ.</p>
+  <p>Y hay una asimetría que muerde: los <strong>errores de cliente no se reintentan
+  nunca</strong>. Si falta la queue policy, o alguien borró la Lambda suscrita, SNS no espera 23
+  días: descarta al instante (o manda a la DLQ de la suscripción, si la hay). El fallo más
+  probable del fanout es justo el que no se beneficia de los reintentos.</p>
+</div>
+
+<h3>La DLQ va en la SUSCRIPCIÓN</h3>
+<p>Literal de la doc: «A dead-letter queue is attached to an Amazon SNS subscription (rather than
+a topic) because message deliveries happen at the subscription level.» Se declara con
+<code>redrive_policy</code> en <code>aws_sns_topic_subscription</code>, y es un JSON con un solo
+campo, <code>deadLetterTargetArn</code> — <strong>sin <code>maxReceiveCount</code></strong>, que
+es de SQS. Requisitos: misma cuenta y región, y para un topic FIFO la DLQ debe ser una cola
+FIFO.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Las TRES DLQ del curso, ordenadas de una vez</span>
+  <p>A estas alturas el curso lleva acumuladas tres cosas que se llaman «DLQ» y que
+  <strong>no se tocan entre sí</strong>. Cada una vigila una frontera distinta:</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>DLQ</th><th>Dónde se declara</th><th>Recoge…</th><th>Ficha</th></tr></thead>
+    <tbody>
+      <tr><td><strong>DLQ de target de EventBridge</strong></td>
+        <td><code>dead_letter_config</code> en <code>aws_cloudwatch_event_target</code></td>
+        <td>Eventos que <em>no consiguieron entrar</em> en el destino (típicamente: falta la política de recurso)</td>
+        <td><a href="./aws-eventbridge.html">EventBridge</a></td></tr>
+      <tr><td><strong>DLQ de suscripción SNS</strong></td>
+        <td><code>redrive_policy</code> en <code>aws_sns_topic_subscription</code></td>
+        <td>Notificaciones que SNS <em>no consiguió entregar</em> a ese suscriptor concreto</td>
+        <td>Esta</td></tr>
+      <tr><td><strong>Redrive de SQS</strong></td>
+        <td><code>redrive_policy</code> en <code>aws_sqs_queue</code>, con <code>maxReceiveCount</code></td>
+        <td>Mensajes que <em>entraron</em> en la cola y el consumidor <em>no consiguió procesar</em></td>
+        <td><a href="./aws-sqs.html">SQS</a></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Los tres nombres de atributo se parecen y dos se llaman igual (<code>redrive_policy</code>),
+  pero el JSON no: el de SNS lleva <strong>solo</strong> <code>deadLetterTargetArn</code>; el de
+  SQS lleva además <code>maxReceiveCount</code>. Y solo el de SQS tiene camino de vuelta
+  automático (<code>StartMessageMoveTask</code>): lo que cae en la DLQ de una suscripción SNS lo
+  reprocesas tú.</p>
+  <p><strong>Un pipeline completo del proyecto 02 puede tener las tres a la vez</strong>, y no es
+  sobreingeniería: son tres fracasos distintos que necesitan tres buzones distintos para poder
+  diagnosticarse.</p>
+</div>
+
+<h3>Delivery status logging: ver si el mensaje llegó</h3>
+<p>SNS no te dice por defecto qué pasó con una entrega. <em>Delivery status logging</em> lo
+manda a <a href="./aws-cloudwatch.html">CloudWatch Logs</a>: si se entregó, qué respondió el
+endpoint, y el <em>dwell time</em> entre el <code>Publish</code> y el traspaso al destino.</p>
+<ul>
+  <li><strong>Se configura en el topic, por protocolo</strong>, con parejas de atributos:
+  <code>sqs_success_feedback_role_arn</code> / <code>sqs_failure_feedback_role_arn</code>, y lo
+  mismo con los prefijos <code>lambda_</code>, <code>http_</code>, <code>application_</code> y
+  <code>firehose_</code>. Cada rol necesita permisos de escritura en CloudWatch Logs.</li>
+  <li><strong>Los fallos se registran siempre; los éxitos se muestrean.</strong>
+  <code>*_success_feedback_sample_rate</code> va de 0 a 100. Déjalo en <code>0</code> salvo que
+  estés depurando: en un topic con volumen, el 100 % de los éxitos es la mitad de la factura de
+  CloudWatch Logs sin aportar nada.</li>
+  <li><strong>No cubre <code>email</code> ni <code>sms</code></strong>: solo Firehose, SQS,
+  Lambda, HTTPS y endpoints de aplicación. Que una alarma por correo llegue o no,
+  <strong>SNS no te lo cuenta</strong>. Lo que sí puedes vigilar son las métricas
+  <code>NumberOfNotificationsFailed</code> y
+  <code>NumberOfNotificationsFilteredOut</code> del namespace <code>AWS/SNS</code>.</li>
 </ul>
 
 <h2>Cuánto cuesta</h2>
 
+<div class="scroll-x">
 <table class="cost-table">
   <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
   <tbody>
     <tr><td>Existir sin usarse</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Peticiones API (primer millón/mes)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Peticiones API a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD / 1M</code></td></tr>
-    <tr><td>Entregas a SQS</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Entregas a SQS</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — «There is no charge for SQS Notifications»</td></tr>
     <tr><td>Entregas a Lambda</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Correos (primeros 1.000/mes)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Correos a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>2,00 USD / 100k</code></td></tr>
     <tr><td>Entregas HTTP/S (primeras 100k/mes)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
-    <tr><td>Publicación en topic FIFO</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,30 USD / 1M</code></td></tr>
+    <tr><td>Entregas HTTP/S a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,06 USD / 100k</code></td></tr>
+    <tr><td>Push a móvil (primer millón/mes)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Push a móvil a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD / 1M</code></td></tr>
+    <tr><td>Entregas a Data Firehose</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,19 USD / 1M</code> (+ lo que cobre Firehose)</td></tr>
+    <tr><td>SMS</td><td><span class="tag-cost usage">por uso</span></td><td>Precio por país + <em>carrier fee</em> — ver abajo</td></tr>
+    <tr><td>Publicación en topic FIFO</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,30 USD / 1M</code> + <code>0,017 USD/GB</code> de payload</td></tr>
+    <tr><td>Entrega FIFO a suscriptores</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,01 USD / 1M</code> + <code>0,001 USD/GB</code></td></tr>
+    <tr><td>Archive de un topic FIFO</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD/GB</code> procesado + <code>0,023 USD/GB-mes</code></td></tr>
+    <tr><td>Filtrado por <em>message attributes</em></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Filtrado por <em>message body</em></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,09 USD/GB</code> escaneado, case o no case</td></tr>
+    <tr><td>Message data protection <span class="small">(cerrado a clientes nuevos)</span></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,08 USD/GB</code> escaneado + <code>0,20 USD/GB</code> de audit</td></tr>
   </tbody>
 </table>
-<p class="cost-stamp">Verificado el 2026-08-23 contra la
-<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonSNS/current/us-east-1/index.json">Price List API de AWS</a>,
-región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una petición.</p>
+</div>
+<p class="cost-stamp">Verificado el <strong>2026-08-30</strong> contra la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonSNS/current/us-east-1/index.json">Price
+List API de AWS</a> (offer <code>AmazonSNS</code>, versión publicada el 2026-02-11) y la
+<a href="https://aws.amazon.com/sns/pricing/">página de precios</a>, región
+<code>us-east-1</code>. Cada bloque de <strong>64 KB</strong> publicado cuenta como una
+petición: un mensaje de 256 KB son cuatro, no una.</p>
 
 <div class="callout cost">
   <span class="callout-title">Lo que sorprende en la factura</span>
   <p><strong>El SMS.</strong> Todo lo demás en SNS es prácticamente gratis a escala pequeña,
-  pero el SMS se cobra por mensaje y por país, y puede costar cientos de veces más que un
-  correo. Un bucle que reintente enviar SMS es de las formas más rápidas de generar una
-  factura desagradable en AWS.</p>
-  <p>Para este curso: <strong>SNS te va a costar cero</strong>. Vas a mandar decenas de
-  mensajes al mes contra un free tier de un millón.</p>
+  pero el SMS se cobra por mensaje, por país y a veces por operadora, y puede costar cientos de
+  veces más que un correo: en Estados Unidos la
+  <a href="https://aws.amazon.com/end-user-messaging/pricing/">tabla de AWS End User Messaging</a>
+  lista del orden de <code>0,01 USD</code> por parte de mensaje <em>más</em> una carrier fee del
+  mismo orden — frente a los <code>0,00002 USD</code> de un correo. Un bucle que reintente enviar
+  SMS es de las formas más rápidas de generar una factura desagradable en AWS. Desde septiembre
+  de 2024 el SMS de SNS lo entrega y factura <strong>AWS End User Messaging</strong>, así que
+  ese renglón puede aparecerte fuera de la línea de SNS.</p>
+  <p><strong>El freno que AWS te pone de serie</strong>: una cuenta nueva entra en el
+  <em>SMS sandbox</em> (solo números verificados) y trae un <em>account spend threshold</em> de
+  <strong>1,00 USD al mes</strong>. Los dos se levantan por ticket, y los dos existen
+  exactamente porque este renglón es el que se dispara.</p>
+  <p><strong>El filtrado por body</strong> es el segundo. Filtrar por atributos no cuesta nada;
+  activar <code>filter_policy_scope = "MessageBody"</code> mete un renglón de 0,09 USD/GB que se
+  cobra también por lo que descarta.</p>
+  <p>Para este curso: <strong>SNS te va a costar cero</strong>. Vas a mandar decenas de mensajes
+  al mes contra un free tier de un millón de peticiones, y las entregas del proyecto 02 son a
+  colas SQS (gratis) y unos pocos correos (los primeros mil, gratis).</p>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">Message data protection: existe, pero ya no lo empieces</span>
+  <p>Las <em>data protection policies</em> escanean el payload buscando datos sensibles —tarjetas,
+  emails, claves de AWS— y pueden registrar, bloquear o enmascarar el mensaje. Su estado en 2026
+  es la razón por la que aparece aquí en tres líneas y no en una sección:
+  <strong>desde el 30 de abril de 2026 no admite clientes nuevos</strong>. Los que ya la tenían
+  configurada pueden seguir usándola y AWS mantiene los parches de seguridad, pero no habrá
+  mejoras (<a href="https://docs.aws.amazon.com/sns/latest/dg/sns-message-data-protection-availability-change.html">nota
+  oficial</a>). La alternativa que AWS recomienda es artesanal: una Lambda entre dos topics que
+  inspeccione con Bedrock Guardrails. Si lees un tutorial que la presenta como la forma de
+  proteger PII en SNS, está escrito antes de marzo de 2026.</p>
 </div>
 
 <h2>Límites que vas a chocar</h2>
 
+<div class="scroll-x">
 <table>
   <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
   <tbody>
-    <tr><td>Tamaño de mensaje</td><td><code>256 KB</code></td><td>No</td></tr>
-    <tr><td>Suscripciones por topic</td><td><code>12,5 millones</code></td><td>No hace falta</td></tr>
-    <tr><td>Rendimiento de un topic FIFO</td><td><code>300 msg/s</code> o <code>10 MB/s</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>Tamaño de mensaje</td><td><code>256 KiB</code> (262 144 bytes)</td><td>No — por encima, extended client + S3 (hasta 2 GB)</td></tr>
+    <tr><td>Cabecera del mensaje</td><td><code>16 KiB</code> (16 384 bytes)</td><td>No</td></tr>
+    <tr><td>Message attributes hacia SQS con <em>raw delivery</em></td><td><code>10</code></td><td>No — para más, apaga raw delivery</td></tr>
+    <tr><td>Suscripciones por topic</td><td>Standard <code>12 500 000</code> · FIFO <code>100</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>Topics por cuenta</td><td>Standard <code>100 000</code> · FIFO <code>1 000</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>Suscripciones pendientes de confirmar</td><td><code>5 000</code> por cuenta</td><td>Sí</td></tr>
+    <tr><td>Filter policies</td><td><code>200</code> por topic · <code>10 000</code> por cuenta</td><td>Sí</td></tr>
+    <tr><td>Mensajes por <code>PublishBatch</code></td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Publicación por cuenta y región (<code>us-east-1</code>)</td><td><code>30 000 msg/s</code>, standard y FIFO</td><td>Sí — y baja mucho en otras regiones: 300 msg/s en las pequeñas</td></tr>
+    <tr><td>Rendimiento de un topic FIFO</td><td><code>3 000 msg/s</code> o <code>20 MB/s</code> con <code>fifo_throughput_scope = "Topic"</code>; <code>300 msg/s</code> por message group con <code>"MessageGroup"</code></td><td>Se sube cambiando el scope, no pidiendo cuota</td></tr>
     <tr><td>Ventana de deduplicación FIFO</td><td><code>5 minutos</code></td><td>No</td></tr>
-    <tr><td>Topic FIFO hacia correo, SMS o HTTP</td><td><code>No soportado</code></td><td>No</td></tr>
+    <tr><td>Retención del archive FIFO</td><td><code>365 días</code></td><td>No</td></tr>
+    <tr><td><strong>Entrega de correo</strong></td><td><strong><code>10 msg/s</code> por suscripción</strong></td><td><strong>No. «This is a hard limit and can't be increased»</strong></td></tr>
+    <tr><td>Entrega de SMS</td><td><code>20 msg/s</code> (promocional y transaccional)</td><td>Sí</td></tr>
+    <tr><td>Gasto máximo en SMS</td><td><code>1,00 USD</code>/mes por cuenta</td><td>Sí — es el tope que te salva de un bucle</td></tr>
+    <tr><td>Reintentos de un endpoint HTTP/S</td><td><code>numRetries</code> 0–100, y <code>3 600 s</code> de tiempo total</td><td>No — el tope de 3 600 s es duro</td></tr>
+    <tr><td>Topic FIFO hacia correo, SMS, HTTP o Lambda</td><td><code>No soportado</code></td><td>No</td></tr>
   </tbody>
 </table>
-<p class="small">Fuentes:
+</div>
+<p class="small">Fuentes, consultadas el 2026-08-30:
+<a href="https://docs.aws.amazon.com/general/latest/gr/sns.html">Service endpoints and quotas</a> ·
 <a href="https://docs.aws.amazon.com/sns/latest/dg/fifo-message-delivery.html">FIFO message delivery</a> ·
-<a href="https://docs.aws.amazon.com/general/latest/gr/sns.html">Cuotas del servicio</a>.</p>
+<a href="https://docs.aws.amazon.com/sns/latest/dg/large-message-payloads.html">Publishing large messages</a> ·
+<a href="https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html">Message delivery retries</a>.</p>
+
+<div class="callout trap">
+  <span class="callout-title">10 correos por segundo: el límite que decide que producción use SES</span>
+  <p>De las decenas de cuotas de SNS, esta es la que cambia una decisión de arquitectura. La
+  entrega por correo está capada a <strong>10 mensajes por segundo y suscripción</strong>, y la
+  página de cuotas remata: <em>«This is a hard limit and can't be increased»</em>. Súmale que
+  cada suscriptor tiene que <strong>pulsar un enlace a mano</strong>, que el correo sale en texto
+  plano sin plantilla ni dominio propio, que no hay gestión de bajas ni de rebotes, y que
+  <a href="#fiabilidad">SNS ni siquiera registra si el correo llegó</a> (el delivery status
+  logging no cubre <code>email</code>).</p>
+  <p><strong>Conclusión honesta: el correo de SNS es para alarmas, no para newsletters.</strong>
+  Cinco personas de guardia que reciben «se ha pasado el presupuesto»: perfecto, y es
+  literalmente lo que hace la lección 02. Mil clientes que reciben una factura en HTML: eso es
+  Amazon SES, que existe para eso.</p>
+</div>
+
+<h3 id="mensajes-grandes">Cuando 256 KB no llegan: el extended client</h3>
+<p>El tope de mensaje son <strong>256 KiB</strong> y <em>no</em> ha subido a 1 MiB como el de SQS
+en agosto de 2025 — son servicios distintos y solo cambió SQS. Para payloads mayores, AWS publica
+las <a href="https://docs.aws.amazon.com/sns/latest/dg/large-message-payloads.html">Extended
+Client Libraries</a> (Java y Python; <strong>no hay para Node</strong>): guardan el payload en un
+bucket de S3 y publican en el topic <em>la referencia</em>, lo que sube el techo a
+<strong>2 GB</strong>. Sirven para topics standard y FIFO. La letra pequeña: el consumidor tiene
+que desreferenciar —con la extended client de SQS si es una cola, o con la <em>Payload Offloading
+Library</em> si es Lambda—, el S3 lo pagas tú y el ciclo de vida de esos objetos es tuyo. En la
+práctica, salvo que ya estés en Java, se hace el mismo patrón a mano: el dato va a S3 y el mensaje
+lleva bucket y clave. Es exactamente la forma del evento de S3 del proyecto 02.</p>
 
 <h2>Cuándo NO usarlo</h2>
 
@@ -209,28 +680,34 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
       <li>Necesitas reintentos con control fino y una DLQ propia.</li>
       <li>Quieres enrutar por contenido con reglas complejas.</li>
       <li>El consumidor procesa mucho más lento que el productor.</li>
+      <li>Mandas correo a clientes y no alarmas a un equipo.</li>
     </ul>
   </div>
 </div>
 
 <div class="scroll-x">
-<table>
+<table id="se-confunde-con">
   <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
   <tbody>
     <tr>
       <td><b>Amazon SQS</b></td>
       <td>SNS empuja y olvida; SQS almacena hasta que alguien consume y confirma. SNS es 1-a-N; SQS es 1-a-1.</td>
-      <td>El trabajo debe sobrevivir a un consumidor caído, o hace falta reintentar con una DLQ.</td>
+      <td>El trabajo debe sobrevivir a un consumidor caído, o hace falta reintentar con una DLQ. Con <em>un solo</em> consumidor, el topic delante no compra nada: es una pieza más que autorizar y que depurar. <a href="./aws-sqs.html">Ficha de SQS</a>.</td>
     </tr>
     <tr>
       <td><b>Amazon EventBridge</b></td>
-      <td>SNS difunde a todos y filtra por atributos simples. EventBridge enruta por contenido con reglas ricas y conoce eventos de AWS y de SaaS.</td>
-      <td>Necesitas enrutar según el <em>contenido</em> del evento, o consumir eventos que emite AWS.</td>
+      <td>SNS difunde a todos los suscritos y recorta con filter policies. EventBridge enruta por contenido, conoce los eventos que emiten más de 250 servicios de AWS y de SaaS, y tiene veinte tipos de target además de los endpoints de SNS.</td>
+      <td>El emisor es AWS y no vas a poner tú los attributes; necesitas targets que SNS no tiene (Step Functions, ECS, API destinations); o quieres que consumidores futuros se enganchen sin tocar al emisor. <a href="./aws-eventbridge.html">Ficha de EventBridge</a>, y <a href="#filter-policies">el criterio, arriba</a>.</td>
     </tr>
     <tr>
       <td><b>Amazon SES</b></td>
-      <td>SNS manda correos de notificación en texto plano a suscriptores confirmados. SES es un servidor de correo transaccional completo.</td>
-      <td>Mandas correo a clientes: plantillas, HTML, dominio propio, métricas de entrega.</td>
+      <td>SNS manda correos de notificación en texto plano a suscriptores que confirmaron a mano, a 10 msg/s como máximo y sin decirte si llegaron. SES es un servidor de correo transaccional: plantillas, HTML, adjuntos, dominio propio con DKIM, gestión de rebotes y bajas, y métricas de entrega.</td>
+      <td>El destinatario es un cliente y no un compañero de guardia. La frontera práctica: si la lista de destinatarios la mantiene tu producto en vez de tu equipo de infra, es SES.</td>
+    </tr>
+    <tr>
+      <td><b>Amazon MQ / Kafka (MSK)</b></td>
+      <td>Un broker de verdad guarda el histórico, tiene posición de lectura y permite rebobinar. SNS no retiene nada y no tiene concepto de <em>offset</em>.</td>
+      <td>Necesitas replay arbitrario, consumidores que se pongan al día desde el principio, o compatibilidad con AMQP/MQTT/JMS.</td>
     </tr>
   </tbody>
 </table>
@@ -241,10 +718,26 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
   <p>La combinación estándar de AWS es un topic SNS con varias colas SQS suscritas. SNS aporta
   el fan-out; SQS aporta la persistencia, los reintentos y la DLQ de cada consumidor. Cada
   equipo consume a su ritmo y un consumidor caído no pierde nada. Es lo que montaremos en el
-  <a href="../ROADMAP.md">proyecto 02</a>.</p>
+  <a href="../ROADMAP.md">proyecto 02</a>, y está desarrollado arriba:
+  <a href="#fanout">el patrón fanout</a>.</p>
 </div>
 
 <h2>En Terraform</h2>
+
+<p>Tres recursos hacen el 95 % del trabajo, y el reparto entre ellos tiene la misma lógica que
+en SQS: la política vive aparte porque se refiere a ARNs de otros recursos.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Recurso</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td><code>aws_sns_topic</code></td><td>El topic y sus atributos: <code>fifo_topic</code>, <code>content_based_deduplication</code>, <code>fifo_throughput_scope</code>, <code>archive_policy</code>, <code>kms_master_key_id</code>, <code>tracing_config</code>, <code>signature_version</code>, y las parejas <code>*_feedback_role_arn</code> del delivery status logging</td></tr>
+    <tr><td><code>aws_sns_topic_subscription</code></td><td>Una suscripción: <code>protocol</code>, <code>endpoint</code>, <code>raw_message_delivery</code>, <code>filter_policy</code> + <code>filter_policy_scope</code>, <code>redrive_policy</code>, <code>delivery_policy</code> (solo HTTP/S), <code>replay_policy</code></td></tr>
+    <tr><td><code>aws_sns_topic_policy</code></td><td>La política de recurso: quién puede <code>Publish</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>El caso de la lección 02: la alarma por correo</h3>
 
 <div class="code">
   <div class="code-label"><span>topic + suscripción por correo + política de recurso</span><span class="tag">hcl</span></div>
@@ -289,23 +782,101 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
 }</code></pre>
 </div>
 
+<h3>El caso de la lección 14: fanout con filtro y DLQ</h3>
+
+<p>La misma pieza, usada como reparto en vez de como buzón. Fíjate en dónde va cada permiso:
+el topic autoriza a quien <em>publica</em>; la cola autoriza a SNS a <em>entregar</em>.</p>
+
+<div class="code">
+  <div class="code-label"><span>topic + cola suscrita con filtro, raw delivery y DLQ</span><span class="tag">hcl</span></div>
+<pre><code><b class="k">resource</b> <b class="s">"aws_sns_topic"</b> <b class="s">"pipeline"</b> {
+  <b class="at">name</b> = <b class="s">"pipeline-eventos"</b>
+}
+
+<b class="k">resource</b> <b class="s">"aws_sqs_queue"</b> <b class="s">"analitica"</b> { <b class="at">name</b> = <b class="s">"analitica"</b> }
+<b class="k">resource</b> <b class="s">"aws_sqs_queue"</b> <b class="s">"sns_dlq"</b>   { <b class="at">name</b> = <b class="s">"sns-entregas-fallidas"</b> }
+
+<b class="k">resource</b> <b class="s">"aws_sns_topic_subscription"</b> <b class="s">"analitica"</b> {
+  <b class="at">topic_arn</b> = aws_sns_topic.pipeline.arn
+  <b class="at">protocol</b>  = <b class="s">"sqs"</b>
+  <b class="at">endpoint</b>  = aws_sqs_queue.analitica.arn
+
+  <b class="c"># Sin esto, el consumidor tiene que parsear el sobre JSON de SNS</b>
+  <b class="c"># y luego parsear .Message otra vez. Ver «el doble parseo».</b>
+  <b class="at">raw_message_delivery</b> = <b class="k">true</b>
+
+  <b class="c"># Solo los CSV terminados con éxito. Filtra por ATRIBUTOS: gratis.</b>
+  <b class="at">filter_policy_scope</b> = <b class="s">"MessageAttributes"</b>
+  <b class="at">filter_policy</b> = jsonencode({
+    tipo   = [<b class="s">"csv"</b>]
+    estado = [{ <b class="s">"anything-but"</b> = <b class="s">"error"</b> }]
+    filas  = [{ <b class="s">"numeric"</b> = [<b class="s">"&gt;="</b>, 1] }]
+  })
+
+  <b class="c"># DLQ DE SUSCRIPCIÓN: solo deadLetterTargetArn.</b>
+  <b class="c"># NO lleva maxReceiveCount — eso es de la redrive policy de SQS.</b>
+  <b class="at">redrive_policy</b> = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.sns_dlq.arn
+  })
+}
+
+<b class="c"># Suscribir NO autoriza. Esto sí, y va en la COLA.</b>
+<b class="k">resource</b> <b class="s">"aws_sqs_queue_policy"</b> <b class="s">"analitica"</b> {
+  <b class="at">queue_url</b> = aws_sqs_queue.analitica.id  <b class="c"># .id es la URL, no el ARN</b>
+  <b class="at">policy</b> = jsonencode({
+    Version = <b class="s">"2012-10-17"</b>
+    Statement = [{
+      Effect    = <b class="s">"Allow"</b>
+      Principal = { Service = <b class="s">"sns.amazonaws.com"</b> }
+      Action    = <b class="s">"sqs:SendMessage"</b>
+      Resource  = aws_sqs_queue.analitica.arn
+      Condition = {
+        ArnEquals = { <b class="s">"aws:SourceArn"</b> = aws_sns_topic.pipeline.arn }
+      }
+    }]
+  })
+}</code></pre>
+</div>
+
 <div class="callout trap">
-  <span class="callout-title">Trampas conocidas</span>
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
   <p><strong>Una suscripción por correo sin confirmar no se puede borrar.</strong> Del provider
   AWS: «You cannot unsubscribe to a subscription that is pending confirmation [...] If you
   <code>destroy</code> an unconfirmed subscription, Terraform will remove the subscription from
   its state but the subscription will still exist in AWS.» Confirma el correo antes de
-  destruir, o borra el topic entero (al borrarlo, SNS borra sus suscripciones).</p>
+  destruir, o borra el topic entero (al borrarlo, SNS borra sus suscripciones). El provider
+  marca <code>email</code>, <code>email-json</code>, <code>http</code> y <code>https</code> como
+  <strong>«partially supported»</strong> justo por esto.</p>
+  <p><strong>Suscribir una cola no autoriza a escribir en ella.</strong> Falta la
+  <code>aws_sqs_queue_policy</code> con principal <code>sns.amazonaws.com</code>, y el fallo es
+  <em>silencioso</em>: el <code>apply</code> pasa, el <code>Publish</code> devuelve un
+  <code>MessageId</code> y la cola sigue vacía. Es el mismo silencio que con EventBridge.</p>
+  <p><strong>La <code>redrive_policy</code> de SNS y la de SQS se llaman igual y no son lo
+  mismo.</strong> La de la suscripción lleva <em>solo</em> <code>deadLetterTargetArn</code>;
+  poner ahí <code>maxReceiveCount</code> no da error y no hace nada. Ver
+  <a href="#fiabilidad">las tres DLQ</a>.</p>
   <p><strong>Cifrar el topic rompe las alarmas de Budgets</strong> salvo que añadas una
-  política de clave KMS que autorice a <code>budgets.amazonaws.com</code>.</p>
+  política de clave KMS que autorice a <code>budgets.amazonaws.com</code>. Lo mismo vale para
+  CloudWatch y para una DLQ cifrada: con <code>alias/aws/sqs</code> no basta, hace falta una
+  clave <em>custom</em> cuya política nombre al principal de SNS.</p>
   <p><strong>Sin política de recurso no hay publicación.</strong> El error que verás es
   «Invalid SNS topic», que no dice nada sobre permisos.</p>
+  <p><strong><code>filter_policy_scope</code> se olvida y el default no es el que crees.</strong>
+  Si escribes una política pensando en campos del cuerpo pero no pones el scope, se aplica a
+  <code>MessageAttributes</code> — que no tienen esos campos — y el suscriptor
+  <strong>no recibe nada</strong>. Y ojo al probar: los cambios de filtro tardan hasta
+  <strong>15 minutos</strong> en surtir efecto.</p>
+  <p><strong><code>fifo_throughput_scope = "MessageGroup"</code> no tiene marcha atrás.</strong>
+  Ponlo al crear el topic o no lo pongas.</p>
+  <p><strong>Un topic FIFO se nombra con sufijo <code>.fifo</code></strong> y
+  <code>fifo_topic = true</code>. Cambiar el tipo destruye y recrea el topic — y con él, todas
+  sus suscripciones, incluidas las de correo que confirmaste a mano.</p>
 </div>
 
 <h2>Comprueba</h2>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-kicker">Pregunta 1 de 7 · el modelo</p>
   <p class="quiz-q">Publicas «pedido creado» en un topic SNS. El servicio de facturación está caído tres minutos. ¿Qué pasa con ese pedido?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="SNS empuja, reintenta un rato y descarta. No almacena. Por eso el patrón real es poner una cola SQS entre el topic y cada consumidor.">Se pierde tras los reintentos</button></li>
@@ -317,7 +888,7 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-kicker">Pregunta 2 de 7 · elegir variante</p>
   <p class="quiz-q">Necesitas que los eventos de un pedido lleguen en orden estricto y además avisar por correo al cliente. ¿Cómo lo montas?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="FIFO garantiza el orden pero solo entrega a colas SQS. El correo tiene que salir de otro sitio: un topic Standard aparte, o el propio consumidor.">Topic FIFO más otro Standard</button></li>
@@ -329,7 +900,7 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-kicker">Pregunta 3 de 7 · coste</p>
   <p class="quiz-q">Tu topic recibe 200.000 publicaciones al mes y las reparte a tres colas SQS. ¿Qué te cuesta?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="Las 200.000 peticiones caben en el millón gratuito mensual, y las entregas a SQS no se cobran nunca.">No cuesta absolutamente nada</button></li>
@@ -341,7 +912,7 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-kicker">Pregunta 4 de 7 · la trampa de Terraform</p>
   <p class="quiz-q">Haces <code>terraform apply</code> con una suscripción de correo y nunca pulsas el enlace del mensaje. Luego haces <code>terraform destroy</code>. ¿Qué queda en AWS?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true" data-why="Una suscripción pendiente no se puede cancelar por API. Terraform la quita de su state pero sigue existiendo, salvo que borres el topic entero.">Queda la suscripción sin confirmar</button></li>
@@ -352,17 +923,69 @@ región <code>us-east-1</code>. Cada bloque de 64 KB publicado cuenta como una p
   <div class="quiz-feedback"></div>
 </div>
 
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 5 de 7 · el fanout</p>
+  <p class="quiz-q">Suscribes una cola SQS a un topic, publicas
+  <code>{"fichero":"ventas.csv"}</code> y dejas <code>raw_message_delivery</code> en su valor por
+  defecto. Tu consumidor hace <code>JSON.parse(record.body).fichero</code> y obtiene
+  <code>undefined</code>. ¿Qué está pasando?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Por defecto SNS envuelve el mensaje en un sobre con Type, MessageId, TopicArn, Signature y un campo Message que es un STRING con tu JSON dentro. El parseo correcto es doble: JSON.parse(JSON.parse(body).Message). O pones raw_message_delivery = true y el cuerpo llega tal cual — a cambio de perder Subject, TopicArn y la firma.">El cuerpo llega envuelto en el sobre JSON de SNS</button></li>
+    <li><button data-correct="false" data-why="SQS no desenvuelve nada: guarda literalmente los bytes que SNS le entrega. Quien decide si hay sobre o no es la suscripción, con el atributo raw_message_delivery, y su valor por defecto es false.">El cuerpo llega crudo porque SQS desenvuelve el sobre solo</button></li>
+    <li><button data-correct="false" data-why="El cuerpo nunca viaja vacío. Los message attributes sí van aparte del cuerpo, pero eso es independiente: aquí el campo se busca dentro del cuerpo y está, solo que un nivel más abajo y como string.">El cuerpo llega vacío y los atributos viajan por separado</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 6 de 7 · criterio de diseño</p>
+  <p class="quiz-q">Tu código publica «pipeline terminado» en un topic. Tres suscriptores lo
+  reciben, pero uno solo quiere los avisos de los ficheros de más de mil filas. Tú controlas el
+  publicador. ¿Cuál es la solución de menos piezas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Publicas el número de filas como message attribute y esa suscripción lleva una filter policy con el operador numeric. Cero piezas nuevas, cero coste (filtrar por atributos es gratis) y los otros dos suscriptores ni se enteran del cambio.">Filtro en SNS: el atributo ya viaja en el mensaje</button></li>
+    <li><button data-correct="false" data-why="El bus se justifica cuando el emisor es AWS, cuando el destino no es un endpoint de SNS, o cuando quieres consumidores futuros sin tocar al emisor. Aquí el emisor es tuyo y el destino ya está suscrito: meter un bus añade una pieza para hacer lo mismo.">Bus de EventBridge: cualquier filtro justifica ya cambiar de servicio</button></li>
+    <li><button data-correct="false" data-why="Es la solución que las filter policies vinieron a jubilar: duplica el topic, duplica los permisos y obliga al publicador a decidir a dónde manda cada mensaje, que es justo el acoplamiento que pub/sub evita.">Un topic por variante: filtrar en SNS sale muy caro</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 7 de 7 · las tres DLQ</p>
+  <p class="quiz-q">Montaje del proyecto 02: EventBridge → topic SNS → cola SQS → Lambda. La
+  Lambda falla cinco veces seguidas con el mismo mensaje y quieres apartarlo para inspeccionarlo.
+  ¿Dónde se configura ese apartado?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="false" data-why="Esa DLQ recoge lo que EventBridge no consiguió ENTREGAR al topic, típicamente por falta de política de recurso. Aquí el evento llegó al topic sin problema: el fracaso está tres saltos más adelante.">En el target de EventBridge, con su dead letter config</button></li>
+    <li><button data-correct="false" data-why="Esa DLQ recoge notificaciones que SNS no consiguió entregar a la cola. Aquí SNS entregó bien y borró su copia: en cuanto SQS acepta el mensaje, SNS considera su trabajo terminado y ya no vigila nada.">En la suscripción del topic, con su propia redrive policy</button></li>
+    <li><button data-correct="true" data-why="Quien cuenta los intentos de proceso es SQS, con ApproximateReceiveCount, y quien aparta el mensaje al superar maxReceiveCount es la redrive policy de la cola. Es la tercera frontera y la única que además tiene camino de vuelta con StartMessageMoveTask.">En la cola destino, con su maxReceiveCount y su DLQ</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
 <div class="next">
+  <h3>Seguir</h3>
   <div class="nav-links">
+    <a href="./aws-sqs.html">Ficha: Amazon SQS</a>
+    <a href="./aws-eventbridge.html">Ficha: Amazon EventBridge</a>
+    <a href="./aws-cloudwatch.html">Ficha: Amazon CloudWatch</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./aws-budgets.html">Ficha: AWS Budgets</a>
+    <a href="../lessons/0002-haz-que-la-alarma-suene.html">Lección 02: haz que la alarma suene</a>
     <a href="./README.md">Todas las referencias</a>
-    <a href="./aws-budgets.html">Referencia: AWS Budgets</a>
-    <a href="../lessons/0002-haz-que-la-alarma-suene.html">Lección 02</a>
     <a href="../GLOSSARY.md">Glosario</a>
-    <a href="https://docs.aws.amazon.com/sns/latest/dg/welcome.html">Documentación oficial</a>
   </div>
   <div class="ask">
-    <b>Pregúntame.</b> Las <em>filter policies</em>, las DLQ de suscripción y el patrón
-    SNS+SQS los veremos a fondo en el proyecto 02. Si quieres adelantarlo, dímelo.
+    <b>Fuentes primarias</b>: la
+    <a href="https://docs.aws.amazon.com/sns/latest/dg/welcome.html">SNS Developer Guide</a>
+    (empieza por <em>message filtering</em> y <em>dead-letter queues</em>), las
+    <a href="https://docs.aws.amazon.com/general/latest/gr/sns.html">cuotas del servicio</a>
+    cuando dudes de un número, y
+    <a href="https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html">message
+    delivery retries</a> para todo lo de reintentos por protocolo. Precios y límites verificados
+    el <strong>2026-08-30</strong> en <code>us-east-1</code>: si han pasado meses, revísalos.
+    Lo que queda por cerrar es de la lección 14 —cómo se conecta este topic al final del
+    pipeline y quién publica en él—; cualquier duda, pregúntame en la sesión.
   </div>
 </div>
 

@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Elastic Load Balancing</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Elastic Load Balancing</h1>
+  <p class="deck">Un nombre DNS estable delante de un grupo de servidores que van y vienen.
+  Recibe cada conexión, decide a qué target la manda, y saca de la rotación al que deja de
+  contestar. Es la pieza que convierte «tres instancias» en «un servicio», y la primera del
+  curso que <strong>tiene cronómetro</strong>: factura por hora exista o no tráfico.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Red / reparto de tráfico</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional — un nodo por zona de disponibilidad habilitada</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost hour">por hora</span> + <span class="tag-cost usage">por uso</span> (LCU)</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><strong>No.</strong> Un ALB público en dos AZ cuesta
+    ≈ <code>0,0325 USD/h</code> ≈ <strong>23,73 USD/mes</strong> aunque no entre nadie</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_lb</code> · <code>aws_lb_listener</code> ·
+    <code>aws_lb_target_group</code></dd></div>
+    <div><dt>Aparece en</dt><dd>proyecto 04 (ALB → app privada → RDS) y proyecto 06 (EKS con ALB Controller)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2 id="que-es">Qué es</h2>
+<p>Un servicio gestionado que se planta entre los clientes y tus servidores. Tres piezas, y
+las mismas en las cuatro variantes: el <strong>load balancer</strong> es el punto de entrada
+(un nombre DNS que resuelve a las IP de sus nodos, uno por zona); los
+<strong>listeners</strong> escuchan en un protocolo y un puerto; los <strong>target
+groups</strong> agrupan los destinos y les hacen <em>health checks</em>. Existe porque un
+servicio que corre en más de una máquina necesita dos cosas que ninguna de esas máquinas
+puede darse a sí misma: <strong>una dirección que no cambie</strong> cuando la flota cambia,
+y <strong>alguien que deje de mandarle tráfico al que se ha caído</strong>.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>El <em>maître</em> de un restaurante: los clientes no eligen mesa, se lo dicen a él, y él
+  sabe qué camareros están libres y cuál se ha ido a fumar. El comensal siempre pregunta en el
+  mismo sitio aunque la plantilla rote entera. Donde se rompe: <strong>el maître cobra su turno
+  entero aunque no entre nadie a cenar</strong>. Ese es exactamente el modelo del ALB, y el
+  motivo de que este servicio sea el primero del curso que hay que destruir al terminar.</p>
+</div>
+
+<h2 id="para-que">Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Ser la cara pública de una app privada</h3><p>Tu caso, proyecto 04:
+  las instancias viven en subredes privadas sin IP pública y sin ruta a internet entrante. El
+  ALB está en las públicas y es lo único que el mundo puede tocar. El security group de la app
+  solo acepta al del ALB.</p></div>
+  <div class="ref-card"><h3>Sobrevivir a que una máquina muera</h3><p>Una instancia se queda
+  colgada y deja de contestar al health check. A los dos fallos seguidos sale de rotación y
+  nadie se entera. Sin balanceador, el 33% de tus usuarios ve un timeout.</p></div>
+  <div class="ref-card"><h3>Desplegar sin cortar</h3><p>Un target group nuevo con la versión
+  nueva, y la regla del listener apuntando primero al 10% del tráfico. El
+  <em>deregistration delay</em> deja terminar las peticiones en vuelo de las máquinas viejas.</p></div>
+  <div class="ref-card"><h3>Meter varios servicios en un endpoint</h3><p><code>/api/*</code>
+  al target group de la API, <code>/admin/*</code> al del panel, todo lo demás a los
+  estáticos. Un ALB, tres equipos, una sola línea en la factura por horas.</p></div>
+  <div class="ref-card"><h3>Login sin escribir código</h3><p>Una acción
+  <code>authenticate-oidc</code> en el listener y el ALB hace el baile OAuth completo contra
+  Cognito, Okta o Entra ID. Tu app recibe al usuario ya identificado en una cabecera
+  firmada.</p></div>
+  <div class="ref-card"><h3>Terminar TLS en un solo sitio</h3><p>El certificado de ACM vive en
+  el listener, se renueva solo y es gratis. Tus instancias hablan HTTP en claro por dentro de
+  la VPC y no saben nada de criptografía.</p></div>
+</div>
+
+<h2 id="tipos">Los tipos que existen</h2>
+<p>«ELB» no es un producto: es una familia de cuatro, con dos generaciones de API distintas.
+Los tres modernos (ALB, NLB, GWLB) comparten API, conceptos y recursos de Terraform — son
+<code>elbv2</code>, y en el provider son todos <code>aws_lb</code> con
+<code>load_balancer_type</code> distinto. El Classic es de 2009, tiene API propia
+(<code>aws_elb</code>) y no comparte nada.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Capa y protocolos</th><th>Targets</th><th>¿IP estática?</th><th>TLS</th><th>Precio <span class="small">us-east-1</span></th></tr></thead>
+  <tbody>
+    <tr><td><strong>ALB</strong><br><span class="small">Application</span></td>
+      <td><strong>L7</strong> — HTTP, HTTPS, HTTP/2, gRPC, WebSocket. Lee método, ruta,
+      cabeceras y query.</td>
+      <td><code>instance</code>, <code>ip</code>, <code>lambda</code></td>
+      <td><strong>No.</strong> Solo nombre DNS; las IP de los nodos cambian</td>
+      <td>Termina TLS (ACM). mTLS opcional</td>
+      <td><code>0,0225 USD/h</code> + <code>0,008 USD/LCU-h</code></td></tr>
+    <tr><td><strong>NLB</strong><br><span class="small">Network</span></td>
+      <td><strong>L4</strong> — TCP, UDP, TCP_UDP, TLS, y desde nov-2025 QUIC y TCP_QUIC. No
+      entiende de HTTP.</td>
+      <td><code>instance</code>, <code>ip</code>, <code>alb</code></td>
+      <td><strong>Sí</strong> — una IP fija por AZ, y opcionalmente una Elastic IP tuya por
+      subred</td>
+      <td>Termina TLS <em>o</em> lo pasa intacto al target</td>
+      <td><code>0,0225 USD/h</code> + <code>0,006 USD/NLCU-h</code></td></tr>
+    <tr><td><strong>GWLB</strong><br><span class="small">Gateway</span></td>
+      <td><strong>L3</strong> — encapsula con GENEVE (puerto 6081) y devuelve el paquete
+      intacto. Ni lee ni modifica.</td>
+      <td><code>instance</code>, <code>ip</code> <span class="small">(appliances)</span></td>
+      <td>N/A — se consume por VPC endpoint</td>
+      <td>No toca TLS: no ve el contenido</td>
+      <td><code>0,0125 USD/h</code> + <code>0,004 USD/GLCU-h</code></td></tr>
+    <tr><td><strong>CLB</strong><br><span class="small">Classic</span></td>
+      <td>L4 y un L7 muy pobre. Sin reglas, sin target groups, sin host/path routing.</td>
+      <td>Solo instancias EC2, y una app por balanceador</td>
+      <td>No</td>
+      <td>Termina TLS</td>
+      <td><code>0,025 USD/h</code> + <code>0,008 USD/GB</code> procesado</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios de <code>us-east-1</code> verificados el <strong>2026-08-30</strong>
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/current/us-east-1/index.json">Price
+List API</a> (offer code <code>AWSELB</code>, publicación 2026-08-18) y la
+<a href="https://aws.amazon.com/elasticloadbalancing/pricing/">página de precios</a>.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión, en tres preguntas</span>
+  <ol>
+    <li><strong>¿Necesitas enrutar por algo que vive dentro del HTTP</strong> (ruta, host,
+    cabecera, método)? → <strong>ALB</strong>. Si la respuesta es sí, ya está decidido: ningún
+    otro sabe leer eso.</li>
+    <li><strong>¿Te exigen una IP fija</strong> para meterla en el firewall de un tercero, o el
+    protocolo no es HTTP (MQTT, un juego por UDP, PostgreSQL, gRPC en bruto)? →
+    <strong>NLB</strong>.</li>
+    <li><strong>¿Estás desplegando <em>appliances</em> de terceros</strong> (firewalls, IDS,
+    inspección profunda) y quieres que el tráfico pase por ellos de forma transparente? →
+    <strong>GWLB</strong>. Es un producto de equipo de seguridad de red, no de equipo de
+    aplicación.</li>
+  </ol>
+  <p>Y una cuarta, para cuando las dos primeras dan «sí» a la vez: <strong>NLB delante de un
+  ALB</strong>. El NLB pone la IP fija, el ALB pone el enrutado L7. Es el
+  <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/network/application-load-balancer-target.html">target
+  type <code>alb</code></a>, y existe justo para eso.</p>
+</div>
+
+<h3 id="classic-2026">El Classic Load Balancer en 2026: qué es verdad y qué es leyenda</h3>
+<p>Internet lleva años diciendo «el CLB está deprecado». <strong>La documentación de AWS no lo
+dice</strong>, y conviene ser exacto porque la diferencia importa si te lo encuentras en una
+cuenta heredada:</p>
+<ul>
+  <li><strong>No figura en la <a href="https://docs.aws.amazon.com/general/latest/gr/service-lifecycle.html">página
+  de ciclo de vida de servicios de AWS</a></strong> (consultada el 2026-08-30), ni en
+  <em>Maintenance</em>, ni en <em>Sunset</em>, ni en <em>Full Shutdown</em>. No hay fecha de
+  retirada anunciada.</li>
+  <li><strong>Se sigue pudiendo crear y se sigue facturando</strong>: <code>0,025 USD/h</code>
+  más <code>0,008 USD/GB</code>, ambos vivos en la Price List API del 2026-08-18.</li>
+  <li><strong>Lo que sí murió fue EC2-Classic</strong> (la red, no el balanceador), retirada en
+  2022-2023. De ahí viene la confusión: son dos cosas distintas con el mismo adjetivo.</li>
+  <li><strong>Lo real es que está congelado.</strong> Todo lo que ha llegado desde 2016 —
+  reglas, target groups, Lambda como target, autenticación, WAF, gRPC, mTLS, LCU
+  reservation — ha llegado solo a ALB y NLB. La guía de AWS tiene una página entera dedicada a
+  <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/migrate-classic-load-balancer.html">migrarlo</a>.</li>
+</ul>
+<p>El veredicto, sin adornos: en un proyecto nuevo, <strong>nunca</strong>. Y si te encuentras
+uno heredado, no es una bomba de relojería con fecha: es deuda técnica sin intereses. Migra
+cuando toque, no corriendo.</p>
+
+<h2 id="piezas">Cómo funciona por dentro: las piezas transversales</h2>
+<p>ALB y NLB comparten la misma anatomía. Aprenderla una vez sirve para los dos, y para el
+ALB Controller de EKS, que no hace otra cosa que crear estos objetos por ti.</p>
+<div class="code">
+  <div class="code-label"><span>diagrama</span><span class="tag">el camino de una petición</span></div>
+<pre><code>          DNS: mi-alb-1234.elb.us-east-1.amazonaws.com
+                    │  (resuelve a 1 IP por AZ habilitada)
+        ┌───────────┴───────────┐
+   nodo en AZ-a            nodo en AZ-b        ← ELB escala estos nodos solo
+        └───────────┬───────────┘
+                    ▼
+              LISTENER :443  (HTTPS, cert de ACM, ssl_policy)
+                    │
+                    ▼  reglas en orden de PRIORIDAD (1 → 50000)
+   prioridad 10 · path-pattern /api/*    ──▶ forward  → TG "api"
+   prioridad 20 · host-header admin.*    ──▶ authenticate-oidc, luego forward → TG "admin"
+   prioridad 30 · path-pattern /health   ──▶ fixed-response 200
+   regla POR DEFECTO (sin condiciones)   ──▶ redirect 301 a https://www.example.com
+                    │
+                    ▼
+            TARGET GROUP "api"   (protocolo HTTP :8080, target_type = ip)
+              health check GET /healthz  cada 30 s
+              ├── 10.0.10.4:8080   healthy
+              ├── 10.0.11.7:8080   healthy
+              └── 10.0.10.9:8080   draining  ← deregistration_delay corriendo</code></pre>
+</div>
+
+<h3 id="listeners">Listeners</h3>
+<p>Un listener es un par <em>protocolo + puerto</em> en el que el balanceador escucha. En un
+ALB solo hay dos protocolos posibles, <code>HTTP</code> y <code>HTTPS</code>; el interesante es
+el segundo, porque es donde vive el certificado de ACM y la <code>ssl_policy</code> (la lista
+de versiones de TLS y cifrados que aceptas). Cada listener tiene una <strong>acción por
+defecto obligatoria</strong> — lo que pasa cuando ninguna regla casa.</p>
+<p>El montaje canónico son dos listeners: el <code>:80</code> cuya acción por defecto es un
+<code>redirect</code> permanente a HTTPS, y el <code>:443</code> con las reglas de verdad. Eso
+no es opcional en producción: sin el primero, un cliente que teclee <code>http://</code> recibe
+un error de conexión, no un redirect.</p>
+
+<h3 id="reglas">Reglas: condiciones, prioridades y la trampa del orden</h3>
+<p>Aquí es donde ALB deja de ser «un repartidor» y pasa a ser «un router». La mecánica, textual
+de la <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-rules.html">documentación</a>
+(consultada el 2026-08-30): «Rules are evaluated in priority order, from the lowest value to the
+highest value. The default rule is evaluated last.» <strong>La primera regla que casa gana y se
+para.</strong> Es el modelo opuesto al de EventBridge, donde todas las reglas evalúan y todas
+las que casan disparan — no los confundas.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Condición</th><th>Casa contra</th><th>Ejemplo</th><th>¿Repetible en la misma regla?</th></tr></thead>
+  <tbody>
+    <tr><td><code>path-pattern</code></td><td>La ruta de la URL (sin query)</td><td><code>/api/*</code>, <code>/img/*.png</code></td><td>No — una vez por regla</td></tr>
+    <tr><td><code>host-header</code></td><td>La cabecera <code>Host</code></td><td><code>api.example.com</code>, <code>*.dev.example.com</code></td><td>No</td></tr>
+    <tr><td><code>http-header</code></td><td>Cualquier cabecera y su valor</td><td><code>X-Canary: true</code></td><td><strong>Sí</strong></td></tr>
+    <tr><td><code>query-string</code></td><td>Pares clave/valor del query</td><td><code>version=beta</code></td><td><strong>Sí</strong></td></tr>
+    <tr><td><code>http-request-method</code></td><td>El verbo</td><td><code>POST</code>, <code>DELETE</code></td><td>No</td></tr>
+    <tr><td><code>source-ip</code></td><td>CIDR del cliente</td><td><code>203.0.113.0/24</code></td><td>No</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Las condiciones de una regla se combinan con <strong>AND</strong>; los valores dentro de una
+condición, con <strong>OR</strong>. Los topes: <strong>hasta tres cadenas de comparación por
+condición y cinco por regla</strong>, <strong>5 <em>condition values</em></strong>,
+<strong>6 comodines</strong> y <strong>5 <em>match evaluations</em></strong> por regla, ninguno
+ajustable. Y una restricción de forma: cada regla debe incluir <strong>exactamente una</strong>
+acción <code>forward</code>, <code>redirect</code> o <code>fixed-response</code>, y tiene que
+ser <strong>la última</strong>; las de autenticación van antes.</p>
+<div class="callout trap">
+  <span class="callout-title">La prioridad implícita muerde en Terraform</span>
+  <p>En <code>aws_lb_listener_rule</code>, <code>priority</code> es opcional: «leaving it unset
+  will automatically set the rule with next available priority after currently existing highest
+  rule». Es decir, <strong>el orden de tus reglas depende del orden en que se crearon</strong>,
+  no del orden en que están escritas en el fichero. Añade una regla más específica más tarde y
+  se colocará <em>detrás</em> de la genérica, que la eclipsará para siempre. En un
+  <code>for_each</code> el desastre es peor, porque el orden de creación no es el del mapa.
+  <strong>Pon siempre <code>priority</code> explícita</strong>, con huecos (10, 20, 30) para
+  poder intercalar.</p>
+</div>
+
+<h3 id="target-groups">Target groups y los cuatro tipos de target</h3>
+<p>Un target group es la unidad de salud y de configuración: el protocolo hacia el backend, el
+health check, el algoritmo de reparto, las sticky sessions y el <em>deregistration delay</em>
+viven aquí, no en el balanceador. Un target group pertenece <strong>a un solo balanceador</strong>
+(cuota no ajustable), pero un target puede estar en varios grupos.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>target_type</code></th><th>Qué registras</th><th>Cuándo</th><th>Lo que hay que saber</th></tr></thead>
+  <tbody>
+    <tr><td><code>instance</code></td><td>Un ID de EC2 (<code>i-…</code>) y un puerto</td>
+      <td>El clásico: Auto Scaling Group de EC2. Es el <strong>default</strong> del provider.</td>
+      <td>El ASG registra y desregistra solo. La instancia tiene que estar en una AZ habilitada
+      en el balanceador o queda <code>unused</code>.</td></tr>
+    <tr><td><code>ip</code></td><td>Una IP privada y un puerto</td>
+      <td>ECS en modo <code>awsvpc</code>, EKS con IP de pod, y backends fuera de la VPC del
+      balanceador.</td>
+      <td>Solo IP privadas: rangos de la VPC, RFC 1918 y RFC 6598. <strong>No se pueden
+      registrar IP públicas.</strong> Sirve para llegar a otra VPC por peering o a on-premise
+      por Direct Connect.</td></tr>
+    <tr><td><code>lambda</code></td><td>El ARN de una función (mejor, de un alias)</td>
+      <td>Colgar un endpoint serverless de un ALB que ya existe. <a href="#alb-lambda">Detalle
+      abajo.</a></td>
+      <td><strong>Solo ALB.</strong> Un único target por grupo (cuota no ajustable), health
+      checks desactivados por defecto, y no hay conexión de red: el ALB <em>invoca</em>.</td></tr>
+    <tr><td><code>alb</code></td><td>El ARN de un ALB</td>
+      <td>Poner un NLB delante de un ALB para conseguir IP fijas o exponerlo por PrivateLink.</td>
+      <td><strong>Solo NLB.</strong> Un ALB no puede tener otro ALB de target.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="health-checks">Health checks: los seis números que deciden tu MTTR</h3>
+<p>El balanceador manda una petición a cada target registrado cada <code>interval</code>
+segundos. Tras <code>unhealthy_threshold</code> fallos seguidos lo saca de rotación; tras
+<code>healthy_threshold</code> éxitos seguidos lo devuelve. Los defaults de la
+<a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html">API
+de AWS</a> para ALB (consultados el 2026-08-30):</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Parámetro</th><th>Rango</th><th>Default AWS</th><th>Default del provider Terraform</th><th>Qué decide</th></tr></thead>
+  <tbody>
+    <tr><td><code>interval</code></td><td>5–300 s</td><td>30 s <span class="small">(35 s en <code>lambda</code>)</span></td><td>30 s</td><td>Cada cuánto se pregunta</td></tr>
+    <tr><td><code>timeout</code></td><td>2–120 s</td><td>5 s <span class="small">(30 s en <code>lambda</code>)</span></td><td><strong>6 s</strong> (HTTP) / 10 s (HTTPS, TCP, TLS)</td><td>Cuánto se espera antes de contarlo como fallo</td></tr>
+    <tr><td><code>unhealthy_threshold</code></td><td>2–10</td><td><strong>2</strong></td><td><strong>3</strong></td><td>Cuánto tarda en sacarlo → <em>tu MTTR</em></td></tr>
+    <tr><td><code>healthy_threshold</code></td><td>2–10</td><td><strong>5</strong></td><td><strong>3</strong></td><td>Cuánto tarda en devolverlo</td></tr>
+    <tr><td><code>path</code></td><td>URI</td><td><code>/</code> <span class="small">(<code>/AWS.ALB/healthcheck</code> en gRPC)</span></td><td>igual</td><td>Qué se pregunta</td></tr>
+    <tr><td><code>matcher</code></td><td>200–499</td><td><code>200</code> <span class="small">(gRPC: <code>12</code>)</span></td><td>igual <span class="small">(NLB: <code>200-399</code>)</span></td><td>Qué respuesta cuenta como viva</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Con los defaults de AWS, un target que muere tarda <strong>hasta 60 segundos</strong> en
+salir de rotación (2 fallos × 30 s de intervalo), y durante ese minuto una parte de tus
+peticiones se pierde. Bajarlo a <code>interval = 10</code> lo deja en 20 segundos — a cambio de
+seis veces más peticiones de health check contra tu app.</p>
+<div class="callout trap">
+  <span class="callout-title">Cuatro cosas que sorprenden de los health checks</span>
+  <ul>
+    <li><strong>Si fallan <em>todos</em>, el ALB hace <em>fail open</em>.</strong> Textual: «if
+    all targets fail health checks at the same time in all enabled Availability Zones, the load
+    balancer fails open», y manda tráfico a todos igualmente. La lógica es que un health check
+    roto es más probable que una flota entera muerta. Consecuencia práctica: <strong>un
+    <code>/healthz</code> mal escrito no te da 503, te da errores aleatorios</strong>, que es
+    mucho más difícil de diagnosticar.</li>
+    <li><strong>El security group tiene que permitir el puerto del health check</strong>, no
+    solo el del tráfico. Si el health check va a un puerto distinto y el SG no lo abre, todos
+    los targets salen <code>unhealthy</code> con <code>Target.Timeout</code> y el
+    <code>apply</code> no dice nada.</li>
+    <li><strong>El health check del ALB y el del Auto Scaling Group son dos cosas
+    distintas.</strong> Por defecto el ASG solo mira si la instancia EC2 está <em>running</em>:
+    una app colgada en una instancia viva es <code>unhealthy</code> para el ALB (deja de recibir
+    tráfico) pero <strong>sana para el ASG</strong> (no la reemplaza). Se une con
+    <code>health_check_type = "ELB"</code> en el ASG; sin eso, la instancia rota se queda ahí
+    para siempre.</li>
+    <li><strong>Los health checks de un target group <code>lambda</code> se facturan como
+    invocaciones.</strong> «You are charged for health checks as you are for any Lambda function
+    invocation.» Por eso vienen desactivados de fábrica.</li>
+  </ul>
+</div>
+
+<h3 id="drenaje">Drenaje, calentamiento y pegajosidad</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Atributo</th><th>Default</th><th>Rango</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td><code>deregistration_delay.timeout_seconds</code></td><td><strong>300 s</strong></td><td>0–3 600</td>
+      <td>Cuánto espera antes de dar por muerto a un target que se está retirando. Mientras
+      tanto está <code>draining</code>: no recibe peticiones nuevas, pero termina las que
+      tenía.</td></tr>
+    <tr><td><code>slow_start.duration_seconds</code></td><td><strong>0</strong> (desactivado)</td><td>30–900, o 0</td>
+      <td>Sube linealmente el tráfico de un target recién sano en vez de darle su parte de
+      golpe. Para JVM que compilan en caliente, cachés frías, pools de conexión que crear.</td></tr>
+    <tr><td><code>stickiness.type = lb_cookie</code></td><td>desactivada</td><td>1 s – 7 días</td>
+      <td>El ALB emite una cookie <code>AWSALB</code> cifrada y manda al mismo target mientras
+      dure.</td></tr>
+    <tr><td><code>stickiness.type = app_cookie</code></td><td>desactivada</td><td>1 s – 7 días</td>
+      <td>Igual, pero la duración la marca <em>tu</em> cookie de sesión. Necesita
+      <code>cookie_name</code>.</td></tr>
+    <tr><td><code>load_balancing.algorithm.type</code></td><td><code>round_robin</code></td>
+      <td><code>least_outstanding_requests</code>, <code>weighted_random</code></td>
+      <td>El segundo es el bueno cuando las peticiones tienen coste muy desigual. El tercero
+      habilita la mitigación automática de anomalías.</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Lo que la doc dice y casi nadie lee sobre el drenaje</strong>: «If a deregistering
+target terminates the connection before the deregistration delay elapses, the client receives a
+500-level error response». O sea: el <em>deregistration delay</em> es un permiso, no una
+garantía. Si tu ASG mata la instancia en cuanto empieza el drenaje, esos 300 segundos no sirven
+de nada. La pieza que falta se llama <em>lifecycle hook</em> del ASG, y va del lado del ASG, no
+del balanceador.</p>
+<p>Y sobre las sticky sessions, dos incompatibilidades que rompen el <code>apply</code>:
+<strong>no funcionan con cross-zone desactivado</strong> («Attempts to enable sticky sessions
+while cross-zone load balancing is disabled fail») ni con el algoritmo
+<code>weighted_random</code>. El <em>slow start</em>, por su parte, es incompatible con
+<code>least_outstanding_requests</code> y con <code>weighted_random</code>: solo va con round
+robin.</p>
+
+<h2 id="alb">ALB a fondo</h2>
+
+<h3 id="alb-acciones">Las acciones: no todo es reenviar</h3>
+<p>La lista de tipos de acción de una regla es más larga de lo que la gente cree, y tres de
+ellas <strong>no tocan el backend en absoluto</strong> — el ALB responde él:</p>
+<ul>
+  <li><strong><code>forward</code></strong> — a uno o varios target groups. Con varios, cada uno
+  lleva un <code>weight</code> (0–999): así se hacen canary y blue/green sin ninguna herramienta
+  extra.</li>
+  <li><strong><code>redirect</code></strong> — 301 o 302, con las variables reservadas
+  <code>#{protocol}</code>, <code>#{host}</code>, <code>#{port}</code>, <code>#{path}</code> y
+  <code>#{query}</code>. El redirect HTTP→HTTPS de una línea sale de aquí, y
+  <strong>no cuesta ninguna petición al backend</strong>.</li>
+  <li><strong><code>fixed-response</code></strong> — el ALB devuelve un cuerpo literal
+  (<code>text/plain</code>, <code>text/html</code>, <code>application/json</code>…) con un 2XX,
+  4XX o 5XX. Una página de mantenimiento, un <code>/robots.txt</code>, un 403 para una IP:
+  cero backend.</li>
+  <li><strong><code>authenticate-cognito</code> y <code>authenticate-oidc</code></strong> — <a href="#alb-auth">abajo</a>.</li>
+  <li><strong><code>jwt-validation</code></strong> — novedad de nov-2025; <a href="#novedades">abajo</a>.</li>
+</ul>
+
+<h3 id="alb-auth">Autenticación integrada: el login que no escribes</h3>
+<p>Esta es la funcionalidad de ALB que menos gente conoce y más trabajo ahorra. Pones una acción
+<code>authenticate-oidc</code> (o <code>authenticate-cognito</code>) delante del
+<code>forward</code>, y el balanceador hace el <strong>authorization code flow completo</strong>:
+redirige al IdP, recoge el <em>grant code</em>, lo canjea en el <em>token endpoint</em>, llama al
+<em>user info endpoint</em>, y devuelve al usuario a su URL original con una cookie de sesión
+cifrada. Tu aplicación nunca ve un token: recibe cabeceras.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Cabecera que llega al target</th><th>Contenido</th><th>¿Verificable?</th></tr></thead>
+  <tbody>
+    <tr><td><code>x-amzn-oidc-data</code></td><td>Las claims del usuario en un JWT firmado por el ALB con ES256</td>
+      <td><strong>Sí</strong> — y es la única que debes usar. Verifica la firma contra
+      <code>https://public-keys.auth.elb.{region}.amazonaws.com/{kid}</code> <em>y</em> que el
+      campo <code>signer</code> sea el ARN de tu ALB.</td></tr>
+    <tr><td><code>x-amzn-oidc-accesstoken</code></td><td>El access token en claro</td><td><strong>No</strong> — «unsigned plaintext, provided for backward compatibility»</td></tr>
+    <tr><td><code>x-amzn-oidc-identity</code></td><td>El <code>sub</code> en claro</td><td><strong>No</strong> — misma advertencia</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Los números que hay que saber antes de montarlo, de la
+<a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html">guía
+oficial</a> (consultada el 2026-08-30):</p>
+<ul>
+  <li><strong>Solo listeners HTTPS.</strong> Las dos acciones «are supported only with HTTPS
+  listeners». No hay versión en claro.</li>
+  <li><strong><code>SessionTimeout</code> por defecto: 7 días.</strong> Se puede bajar hasta
+  1 segundo. Ojo: la <em>cookie</em> caduca a 7 días fijos y no se configura; lo que se
+  configura es la sesión, que va cifrada dentro.</li>
+  <li><strong><code>OnUnauthenticatedRequest</code> tiene tres valores y decide el producto</strong>:
+  <code>authenticate</code> (default: te manda al login), <code>allow</code> (pasa sin claims —
+  la vista pública de una app que también tiene vista personalizada) y <code>deny</code> (401
+  seco, lo que quieres para llamadas AJAX).</li>
+  <li><strong>Si las claims + el access token superan 11 KB, el ALB devuelve 500</strong> e
+  incrementa la métrica <code>ELBAuthUserClaimsSizeExceeded</code>. Con un IdP corporativo que
+  mete cincuenta grupos en el token, esto pasa de verdad.</li>
+  <li><strong>El ALB tiene que poder llegar al IdP, y solo por IPv4.</strong> Un ALB interno o
+  con <code>dualstack-without-public-ipv4</code> necesita un NAT Gateway para hablar con el
+  IdP — otro recurso con cronómetro que aparece por sorpresa.</li>
+  <li><strong>El cliente tiene 15 minutos</strong> para completar el login; pasados, 401. No es
+  configurable.</li>
+  <li><strong>Cognito no está en todas las regiones</strong> para esta integración: la guía lista
+  las soportadas explícitamente.</li>
+</ul>
+
+<h3 id="alb-lambda">Lambda como target: la puerta barata cuando el ALB ya existe</h3>
+<p>Un target group de tipo <code>lambda</code> no abre ninguna conexión de red: «The load
+balancer invokes the Lambda function directly instead of using a network connection. Therefore,
+there are no requirements for the outbound rules of the Application Load Balancer security
+groups.» El evento que recibe tu handler es <em>otro formato distinto</em> del de API Gateway —
+lleva <code>requestContext.elb.targetGroupArn</code>, <code>httpMethod</code>,
+<code>path</code>, <code>headers</code>, <code>body</code> e <code>isBase64Encoded</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Tamaño del <em>request body</em> hacia la función</td><td><code>1 MB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Tamaño del JSON de respuesta</td><td><code>1 MB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Funciones por target group</td><td><code>1</code></td><td><strong>No</strong></td></tr>
+    <tr><td>WebSockets</td><td>No soportado — el <em>upgrade</em> recibe <code>400</code></td><td>No</td></tr>
+    <tr><td>Automatic Target Weights</td><td>No soportado</td><td>No</td></tr>
+    <tr><td>Cross-zone desactivado</td><td>Incompatible con targets <code>lambda</code></td><td>No</td></tr>
+    <tr><td>Streaming de respuesta</td><td><strong>No</strong> — la integración con Lambda no hace <em>chunked transfer encoding</em></td><td>No</td></tr>
+  </tbody>
+</table>
+</div>
+<p>El permiso funciona igual que con API Gateway y falla igual de mudo: hace falta un
+<code>aws_lambda_permission</code> con principal
+<code>elasticloadbalancing.amazonaws.com</code> y <code>source_arn</code> apuntando
+<strong>al ARN del target group</strong> (no al del balanceador). Y el consejo de la propia
+doc: registra un <strong>alias</strong>, no la función a pelo, para poder cambiar de versión
+sin tocar el target group.</p>
+<div class="callout cost">
+  <span class="callout-title">La cuenta que decide entre ALB y HTTP API para una Lambda</span>
+  <p>El ALB no cobra por petición, cobra por hora y por LCU — pero los targets Lambda consumen
+  LCU <strong>dos veces y media más rápido</strong>: la dimensión de bytes procesados es
+  <code>0,4 GB/h</code> por LCU en lugar de <code>1 GB/h</code>. Aun así, la comparación real es
+  contra los <code>16,43 USD/mes</code> del reloj: una HTTP API a 1,00 USD/millón no alcanza esa
+  cifra hasta los <strong>16 millones de peticiones al mes</strong>. Por debajo de eso, si el
+  ALB no existe ya por otro motivo, <strong>no lo pongas</strong>. Los detalles del otro lado de
+  la frontera, en <a href="./aws-apigateway.html#decision">la tabla de decisión de API
+  Gateway</a>.</p>
+</div>
+
+<h3 id="alb-mas">HTTP/2, gRPC, WAF y targets fuera de la VPC</h3>
+<ul>
+  <li><strong>HTTP/2 hacia el cliente está activado de fábrica</strong>
+  (<code>routing.http2.enabled</code>, default <code>true</code>). Hacia el <em>target</em>, en
+  cambio, el default es HTTP/1.1: hay que pedirlo con
+  <code>protocol_version = "HTTP2"</code> en el target group. El ALB traduce entre ambos, y ojo:
+  con <code>least_outstanding_requests</code>, «it converts the request to multiple HTTP/1.1
+  requests» y el algoritmo cuenta cada una por separado.</li>
+  <li><strong>gRPC es un <code>protocol_version = "GRPC"</code></strong> y cambia dos defaults:
+  el path del health check pasa a <code>/AWS.ALB/healthcheck</code> y el
+  <code>matcher</code> pasa a códigos gRPC (0–99, default <code>12</code>, que es
+  <code>UNIMPLEMENTED</code> — sí, el default es «responde lo que sea»). Es la forma barata de
+  publicar gRPC sin montar Envoy.</li>
+  <li><strong>WAF se asocia directo al ALB</strong>, sin CloudFront de por medio — una de las
+  ventajas reales del ALB sobre una HTTP API. Con
+  <code>waf.fail_open.enabled</code> decides qué pasa si el propio WAF no responde: pasar el
+  tráfico (<code>true</code>) o cortarlo (<code>false</code>, el default).</li>
+  <li><strong>Targets fuera de la VPC.</strong> Con <code>target_type = "ip"</code> puedes
+  registrar direcciones de <em>otra</em> VPC por peering o de un datacenter propio por Direct
+  Connect / VPN. La restricción: solo IP privadas (rangos de la VPC, RFC 1918, RFC 6598);
+  <strong>una IP pública nunca se puede registrar</strong>.</li>
+  <li><strong>El ALB reescribe cabeceras por defecto.</strong> <code>xff_header_processing.mode
+  = append</code> añade la IP del cliente a <code>X-Forwarded-For</code>, y
+  <code>preserve_host_header = false</code> significa que tu app <em>no</em> ve el
+  <code>Host</code> original salvo que lo pidas. Dos fuentes clásicas de «funciona en local y no
+  detrás del balanceador».</li>
+</ul>
+
+<h2 id="nlb">NLB: lo que cambia cuando bajas a capa 4</h2>
+<p>El NLB no lee tu tráfico: hace <em>flow hashing</em>. Para TCP, el hash combina protocolo, IP
+y puerto de origen, IP y puerto de destino y el número de secuencia; para UDP, la 5-tupla sin
+secuencia. Cada conexión va entera a un target, y conexiones distintas del mismo cliente pueden
+ir a targets distintos.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tema</th><th>Cómo funciona</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Preservar la IP de origen</strong></td>
+      <td>Es la razón número uno para elegir NLB. Con <code>target_type = instance</code> el
+      target ve la IP real del cliente (el NLB es transparente); con <code>ip</code> depende de
+      <code>preserve_client_ip</code>. Cuando no se preserva, el equivalente L4 de
+      <code>X-Forwarded-For</code> es <strong>proxy protocol v2</strong>
+      (<code>proxy_protocol_v2 = true</code>) — pero el target tiene que saber parsearlo o verá
+      basura al principio de cada conexión.</td></tr>
+    <tr><td><strong>IP fija y Elastic IP</strong></td>
+      <td>«Elastic Load Balancing creates a network interface for each Availability Zone you
+      enable. Each load balancer node in the Availability Zone uses this network interface to get
+      a static IP address.» Si es <em>internet-facing</em>, puedes además asociar
+      <strong>una Elastic IP tuya por subred</strong> — la IP que le das al firewall del cliente
+      y que sobrevive a recrear el balanceador.</td></tr>
+    <tr><td><strong>TLS: terminar o pasar</strong></td>
+      <td>Dos modos, y la elección es de negocio. Listener <code>TLS</code>: el NLB termina con
+      un certificado de ACM y habla en claro (o TLS otra vez) con el target — descargas a la app
+      y puedes inspeccionar. Listener <code>TCP</code>: el NLB no toca nada y el <em>handshake</em>
+      llega intacto al target — <strong>TLS extremo a extremo, mTLS que el balanceador ni ve, y
+      cumplimiento normativo</strong>. La factura también cambia: la dimensión TLS del NLCU es
+      brutalmente más cara (50 conexiones/s por NLCU frente a 800 en TCP).</td></tr>
+    <tr><td><strong>Cross-zone</strong></td>
+      <td><strong>Desactivado por defecto</strong>, al revés que el ALB. Cada nodo reparte solo
+      entre los targets de <em>su</em> zona. Encenderlo mejora el balanceo y
+      <a href="#cross-zone">te mete una línea de data transfer en la factura</a>.</td></tr>
+    <tr><td><strong>Zonal DNS affinity</strong></td>
+      <td><code>dns_record_client_routing_policy</code>: con
+      <code>availability_zone_affinity</code>, un cliente en <code>us-east-1a</code> resuelve
+      preferentemente la IP del nodo de <code>us-east-1a</code>. Menos latencia y menos
+      transferencia entre zonas, a cambio de un reparto menos uniforme.</td></tr>
+    <tr><td><strong>Security groups</strong></td>
+      <td>Los tiene desde agosto de 2023 — antes no, y por eso hay tanta guía vieja que dice que
+      hay que filtrar en el target. <strong>Trampa de Terraform</strong>: «security groups cannot
+      be added if none are currently present, and cannot all be removed once added», y hacerlo
+      <strong>fuerza recrear el balanceador</strong> (y con él, perder las IP si no eran
+      Elastic).</td></tr>
+    <tr><td><strong>Idle timeout</strong></td>
+      <td><code>tcp_idle_timeout_seconds</code> en el listener: <strong>350 s</strong> por
+      defecto, ajustable de 60 a 6 000. En el ALB el equivalente es
+      <code>idle_timeout</code>, <strong>60 s</strong> por defecto.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout why">
+  <span class="callout-title">Cuándo un NLB delante de un ALB — y cuándo es cargo-cult</span>
+  <p><strong>Sí tiene sentido</strong> en tres casos concretos: (1) un tercero exige IP fijas en
+  su firewall y tu app necesita enrutado L7; (2) quieres exponer tu servicio a otras cuentas por
+  <strong>PrivateLink</strong>, que solo acepta NLB como servicio de endpoint; (3) necesitas
+  <a href="https://aws.amazon.com/global-accelerator/">Global Accelerator</a> o un puerto que el
+  ALB no escucha.</p>
+  <p><strong>No tiene sentido</strong> «por rendimiento» ni «por seguridad»: añades un salto,
+  otro <code>0,0225 USD/h</code> y otro juego de health checks, y el ALB de detrás sigue siendo
+  el cuello de botella real. Si lo único que quieres es una IP que no cambie para un registro
+  DNS, la respuesta es un <strong>alias de Route 53</strong>, que es gratis y resuelve al ALB
+  directamente.</p>
+</div>
+
+<h2 id="novedades">Qué ha cambiado en 2024-2026</h2>
+<p>Si tu conocimiento de ELB es de 2023, cuatro cosas de esta lista te sorprenderán — y dos de
+ellas invalidan consejos que siguen circulando por internet. Fuentes: los
+<em>document history</em> de <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/doc-history.html">ALB</a>
+y <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/network/doc-history.html">NLB</a>,
+consultados el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Fecha</th><th>Qué</th><th>Por qué importa</th></tr></thead>
+  <tbody>
+    <tr><td>2026-07-10</td><td><strong>Reglas de listener en NLB</strong></td>
+      <td>Rompe el mantra «el NLB no tiene reglas». De momento solo enrutan por tipo de dirección
+      de origen (IPv4 vs IPv6) a target groups distintos con un solo balanceador dual-stack,
+      pero la puerta está abierta.</td></tr>
+    <tr><td>2025-11-21</td><td><strong>Validación de JWT en el ALB</strong> (<code>jwt-validation</code>)</td>
+      <td>El ALB valida tokens firmados contra un <code>jwks_endpoint</code> y comprueba claims
+      adicionales, sin código y sin flujo de login. Es la pieza máquina-a-máquina que le faltaba
+      frente al <em>authorizer</em> JWT de API Gateway. Ya está en el provider de Terraform como
+      tipo de acción.</td></tr>
+    <tr><td>2025-11-19</td><td><strong>Weighted target groups en la acción por defecto del NLB</strong></td>
+      <td>Canary y blue/green en L4, que antes solo tenía el ALB.</td></tr>
+    <tr><td>2025-11-13</td><td><strong>QUIC y TCP_QUIC en NLB</strong></td>
+      <td>HTTP/3 sin proxy propio. El target se selecciona por <em>Server ID</em> del Connection
+      ID, lo que permite migrar de red sin romper la conexión. En Terraform aparece como
+      <code>quic_server_id</code> en el <code>aws_lb_target_group_attachment</code>.</td></tr>
+    <tr><td>2025-10-15</td><td><strong>Transforms: reescritura de host y de URL</strong></td>
+      <td><strong>La más gorda.</strong> Hasta 2025, «el ALB no sabe reescribir el path» era
+      cierto, y era el motivo nº 1 para meter un NGINX detrás. Ahora una regla puede llevar un
+      <code>host-header-rewrite</code> y un <code>url-rewrite</code> con expresión regular y
+      grupos de captura (<code>$1</code>, <code>$2</code>). Sin lookaheads, lookbehinds,
+      backreferences ni clases Unicode.</td></tr>
+    <tr><td>2025-02-13</td><td><strong>Deshabilitar una AZ en un NLB existente</strong></td>
+      <td>Antes solo se podían añadir. Sigue siendo así en Terraform para <code>subnets</code>:
+      quitar una fuerza recrear.</td></tr>
+    <tr><td>2024-11-20</td><td><strong>Load Balancer Capacity Unit Reservation</strong> (ALB y NLB)</td>
+      <td>Reservas un mínimo de LCU para que el balanceador esté precalentado ante un pico
+      previsto (un lanzamiento, un Black Friday) en vez de pedirle a AWS un <em>pre-warm</em> por
+      ticket. Se factura por LCU reservada y minuto, al mismo precio unitario, más el exceso.
+      <a href="#coste-reserva">Detalle en coste.</a></td></tr>
+    <tr><td>2024-05</td><td><strong><code>dualstack-without-public-ipv4</code> en ALB</strong></td>
+      <td>Un ALB de cara a internet sin ninguna IPv4 pública: los clientes entran por IPv6.
+      Es la forma documentada de <strong>esquivar el cargo de IPv4 pública</strong> —
+      <a href="#ipv4">abajo</a>. Coste: la autenticación integrada deja de funcionar sin NAT
+      Gateway, porque el ALB solo habla IPv4 con el IdP.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="coste">Cuánto cuesta: el LCU explicado de verdad</h2>
+<p>La factura de un balanceador tiene <strong>dos líneas</strong>, y confundirlas es el error
+que hace que la gente crea que «un ALB son céntimos»:</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Hora de Application Load Balancer</strong></td><td><span class="tag-cost hour">por hora</span></td>
+      <td><code>0,0225 USD/h</code></td><td>«per Application LoadBalancer-hour <strong>(or partial hour)</strong>» — una fracción de hora cuenta como hora entera</td></tr>
+    <tr><td>LCU-hora de ALB</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,008 USD</code></td><td>Solo la dimensión más alta de las cuatro</td></tr>
+    <tr><td><strong>Hora de Network Load Balancer</strong></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,0225 USD/h</code></td><td>Mismo precio que el ALB</td></tr>
+    <tr><td>NLCU-hora</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,006 USD</code></td><td>Dimensiones distintas según TCP / UDP / TLS</td></tr>
+    <tr><td>Hora de Gateway Load Balancer</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,0125 USD/h</code></td><td>+ <code>0,004 USD</code> por GLCU-hora</td></tr>
+    <tr><td>Hora de Classic Load Balancer</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,025 USD/h</code></td><td>+ <code>0,008 USD/GB</code> procesado — el modelo viejo, sin LCU</td></tr>
+    <tr><td><strong>Dirección IPv4 pública</strong></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,005 USD/h</code> cada una</td><td><a href="#ipv4">Al menos una por AZ habilitada</a>. Se factura en VPC, no en ELB</td></tr>
+    <tr><td>Trust store de mTLS asociado a un ALB</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,005 USD/h</code></td><td>Otra línea con cronómetro que se olvida</td></tr>
+    <tr><td>LCU reservada (ALB / NLB / GWLB)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,008</code> / <code>0,006</code> / <code>0,004 USD</code></td><td>Mismo precio unitario, pero se paga esté o no usada</td></tr>
+    <tr><td>Transferencia de datos</td><td><span class="tag-cost usage">por uso</span></td><td>La estándar de EC2/VPC</td><td>«You will incur standard AWS data transfer charges, in addition to any ELB charges»</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios de <code>us-east-1</code>, verificados el <strong>2026-08-30</strong>
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/current/us-east-1/index.json">Price
+List API de <code>AWSELB</code></a> (publicación 2026-08-18), la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/current/us-east-1/index.json">de
+<code>AmazonVPC</code></a> para la IPv4 pública (publicación 2026-07-24) y la
+<a href="https://aws.amazon.com/elasticloadbalancing/pricing/">página de precios</a>.</p>
+
+<h3 id="lcu">Qué es un LCU, y por qué nadie lo explica</h3>
+<p>Un <strong>Load Balancer Capacity Unit</strong> es una unidad sintética de trabajo. AWS mide
+cuatro dimensiones a la vez, calcula cuántos LCU consume cada una, y —esta es la frase que
+cambia toda la aritmética, textual de la página de precios— <strong>«You are charged only on the
+dimension with the highest usage»</strong>. No se suman. El LCU de una hora es
+<code>max(d₁, d₂, d₃, d₄)</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>#</th><th>Dimensión (ALB)</th><th>1 LCU equivale a</th><th>Qué la dispara</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Conexiones nuevas</td><td><strong>25 conexiones nuevas/segundo</strong></td>
+      <td>Clientes sin <em>keep-alive</em>. Un móvil que abre y cierra conexión en cada petición
+      cuenta 1; un navegador que reutiliza una conexión para cien peticiones, también 1.</td></tr>
+    <tr><td>2</td><td>Conexiones activas</td><td><strong>3 000 conexiones activas/minuto</strong>
+      <br><span class="small">1 500 si usas mTLS</span></td>
+      <td>Conexiones abiertas simultáneas. Es <em>la</em> dimensión de WebSockets y
+      <em>long polling</em>.</td></tr>
+    <tr><td>3</td><td>Bytes procesados</td><td><strong>1 GB/hora</strong>
+      <br><span class="small">0,4 GB/hora con targets Lambda</span></td>
+      <td>El tráfico real, en los dos sentidos. La dimensión que domina en cuanto sirves
+      ficheros o respuestas grandes.</td></tr>
+    <tr><td>4</td><td>Evaluaciones de regla</td><td><strong>1 000 evaluaciones/segundo</strong>
+      <br><span class="small">las 10 primeras reglas procesadas son gratis</span></td>
+      <td>Peticiones/segundo × reglas procesadas por encima de 10. Con menos de 10 reglas esta
+      dimensión vale <strong>cero</strong> siempre.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Las del NLB son tres, y cambian radicalmente según el protocolo del listener — este es el
+motivo real de que terminar TLS en un NLB sea caro:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tráfico</th><th>Conexiones/flujos nuevos por segundo</th><th>Conexiones/flujos activos</th><th>Bytes</th></tr></thead>
+  <tbody>
+    <tr><td>TCP</td><td><strong>800</strong>/s</td><td>100 000</td><td>1 GB/h</td></tr>
+    <tr><td>UDP</td><td>400/s</td><td>50 000</td><td>1 GB/h</td></tr>
+    <tr><td><strong>TLS</strong></td><td><strong>50</strong>/s <span class="small">(16× peor que TCP)</span></td><td>3 000</td><td>1 GB/h</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="ejemplo">El ejemplo numérico del proyecto 04</h3>
+<p>Supongamos tu laboratorio en funcionamiento: <strong>200 peticiones por hora</strong> (tú
+probando, más el health check), respuestas de <strong>50 KB</strong>, un navegador con
+keep-alive, y <strong>tres reglas</strong> en el listener. Dimensión por dimensión:</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Dimensión</th><th>Tu consumo</th><th>Umbral de 1 LCU</th><th>LCU</th></tr></thead>
+  <tbody>
+    <tr><td>Conexiones nuevas</td><td>≈ 0,06/s</td><td>25/s</td><td><code>0,002</code></td></tr>
+    <tr><td>Conexiones activas</td><td>≈ 5/min</td><td>3 000/min</td><td><code>0,002</code></td></tr>
+    <tr><td>Bytes procesados</td><td>200 × 50 KB = <strong>0,01 GB/h</strong></td><td>1 GB/h</td><td><code>0,010</code> ← el máximo</td></tr>
+    <tr><td>Evaluaciones de regla</td><td>3 reglas, por debajo de las 10 gratis</td><td>1 000/s</td><td><code>0,000</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Se factura solo la mayor: <strong>0,01 LCU-hora × 0,008 USD = 0,00008 USD/h</strong>. En un
+mes entero: <strong>6 céntimos</strong>. Y ahora la comparación que es el objetivo de esta
+sección:</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Línea</th><th>Modelo</th><th>Un mes de laboratorio (730 h)</th></tr></thead>
+  <tbody>
+    <tr><td>LCU consumidas</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,06 USD</code></td></tr>
+    <tr><td>Horas de ALB</td><td><span class="tag-cost hour">por hora</span></td><td><strong><code>16,43 USD</code></strong></td></tr>
+    <tr><td>IPv4 públicas (2 AZ)</td><td><span class="tag-cost hour">por hora</span></td><td><strong><code>7,30 USD</code></strong></td></tr>
+    <tr><td><strong>Total</strong></td><td></td><td><strong><code>23,79 USD</code></strong> — el 99,7% es cronómetro</td></tr>
+  </tbody>
+</table>
+</div>
+<p>El LCU de un laboratorio <strong>es cero a efectos prácticos</strong>. Todo el coste de un
+balanceador de aprendizaje es el reloj, y el reloj se para con <code>terraform destroy</code>.
+Para ver la otra cara: a 1 000 peticiones/segundo de 100 KB (360 GB/h) la dimensión de bytes da
+<strong>360 LCU</strong>, o <code>2,88 USD/h</code> ≈ <strong>2 100 USD/mes</strong>, y entonces
+la hora fija es el ruido. El cruce está en torno a <strong>2,8 GB/hora</strong> de tráfico
+procesado: por debajo manda el reloj, por encima manda el LCU.</p>
+
+<h3 id="ipv4">La línea que no aparece en la página de precios de ELB</h3>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p>Desde el <strong>1 de febrero de 2024</strong>, AWS cobra <code>0,005 USD/h</code> por cada
+  dirección <strong>IPv4 pública</strong>, y la página de precios de ELB lo dice de pasada:
+  «You will incur standard public IPv4 address charges for all the addresses you consume with
+  load balancers». Un ALB de cara a internet tiene <strong>al menos una IP pública por zona
+  habilitada</strong> — y el mínimo de un ALB son dos zonas.</p>
+  <p>Resultado: el ALB de un curso, que todo el mundo apunta como «0,0225 USD/h», cuesta en
+  realidad <strong>0,0325 USD/h</strong>. Un <strong>44% más</strong>, en una línea que aparece
+  en la factura bajo <em>VPC</em>, no bajo <em>Elastic Load Balancing</em>, y que por eso nadie
+  relaciona con el balanceador. Estas IP son gestionadas por el servicio (aparecen en
+  <code>describe-addresses</code> con <code>service_managed = "ALB"</code>, no cuentan contra tu
+  cuota de EIP y no se pueden liberar a mano).</p>
+  <p>Dos formas de evitarlo, y ninguna es gratis: un <strong>ALB interno</strong> no consume
+  IPv4 pública (pero entonces no es la puerta a internet), y
+  <code>dualstack-without-public-ipv4</code> tampoco (pero deja fuera a los clientes sin IPv6 y
+  rompe la autenticación integrada sin NAT Gateway).</p>
+</div>
+
+<h3 id="cross-zone">Cross-zone: gratis en ALB, con letra pequeña en NLB</h3>
+<p>El <em>cross-zone load balancing</em> es que el nodo de una zona reparta también entre targets
+de las otras. El comportamiento por defecto y la factura no coinciden entre productos:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>ALB</th><th>NLB</th></tr></thead>
+  <tbody>
+    <tr><td>Default a nivel de balanceador</td><td><strong>Siempre activado</strong>, y «cannot be changed at the load balancer level»</td><td><strong>Desactivado</strong></td></tr>
+    <tr><td>Se puede apagar</td><td>Sí, pero solo <strong>por target group</strong></td><td>Sí, en los dos niveles</td></tr>
+    <tr><td>Transferencia entre zonas</td><td><strong>Incluida.</strong> No hay cargo por el tráfico entre el nodo y un target de otra AZ</td><td><strong><code>0,01 USD/GB en cada sentido</code></strong> cuando el tráfico cruza AZ</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">La asimetría está documentada en el blog de redes de AWS, <a
+href="https://aws.amazon.com/blogs/networking-and-content-delivery/exploring-data-transfer-costs-for-aws-network-load-balancers/">Exploring
+Data Transfer Costs for AWS Network Load Balancers</a> (8 de abril de 2025), que lo dice
+explícitamente: «Those same scenarios aren't charged when using ALBs and CLBs». Verificado el
+2026-08-30.</p>
+<p>La consecuencia práctica es contraintuitiva: <strong>encender cross-zone en un NLB con mucho
+tráfico puede costar más que el propio NLB</strong>. A 10 TB/mes cruzando zonas son
+<code>0,01 × 10 000 × 2 = 200 USD/mes</code> frente a los <code>16,43 USD</code> del
+balanceador. Por eso el default de NLB es «off» y el de ALB es «on»: no es un capricho, es que
+en uno cuesta y en el otro no.</p>
+
+<h3 id="coste-reserva">La reserva de capacidad, y por qué no la quieres todavía</h3>
+<p>Desde noviembre de 2024 puedes fijar un mínimo de LCU para que el balanceador esté
+precalentado ante un pico previsto. Se factura, textual: «the number of Load Balancer Capacity
+Units (LCU) reserved per minute, and additional number of LCUs used per minute beyond your
+reserved LCUs». Es decir: <strong>pagas la reserva la use o no</strong>, y encima el exceso. La
+cuota por defecto de LCU reservadas por región es <code>0</code>: hay que pedirla. Es una
+herramienta para lanzamientos con hora conocida, no para uso normal — y desde luego no para un
+laboratorio.</p>
+
+<h2 id="limites">Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html">Quotas
+for your Application Load Balancers</a>, consultada el 2026-08-30. Región
+<code>us-east-1</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>ALB por región</td><td><code>50</code></td><td>Sí</td></tr>
+    <tr><td>Target groups por región</td><td><code>3 000</code> <span class="small">(compartida entre ALB y NLB)</span></td><td>Sí</td></tr>
+    <tr><td><strong>Target groups por ALB</strong></td><td><code>100</code></td><td><strong>No</strong></td></tr>
+    <tr><td><strong>Target groups por acción</strong> (canary)</td><td><code>5</code></td><td><strong>No</strong></td></tr>
+    <tr><td><strong>Load balancers por target group</strong></td><td><code>1</code></td><td><strong>No</strong> — un target group no se comparte entre dos balanceadores</td></tr>
+    <tr><td>Targets por ALB</td><td><code>1 000</code></td><td>Sí</td></tr>
+    <tr><td>Targets por target group</td><td><code>1 000</code> <span class="small">(instancias o IP)</span></td><td>Sí</td></tr>
+    <tr><td><strong>Funciones Lambda por target group</strong></td><td><code>1</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Listeners por ALB</td><td><code>50</code></td><td>Sí</td></tr>
+    <tr><td>Reglas por ALB <span class="small">(sin contar la default)</span></td><td><code>100</code></td><td>Sí</td></tr>
+    <tr><td><strong>Condition values por regla</strong></td><td><code>5</code></td><td><strong>No</strong></td></tr>
+    <tr><td><strong>Comodines por regla</strong></td><td><code>6</code></td><td><strong>No</strong></td></tr>
+    <tr><td><strong>Match evaluations por regla</strong></td><td><code>5</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Certificados por ALB <span class="small">(sin contar el default)</span></td><td><code>25</code></td><td>Sí</td></tr>
+    <tr><td>Trust stores por cuenta</td><td><code>20</code></td><td>Sí</td></tr>
+    <tr><td><strong>Listeners con mTLS en modo <em>verify</em> por balanceador</strong></td><td><code>2</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Cabecera de petición completa</td><td><code>64 K</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Cabecera de respuesta completa</td><td><code>32 K</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Línea de petición / cabecera individual</td><td><code>16 K</code></td><td><strong>No</strong></td></tr>
+    <tr><td><strong>Subredes mínimas de un ALB</strong></td><td><code>2</code>, en AZ distintas, con al menos <code>/27</code> y <strong>8 IP libres</strong> cada una</td><td><strong>No</strong></td></tr>
+    <tr><td>LCU reservadas por región</td><td><code>0</code></td><td>Sí — hay que pedirla para usar la reserva</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">El límite que rompe una VPC mal dimensionada</span>
+  <p>Las <strong>8 IP libres por subred</strong> no son un consejo: «Without them your Application
+  Load Balancer could experience difficulties with node replacement attempts, causing it to enter
+  a failed state». Y si se queda sin IP mientras intenta escalar, «the stalled scaling attempt
+  might cause 5xx errors or timeouts». Un ALB en una subred <code>/28</code> apretada de un
+  proyecto 04 funciona en pruebas y se rompe justo cuando llega el tráfico. Dimensiona las
+  subredes públicas con holgura: no valen para nada más y las IP privadas son gratis.</p>
+</div>
+
+<h2 id="contenedores">Con ECS y con EKS</h2>
+<h3>ECS: un target group por servicio, y el puerto lo elige el <em>scheduler</em></h3>
+<p>La integración con ECS es la razón histórica de que existan los target groups. Dos modos:</p>
+<ul>
+  <li><strong><em>Dynamic host port mapping</em></strong> (modo de red <code>bridge</code>):
+  declaras <code>hostPort = 0</code> y «Amazon ECS can select an unused port when scheduling a
+  task and register the task with a target group using this port». Es lo que permite
+  <strong>varias copias de la misma tarea en la misma instancia</strong> sin pelearse por el
+  puerto 8080. Consecuencia: el security group de la instancia tiene que abrir el rango efímero
+  entero al SG del ALB, no un puerto concreto.</li>
+  <li><strong>Modo <code>awsvpc</code></strong> (obligatorio en Fargate): cada tarea tiene su
+  propia ENI y su propia IP, y el target group es de <code>target_type = "ip"</code>. Es el modo
+  moderno y el que querrás.</li>
+</ul>
+<p>En los dos, la regla de oro es <strong>un target group por servicio</strong>: el health check,
+el <em>deregistration delay</em> y el algoritmo son propiedades del servicio, no del
+balanceador. Y el registro y desregistro los hace ECS: en Terraform no escribes
+<code>aws_lb_target_group_attachment</code> ninguno, sino un bloque
+<code>load_balancer</code> dentro del <code>aws_ecs_service</code>.</p>
+
+<h3>EKS: el ALB lo crea Kubernetes, no tú</h3>
+<p>En el proyecto 06 la relación se invierte. El
+<a href="https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html">AWS
+Load Balancer Controller</a> es un controlador que corre <em>dentro</em> del clúster y observa
+objetos de Kubernetes: cuando aparece un <code>Ingress</code> con la clase <code>alb</code>,
+<strong>crea el ALB, los target groups y las reglas por API</strong>; cuando aparece un
+<code>Service</code> de tipo <code>LoadBalancer</code> con las anotaciones adecuadas, crea un
+NLB. El recurso intermedio se llama <code>TargetGroupBinding</code>, y también sirve al revés:
+tú creas el balanceador con Terraform y le dices al controlador que mantenga los targets
+sincronizados con los pods de un <code>Service</code>.</p>
+<div class="callout trap">
+  <span class="callout-title">La frontera de responsabilidad que hay que decidir antes de escribirla</span>
+  <p>Si el ALB lo crea el controlador, <strong>Terraform no lo ve</strong>: no está en el state,
+  <code>terraform destroy</code> no lo borra, y si borras el clúster sin borrar antes el
+  <code>Ingress</code>, el ALB se queda huérfano <strong>facturando 0,0325 USD/h para
+  siempre</strong>. Es la fuga de dinero número uno de los clústeres de aprendizaje. Las dos
+  posturas coherentes son: (a) el controlador crea todo y tu <code>destroy</code> empieza por
+  borrar los <code>Ingress</code>; o (b) Terraform crea el ALB y el controlador solo mantiene
+  los targets con <code>TargetGroupBinding</code>. La mezcla sin pensar es la que deja
+  balanceadores sueltos.</p>
+</div>
+
+<h2 id="cuando-no">Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Hay más de un servidor detrás, o va a haberlo.</li>
+    <li>El tráfico es alto y sostenido: la hora fija sale más barata que pagar por petición.</li>
+    <li>Necesitas terminar TLS, enrutar por ruta/host, o WAF directo.</li>
+    <li>Tus backends son EC2, ECS o EKS — no Lambda suelta.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Detrás solo hay una Lambda y el tráfico es bajo: la hora fija te come.</li>
+    <li>El servicio está parado la mayor parte del tiempo: cobra igual.</li>
+    <li>Lo que quieres es cachear contenido cerca del usuario (eso es CloudFront).</li>
+    <li>Lo que quieres es un nombre bonito o repartir entre regiones (eso es Route 53).</li>
+  </ul></div>
+</div>
+
+<h3 id="reparto">Los cuatro que «reparten tráfico» y no son lo mismo</h3>
+<p>ALB, API Gateway, CloudFront y Route 53 se describen todos como «reparten tráfico», y por eso
+se confunden. Lo que reparte cada uno es distinto:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Servicio</th><th>Qué reparte, exactamente</th><th>Dónde vive</th><th>Modelo de coste</th><th>Elígelo cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Route 53</strong></td>
+      <td><strong>Nombres</strong>. Reparte <em>respuestas DNS</em>: decide a qué IP o alias
+      resuelve un nombre, con políticas por latencia, geografía, peso o failover. Nunca ve una
+      petición HTTP.</td>
+      <td>Global, antes de la conexión</td>
+      <td>Por hosted zone + por consulta</td>
+      <td>Reparto entre <strong>regiones</strong>, failover entre continentes, o simplemente
+      poner tu dominio delante del nombre feo del ALB.</td></tr>
+    <tr><td><strong>CloudFront</strong></td>
+      <td><strong>Copias</strong>. Cachea respuestas en cientos de puntos de presencia y sirve
+      desde el más cercano. Reparte <em>en el tiempo</em>: la segunda petición no llega al
+      origen.</td>
+      <td>En el borde</td>
+      <td>Por GB y por petición</td>
+      <td>Contenido cacheable, audiencia global, o dar WAF y TLS a algo que no lo tiene.</td></tr>
+    <tr><td><strong>API Gateway</strong></td>
+      <td><strong>Rutas a integraciones</strong>. Traduce HTTP a invocaciones y añade auth,
+      throttling por cliente, validación y transformación. No tiene concepto de «flota sana».</td>
+      <td>Regional</td>
+      <td><span class="tag-cost usage">por uso</span> — cero en reposo</td>
+      <td>El backend es serverless y el tráfico es bajo o variable. <a href="./aws-apigateway.html#decision">La
+      tabla de decisión completa está en su ficha.</a></td></tr>
+    <tr><td><strong>ALB / NLB</strong></td>
+      <td><strong>Conexiones entre targets vivos</strong>. Es el único de los cuatro que
+      <em>sabe qué backends están sanos</em> y deja de mandarles tráfico. Esa es su
+      competencia distintiva, no el enrutado.</td>
+      <td>Regional, dentro de tu VPC</td>
+      <td><span class="tag-cost hour">por hora</span> + LCU</td>
+      <td>Hay una flota que cambia y hay que repartir entre lo que esté vivo.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout why">
+  <span class="callout-title">La frase que los separa</span>
+  <p><strong>Route 53 elige un destino antes de conectar. CloudFront evita el viaje. API Gateway
+  traduce y controla la entrada. El balanceador es el único que sabe quién de los tuyos sigue en
+  pie.</strong> Y no compiten: el montaje maduro los tiene los cuatro — Route 53 apunta a
+  CloudFront, CloudFront tiene como origen un ALB, y el ALB reparte entre la flota. Cada uno
+  añade su línea a la factura.</p>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>API Gateway HTTP API</strong></td>
+      <td>Cero en reposo y 1,00 USD/millón, frente a 16,43 USD/mes fijos y casi nada por
+      petición. El punto de cruce está sobre los <strong>16 millones de peticiones al mes</strong>.</td>
+      <td>Tráfico bajo, variable o a ráfagas, y backend Lambda.</td></tr>
+    <tr><td><strong>Lambda Function URL</strong></td>
+      <td>Gratis, tres líneas, una sola función, sin health checks ni enrutado.</td>
+      <td>Un endpoint suelto o un webhook.</td></tr>
+    <tr><td><strong>CloudFront</strong></td>
+      <td>Cachea; el ALB no cachea nada. Y CloudFront es global; el ALB, regional.</td>
+      <td>Estáticos, audiencia lejana, o para poner WAF y caché delante de <em>cualquier</em>
+      cosa.</td></tr>
+    <tr><td><strong>Route 53 con registros múltiples</strong></td>
+      <td>El DNS reparte pero <strong>no drena</strong>: los clientes cachean la respuesta y
+      siguen yendo a la IP muerta hasta que expira el TTL. Con health checks de Route 53 se
+      mitiga, no se arregla.</td>
+      <td>Reparto entre regiones o entre proveedores; nunca como sustituto de un balanceador
+      dentro de una región.</td></tr>
+    <tr><td><strong>Global Accelerator</strong></td>
+      <td>Da dos IP anycast globales y mete el tráfico en la red de AWS desde el punto de
+      presencia más cercano. No reparte entre targets: reparte entre <em>endpoints</em>, que
+      suelen ser ALB.</td>
+      <td>Latencia global sobre un protocolo no cacheable, o failover entre regiones con IP
+      fija.</td></tr>
+    <tr><td><strong>Un NGINX o un Traefik en EC2</strong></td>
+      <td>Más flexible y mucho más barato en horas de instancia; a cambio, tuyo el parcheado, la
+      alta disponibilidad, el escalado y el certificado.</td>
+      <td>Necesitas algo que el ALB sigue sin hacer (reescrituras muy complejas, autenticación
+      exótica, protocolos raros) — y ojo, la lista se acortó mucho con
+      <a href="#novedades">los <em>transforms</em> de 2025</a>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="terraform">En Terraform</h2>
+<p>Los tres modernos comparten recurso: <code>aws_lb</code> con
+<code>load_balancer_type = "application" | "network" | "gateway"</code>. El Classic es
+<code>aws_elb</code> y no lo vas a usar. <code>aws_alb</code> existe como alias histórico de
+<code>aws_lb</code>: no lo uses tampoco.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el ALB del proyecto 04, completo</span></div>
+<pre><code>resource "aws_lb" "public" {
+  name               = "app-public"          # máx. 32 caracteres; cambiarlo RECREA
+  load_balancer_type = "application"
+  internal           = false
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = values(aws_subnet.public)[*].id   # MÍNIMO 2 AZ distintas
+
+  idle_timeout               = 60            # default; súbelo si sirves respuestas lentas
+  enable_deletion_protection = false         # true bloquea el `terraform destroy`
+
+  access_logs {
+    bucket  = aws_s3_bucket.logs.id
+    enabled = true                           # ojo: por defecto es false aunque pongas bucket
+  }
+}
+
+resource "aws_lb_target_group" "app" {
+  name_prefix = "app-"                       # máx. 6 caracteres. Ver la trampa de abajo
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.this.id
+  target_type = "ip"                         # "instance" es el default del provider
+
+  deregistration_delay = 30                  # default 300: eterno en un laboratorio
+  slow_start           = 0
+
+  health_check {
+    path                = "/healthz"
+    matcher             = "200"
+    interval            = 15
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2                  # el provider pone 3, la API de AWS pone 2
+  }
+
+  lifecycle {
+    create_before_destroy = true             # obligatorio con name_prefix
+  }
+}
+
+# Listener :80 — no sirve nada, solo empuja a HTTPS. Cero coste de backend.
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.public.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+    redirect {
+      protocol    = "HTTPS"
+      port        = "443"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.public.arn
+  port              = 443
+  protocol          = "HTTPS"
+  certificate_arn   = aws_acm_certificate_validation.this.certificate_arn
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"   # el default es de 2016
+
+  default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "not found"
+      status_code  = "404"
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "api" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 10                          # SIEMPRE explícita, y con huecos
+
+  condition {
+    path_pattern { values = ["/api/*"] }
+  }
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+}</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">login sin código, y canary con pesos</span></div>
+<pre><code># El ALB hace el flujo OIDC entero. Tu app recibe x-amzn-oidc-data firmado.
+resource "aws_lb_listener_rule" "admin" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 20
+
+  condition {
+    host_header { values = ["admin.example.com"] }
+  }
+
+  action {                                   # las de auth van ANTES del forward
+    type = "authenticate-oidc"
+    authenticate_oidc {
+      issuer                 = "https://idp.example.com"
+      authorization_endpoint = "https://idp.example.com/authorize"
+      token_endpoint         = "https://idp.example.com/oauth/token"
+      user_info_endpoint     = "https://idp.example.com/userinfo"
+      client_id              = var.oidc_client_id
+      client_secret          = var.oidc_client_secret   # sensible: va en Secrets Manager
+      session_timeout        = 3600                     # el default son 7 DÍAS
+      on_unauthenticated_request = "authenticate"
+    }
+  }
+
+  action {                                   # el forward SIEMPRE el último
+    type = "forward"
+    forward {
+      target_group {                         # canary: 90/10 sin ninguna herramienta extra
+        arn    = aws_lb_target_group.admin_v1.arn
+        weight = 90
+      }
+      target_group {
+        arn    = aws_lb_target_group.admin_v2.arn
+        weight = 10
+      }
+    }
+  }
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong>Cambiar el <code>name</code> de un target group lo recrea, y no se puede borrar
+    mientras una regla lo referencie.</strong> El <code>apply</code> muere con
+    <code>ResourceInUse: Target group is currently in use by a listener or a rule</code>. La
+    receta es la de siempre: <code>name_prefix</code> (máximo <strong>6 caracteres</strong>) más
+    <code>lifecycle { create_before_destroy = true }</code>, para que el nuevo exista antes de
+    que muera el viejo.</li>
+    <li><strong>Los defaults del <code>health_check</code> del provider no son los de
+    AWS.</strong> El provider pone <code>healthy_threshold = 3</code>,
+    <code>unhealthy_threshold = 3</code> y <code>timeout = 6</code>; la API de AWS pone
+    <code>5</code>, <code>2</code> y <code>5</code>. Si comparas la consola con tu HCL y no
+    cuadran, no es drift: son dos defaults distintos. <em>(El mismo patrón que
+    <code>payload_format_version</code> en API Gateway y <code>x86_64</code> en Lambda.)</em></li>
+    <li><strong><code>priority</code> implícita = orden de creación.</strong> Ya explicado
+    <a href="#reglas">arriba</a>, pero merece repetirse: es la causa número uno de «mi regla
+    nueva no hace nada».</li>
+    <li><strong><code>enable_deletion_protection = true</code> bloquea el
+    <code>terraform destroy</code></strong> — literal en la doc del provider: «This will prevent
+    Terraform from deleting the load balancer». Ponlo en producción, no en el laboratorio, o
+    tendrás que desactivarlo con un <code>apply</code> antes de poder destruir.</li>
+    <li><strong><code>access_logs { bucket = ... }</code> no activa los logs.</strong>
+    <code>enabled</code> es <code>false</code> por defecto «even when <code>bucket</code> is
+    specified». Y el bucket necesita su política de recurso, o el ALB entra en estado
+    <code>failed</code> al crearse.</li>
+    <li><strong>El <code>ssl_policy</code> por defecto es
+    <code>ELBSecurityPolicy-2016-08</code></strong>. De 2016. Sin TLS 1.3. Fíjalo siempre a
+    mano.</li>
+    <li><strong>En NLB, quitar una subred fuerza recrear</strong> («deleting a subnet for load
+    balancers of type <code>network</code> will force a recreation»), y los security groups
+    «cannot be added if none are currently present, and cannot all be removed once added».
+    Recrear un NLB <strong>cambia sus IP</strong> si no eran Elastic — y ese es justo el motivo
+    por el que elegiste NLB.</li>
+    <li><strong><code>enable_cross_zone_load_balancing</code> vale <code>false</code> en el
+    provider</strong>, pero en un ALB está siempre encendido y no se puede apagar ahí. No te
+    asustes si el plan y la consola discrepan: para apagarlo en un ALB hay que ir al target
+    group (<code>load_balancing_cross_zone_enabled</code>).</li>
+    <li><strong>Target Lambda sin <code>aws_lambda_permission</code></strong>: el mismo silencio
+    que con API Gateway. Principal <code>elasticloadbalancing.amazonaws.com</code> y
+    <code>source_arn</code> apuntando <em>al target group</em>.</li>
+    <li><strong>Con ECS y con el ALB Controller de EKS, no escribas
+    <code>aws_lb_target_group_attachment</code>.</strong> Los targets los mueve el orquestador;
+    si además los declaras en Terraform, tendrás diff perpetuo y peleas por quién manda.</li>
+  </ul>
+</div>
+
+<h2 id="comprueba">Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · coste</p>
+  <p class="quiz-q">Levantas el ALB del proyecto 04 un viernes, no vuelves a tocarlo y lo
+  destruyes el lunes: 60 horas exactas sin una sola petición de usuario. ¿Qué te factura la
+  línea de Elastic Load Balancing?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="60 h × 0,0225 USD/h = 1,35 USD, y las LCU son cero porque no hubo tráfico. La hora se cobra «or partial hour», exista o no demanda: es la definición de recurso con cronómetro. Y aparte, bajo VPC, las dos IPv4 públicas suman otros 0,60 USD.">Un dólar con treinta y cinco céntimos, exactamente</button></li>
+    <li><button data-correct="false" data-why="Eso valdría para el LCU, que sí es por uso y aquí es cero. Pero el balanceador tiene dos líneas y la primera corre desde que el recurso existe hasta que se destruye, con tráfico o sin él.">Cero dólares: sin tráfico no se consume nada</button></li>
+    <li><button data-correct="false" data-why="El free tier de ELB son 750 horas al mes compartidas entre Classic y ALB, y solo aplica a cuentas nuevas bajo el programa antiguo. Contar con él para razonar sobre coste es exactamente el error que este curso intenta evitar.">Solo las LCU consumidas: cero, porque no hubo</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · elegir variante</p>
+  <p class="quiz-q">Un cliente corporativo tiene que meter tu endpoint en su firewall por
+  dirección IP y no acepta un nombre DNS. Tu aplicación es HTTP y hoy la sirve un ALB con
+  reglas por ruta. ¿Qué montas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El NLB da una IP estática por AZ y admite una Elastic IP tuya por subred; el target type «alb» existe justo para encadenarlos. El NLB pone la dirección fija, el ALB sigue poniendo el enrutado de capa siete.">Un NLB delante del ALB, con Elastic IP</button></li>
+    <li><button data-correct="false" data-why="Un ALB no admite Elastic IP y no tiene direcciones estables: sus IP las gestiona el servicio, salen del pool público de EC2 y cambian cuando escala o se reemplaza un nodo. Solo ofrece nombre DNS.">Una Elastic IP asociada al propio ALB existente</button></li>
+    <li><button data-correct="false" data-why="Un registro A con IP fija apuntaría a direcciones que el ALB puede cambiar en cualquier momento; el alias de Route 53 resuelve eso pero sigue dando un nombre, no la IP fija que el firewall del cliente exige.">Un registro A fijo en Route 53 apuntando</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · el modelo</p>
+  <p class="quiz-q">Despliegas una versión con un bug en <code>/healthz</code> y los targets de
+  tu único target group fallan el health check <em>todos a la vez</em>, en las dos zonas. ¿Qué
+  hace el ALB?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Está documentado: «if all targets fail health checks at the same time in all enabled Availability Zones, the load balancer fails open». Manda tráfico a todos igualmente, asumiendo que es más probable que el health check esté roto a que lo esté la flota entera. Por eso el síntoma no es un 503 limpio sino errores erráticos.">Enruta a todos ellos igualmente: hace fail open</button></li>
+    <li><button data-correct="false" data-why="Sería lo intuitivo, y es lo que hace cuando queda al menos un target sano en alguna zona. Pero con cero sanos en todas partes el ALB prefiere fallar abierto: un 503 uniforme sería más fácil de diagnosticar, y justamente por eso confunde.">Devuelve 503 a todo el mundo, sin excepción</button></li>
+    <li><button data-correct="false" data-why="El balanceador no tiene cola ni buffer de peticiones: no retiene tráfico esperando a que alguien mejore. Cada petición se resuelve en el momento contra los targets que haya, sanos o no.">Espera y reintenta hasta que alguno vuelva sano</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · coste</p>
+  <p class="quiz-q">Tienes targets repartidos en tres AZ y varios terabytes al mes entre el
+  balanceador y ellos. Activas cross-zone load balancing. ¿En qué se diferencia la factura si
+  el balanceador es un NLB en lugar de un ALB?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El tráfico entre zonas de un NLB paga transferencia de datos a 0,01 USD/GB en cada sentido; en ALB y CLB esos mismos escenarios no se facturan. Es exactamente el motivo de que el cross-zone venga apagado por defecto en NLB y encendido y no desactivable en ALB.">Un céntimo por GB en cada sentido cruzado</button></li>
+    <li><button data-correct="false" data-why="Es la creencia habitual y solo es cierta para el ALB. La asimetría está documentada en el blog de redes de AWS: los escenarios cruzados que el NLB factura son justo los que ALB y CLB no facturan.">Nada en absoluto: el cross-zone va incluido siempre</button></li>
+    <li><button data-correct="false" data-why="El LCU no se cobra por zona: mide conexiones, bytes y evaluaciones agregadas del balanceador, y solo se factura la dimensión más alta. Lo que cambia al cruzar zonas es la línea de transferencia de datos, no la de capacidad.">Una LCU adicional por cada zona de disponibilidad</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-apigateway.html#decision">API Gateway: la tabla de decisión de la puerta</a>
+    <a href="./aws-lambda.html">Ficha: AWS Lambda</a>
+    <a href="./aws-fundamentos.html">Fundamentos: qué cobra por hora</a>
+    <a href="./README.md">Todas las referencias</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html">User
+    Guide de Application Load Balancers</a> (empieza por <em>Listener rules</em> y
+    <em>Target groups</em>), la <a
+    href="https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html">de
+    Network Load Balancers</a>, la <a
+    href="https://aws.amazon.com/elasticloadbalancing/pricing/">página de precios</a> con las
+    dimensiones del LCU, las <a
+    href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html">cuotas
+    de ALB</a>, y el blog <a
+    href="https://aws.amazon.com/blogs/networking-and-content-delivery/exploring-data-transfer-costs-for-aws-network-load-balancers/">Exploring
+    Data Transfer Costs for AWS Network Load Balancers</a> para la letra pequeña de las zonas.
+    <br><br>
+    <b>Queda fuera a propósito</b>: el Gateway Load Balancer a fondo (GENEVE, appliances,
+    <em>flow stickiness</em>), Global Accelerator, los <em>access logs</em> y
+    <em>connection logs</em> campo a campo, el <em>zonal shift</em> con Application Recovery
+    Controller, y el desglose de las políticas TLS. Si alguna te pica antes del proyecto 04,
+    pídemela y la abrimos sobre tu VPC.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

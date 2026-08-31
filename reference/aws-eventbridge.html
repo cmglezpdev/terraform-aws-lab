@@ -119,7 +119,11 @@ Terraform y su propia línea en la factura. Conocerlos evita comprar el que no t
     <tr><td><strong>Scheduler</strong></td>
       <td>Crons gestionados: dispara un target a una hora, cada N minutos, o una sola vez —
       con zona horaria y ventanas flexibles. Es el sustituto moderno de las reglas con
-      <code>schedule_expression</code>.</td>
+      <code>schedule_expression</code>. Además tiene <a
+      href="https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html">universal
+      targets</a>: llama a casi cualquier acción de la AWS SDK con un ARN de la forma
+      <code>arn:aws:scheduler:::aws-sdk:sqs:sendMessage</code> — todas menos las de lectura
+      (<code>get</code>, <code>list</code>, <code>describe</code>…).</td>
       <td>«Cada noche a las 03:00, lanza la Lambda de limpieza.» Sin servidor que mantenga
       el cron.</td>
       <td>0 hasta 14 M invocaciones/mes; luego 1,00 USD/M</td></tr>
@@ -225,6 +229,168 @@ un evento, tres colas (cada una procesará algo distinto):</p>
   Frontera distinta, fracaso distinto, cola distinta.</li>
 </ul>
 
+<h3>Los operadores de patrón, al completo</h3>
+<p>Un valor suelto en la lista es igualdad exacta. Todo lo demás son objetos
+<code>{ "operador": … }</code> dentro de esa lista. La tabla entera, tal como la publica la
+<a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns-content-based-filtering.html">guía
+de comparison operators</a> (consultada el 2026-08-30):</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Operador</th><th>Qué dice</th><th>Ejemplo</th></tr></thead>
+  <tbody>
+    <tr><td>valor literal</td><td>Igual a</td><td><code>"state": [ "running" ]</code></td></tr>
+    <tr><td><code>prefix</code></td><td>Empieza por</td><td><code>"Region": [ { "prefix": "us-" } ]</code></td></tr>
+    <tr><td><code>suffix</code></td><td>Acaba en</td><td><code>"key": [ { "suffix": ".csv" } ]</code></td></tr>
+    <tr><td><code>wildcard</code></td><td>Comodín <code>*</code> en cualquier posición</td><td><code>"key": [ { "wildcard": "raw/*/data.csv" } ]</code></td></tr>
+    <tr><td><code>anything-but</code></td><td>Cualquier cosa menos (valor o lista)</td><td><code>"state": [ { "anything-but": [ "stopped", "failed" ] } ]</code></td></tr>
+    <tr><td><code>numeric</code></td><td>Comparación numérica y rangos</td><td><code>"size": [ { "numeric": [ "&gt;", 0, "&lt;=", 5242880 ] } ]</code></td></tr>
+    <tr><td><code>exists</code></td><td>El campo está / no está</td><td><code>"reason": [ { "exists": true } ]</code></td></tr>
+    <tr><td><code>cidr</code></td><td>La IP cae en el rango</td><td><code>"sourceIPAddress": [ { "cidr": "10.0.0.0/24" } ]</code></td></tr>
+    <tr><td><code>equals-ignore-case</code></td><td>Igual, ignorando mayúsculas</td><td><code>"detail-type": [ { "equals-ignore-case": "object created" } ]</code></td></tr>
+    <tr><td><code>$or</code></td><td>OR <em>entre campos distintos</em></td><td><code>"$or": [ { "a": [ 1 ] }, { "b": [ 2 ] } ]</code></td></tr>
+    <tr><td>lista vacía / <code>null</code></td><td>Campo vacío (<code>[""]</code>) o nulo (<code>[null]</code>)</td><td><code>"LastName": [ "" ]</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Lo que hay que saber para no perder una tarde:</p>
+<ul>
+  <li><strong>Se combinan, y ahí está la potencia.</strong> <code>anything-but</code> admite
+  dentro <code>prefix</code>, <code>suffix</code>, <code>wildcard</code> y
+  <code>equals-ignore-case</code>; y <code>prefix</code>/<code>suffix</code> admiten dentro
+  <code>equals-ignore-case</code>. «Todo lo que no esté bajo <code>/lib/</code>» se escribe
+  <code>{ "anything-but": { "wildcard": "*/lib/*" } }</code>.</li>
+  <li><strong>Los operadores solo funcionan en hojas</strong> — en un campo con valor
+  escalar. Las excepciones son <code>$or</code> y <code>anything-but</code>. Un
+  <code>exists</code> sobre un nodo intermedio (un objeto) no casa nunca.</li>
+  <li><strong><code>wildcard</code> es solo de reglas de bus</strong>, no de Pipes, y no
+  admite dos <code>*</code> consecutivos. Si el patrón se vuelve demasiado complejo, la
+  propia API te lo rechaza con <code>InvalidEventPatternException</code>: la cura es usar
+  menos comodines y anclar lo que ya sabes (<code>arn:aws:events:us-east-1:*</code> en vez
+  de <code>*:*:*:*:*</code>).</li>
+  <li><strong><code>$or</code> tiene un tope de 1 000 combinaciones</strong>: se multiplica
+  el número de argumentos de cada array <code>$or</code> del patrón; pasarse es otro
+  <code>InvalidEventPatternException</code>.</li>
+  <li><strong><code>numeric</code> vive entre -5,0e9 y +5,0e9</strong>, con 15 dígitos de
+  precisión y seis decimales. Fuera de ahí, el operador no es la herramienta.</li>
+  <li><strong>Si repites una clave en el patrón, gana la última.</strong> No hay AND
+  implícito entre las dos: la primera se descarta en silencio, sin aviso ni error.</li>
+</ul>
+<div class="code">
+  <div class="code-label"><span>JSON</span><span class="tag">tres patrones que se leen solos</span></div>
+<pre><code>// 1 · CSV de más de 0 bytes bajo raw/, subidos por cualquiera menos el batch nocturno
+{
+  "source": ["aws.s3"],
+  "detail-type": ["Object Created"],
+  "detail": {
+    "object": { "key": [{ "prefix": "raw/" }, { "suffix": ".csv" }], "size": [{ "numeric": [">", 0] }] },
+    "requester": [{ "anything-but": { "prefix": "arn:aws:iam::111122223333:role/batch-" } }]
+  }
+}
+
+// 2 · cualquier fichero que NO esté bajo una carpeta /tmp/ en ningún nivel
+{ "detail": { "object": { "key": [{ "anything-but": { "wildcard": "*/tmp/*" } }] } } }
+
+// 3 · $or: me interesa si es un borrado O si viene de fuera de mi red
+{
+  "detail": {
+    "$or": [
+      { "eventName": [{ "prefix": "Delete" }] },
+      { "sourceIPAddress": [{ "anything-but": { "cidr": "10.0.0.0/8" } }] }
+    ]
+  }
+}</code></pre>
+</div>
+<div class="callout tf">
+  <span class="callout-title">Pruébalo antes de desplegarlo</span>
+  <p>No hace falta un <code>apply</code> para saber si un patrón casa. La API
+  <a href="https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_TestEventPattern.html"><code>TestEventPattern</code></a>
+  recibe un patrón y un evento de ejemplo y responde sí o no:</p>
+  <pre><code>aws events test-event-pattern \
+  --event-pattern file://pattern.json \
+  --event file://evento-ejemplo.json</code></pre>
+  <p>En consola es lo mismo pero con caja de texto: <em>Developer resources → Sandbox →
+  Event pattern</em> (<a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-pattern-sandbox.html">Sandbox</a>),
+  que además ofrece crear la regla con el patrón ya validado. El ciclo de depuración de un
+  patrón son segundos, no despliegues — y el evento de ejemplo lo sacas del espía de la
+  lección 11, copiando un evento real del log group.</p>
+</div>
+
+<h3>Pasar al target solo lo que necesita: el input transformer</h3>
+<p>Por defecto el target recibe el evento entero, sobre incluido. El
+<a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-transform-target-input.html">input
+transformer</a> lo reescribe antes de entregarlo, en dos piezas: un <strong>input paths
+map</strong> que declara variables con JSON path sobre el evento original, y un
+<strong>input template</strong> que las coloca donde quieras, entre
+<code>&lt;ángulos&gt;</code>. La salida puede ser JSON o texto plano.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el target recibe tres campos, no el evento entero</span></div>
+<pre><code>resource "aws_cloudwatch_event_target" "aviso" {
+  rule = aws_cloudwatch_event_rule.csv_uploaded.name
+  arn  = aws_sns_topic.avisos.arn
+
+  input_transformer {
+    input_paths = {
+      bucket = "$.detail.bucket.name"
+      key    = "$.detail.object.key"
+      hora   = "$.time"
+    }
+    input_template = "\"Nuevo CSV &lt;key&gt; en &lt;bucket&gt; a las &lt;hora&gt;\""
+  }
+}</code></pre>
+</div>
+<ul>
+  <li><strong>Para qué sirve de verdad</strong>: que un target tonto (un topic SNS que
+  manda un email, un webhook) reciba una frase legible en vez de 40 líneas de JSON; y que
+  una Lambda no tenga que conocer la forma del evento de AWS — le pasas un contrato tuyo,
+  estable, de tres campos.</li>
+  <li><strong>Hasta 100 variables</strong> por transformer; las claves no pueden empezar por
+  <code>AWS</code> y el JSON path va con notación de punto, no de corchetes.</li>
+  <li><strong>Variables predefinidas</strong> que no tienes que declarar:
+  <code>aws.events.rule-name</code>, <code>aws.events.rule-arn</code>,
+  <code>aws.events.event.ingestion-time</code> y <code>aws.events.event.json</code> (el
+  evento original completo). Las tres primeras valen dentro de un string; la última solo
+  como valor de un campo JSON, nunca incrustada en una frase.</li>
+  <li><strong>La trampa de las comillas</strong>: EventBridge añade las comillas a las
+  variables que son strings, pero <em>no</em> a las que apuntan a objetos o arrays. Si una
+  variable es un objeto y la metes dentro de un string, te quita las comillas internas y el
+  resultado deja de ser JSON válido. Un JSON path que no existe en el evento no da error:
+  la variable simplemente desaparece de la salida.</li>
+  <li><strong>Si el target va a ser una cola</strong>, piénsalo dos veces: transformar aquí
+  significa que el consumidor pierde el resto del evento para siempre. Reservar el
+  transformer para targets terminales (avisos, webhooks) y dejar el evento íntegro a los
+  targets que procesan es el criterio sano.</li>
+</ul>
+
+<h3>Entre cuentas y entre regiones: el bus como target de otro bus</h3>
+<p>Un target puede ser <em>otro event bus</em>, incluso de otra cuenta u otra región. Es la
+pieza con la que se monta el patrón <strong>hub-and-spoke</strong>: cada cuenta de la
+organización reenvía sus eventos a un bus central de la cuenta de seguridad o de
+observabilidad, y ahí viven las reglas. Lo que hay que cablear (<a
+href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-account.html">doc</a>,
+consultada el 2026-08-30):</p>
+<ul>
+  <li><strong>En la cuenta que recibe</strong>: una <strong>política de recurso</strong> en
+  el bus (<code>aws_cloudwatch_event_bus_policy</code>) que autorice
+  <code>events:PutEvents</code> a la cuenta emisora — o, con
+  <code>aws:PrincipalOrgID</code>, a la organización entera de una vez.</li>
+  <li><strong>En la cuenta que envía</strong>: la regla con el ARN del bus remoto como
+  target y un <code>role_arn</code>. <strong>El rol es obligatorio</strong> para todo
+  target de tipo bus cross-account creado después del 2 de marzo de 2023; los anteriores
+  siguen funcionando sin él, y por eso medio internet enseña el montaje sin rol.</li>
+  <li><strong>La cadena no encadena.</strong> Un evento que llega de otra cuenta y casa una
+  regla que apunta a un <em>tercer</em> bus <strong>no se reenvía</strong>. Un salto, y se
+  acabó — vale también entre buses de tu propia cuenta. Si el diseño necesita dos saltos,
+  el diseño está mal.</li>
+  <li><strong>Cuidado con el bus abierto.</strong> Si aceptas eventos de cualquier cuenta,
+  añade <code>account</code> al patrón de <em>todas</em> tus reglas: sin ese campo, una
+  regla tuya dispara con eventos de cuentas desconocidas que casen por casualidad.</li>
+  <li><strong>Paga el que envía</strong>, como eventos custom; la cuenta receptora no ve
+  nada en su factura. Cross-region funciona igual, con la condición de que la región
+  destino sea una <a
+  href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-region.html">región
+  destino soportada</a>.</li>
+</ul>
+
 <h2>Cuánto cuesta</h2>
 <p class="small">Verificado el 2026-08-30 contra la <a
 href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSEvents/current/us-east-1/index.json">Price
@@ -269,10 +435,13 @@ quotas</a>, consultada el 2026-08-30. Valores de <code>us-east-1</code>.</p>
     <tr><td>Targets por regla</td><td><strong>5</strong></td><td><strong>No</strong> — para más, apunta a SNS/SQS y reparte desde ahí</td></tr>
     <tr><td>Reglas por bus</td><td>300</td><td>Sí</td></tr>
     <tr><td>Buses por cuenta</td><td>100</td><td>Sí</td></tr>
-    <tr><td>Tamaño del patrón</td><td>2 048 caracteres</td><td>Sí, hasta 4 096</td></tr>
+    <tr><td>Tamaño del patrón</td><td>2 048 caracteres</td><td>Sí — AWS no publica el techo</td></tr>
     <tr><td>Tamaño de un evento</td><td>256 KB</td><td>No — para más, el evento lleva la referencia y S3 lleva el dato</td></tr>
     <tr><td><code>PutEvents</code></td><td>10 000/s</td><td>Sí</td></tr>
     <tr><td>Invocaciones a targets</td><td>18 750/s</td><td>Sí — al superarlo no se pierde nada: se retrasa</td></tr>
+    <tr><td>Variables de un input transformer</td><td>100</td><td>No</td></tr>
+    <tr><td>Política de recurso de un bus</td><td>10 240 caracteres</td><td>Sí — crece con cada cuenta a la que abres el bus</td></tr>
+    <tr><td>Invocaciones por API destination</td><td>300/s</td><td>Sí — se retrasan, no se pierden</td></tr>
   </tbody>
 </table>
 </div>

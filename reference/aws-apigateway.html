@@ -18,16 +18,16 @@
   <dl class="svc-meta">
     <div><dt>Categoría</dt><dd>Red / fachada de APIs</dd></div>
     <div><dt>Ámbito</dt><dd>Regional</dd></div>
-    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> — salvo la caché de REST, que es <span class="tag-cost hour">por hora</span></dd></div>
     <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — una HTTP API en reposo cuesta 0,00 USD</dd></div>
-    <div><dt>Recurso Terraform</dt><dd><code>aws_apigatewayv2_api</code></dd></div>
-    <div><dt>Aparece en</dt><dd><a href="../projects/01-serverless-api">proyecto 01</a></dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_apigatewayv2_api</code> (HTTP/WebSocket)<br><code>aws_api_gateway_rest_api</code> (REST)</dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/01-serverless-api">proyecto 01</a> y proyecto 03</dd></div>
   </dl>
 </header>
 
 <main>
 
-<h2>Qué es</h2>
+<h2 id="que-es">Qué es</h2>
 <p>Un servicio gestionado que se planta entre internet y tu backend: termina el TLS, lee el
 método y la ruta de cada petición (<code>POST /links</code>), y la entrega al destino que
 tenga configurado — una Lambda, otro servicio de AWS o cualquier URL. No ejecuta tu código:
@@ -43,7 +43,7 @@ desde fuera de AWS es que un servicio con permiso lo haga por ti.</p>
   cero coste. Esa diferencia es exactamente la que hay con un ALB, que sí cobra por hora.</p>
 </div>
 
-<h2>Para qué se usa de verdad</h2>
+<h2 id="para-que">Para qué se usa de verdad</h2>
 <div class="ref-grid">
   <div class="ref-card"><h3>Dar URL pública a una Lambda</h3><p>Tu caso: el acortador tiene
   cerebro y memoria, pero nadie de fuera puede llamarlo. La puerta convierte
@@ -54,6 +54,9 @@ desde fuera de AWS es que un servicio con permiso lo haga por ti.</p>
   <div class="ref-card"><h3>Proteger el backend del pico</h3><p>Throttling: si alguien te
   hace 50 000 peticiones por segundo, la puerta devuelve 429 y tu base de datos ni se
   entera. Configurable por ruta y por stage.</p></div>
+  <div class="ref-card"><h3>Vender la API por clientes</h3><p>API keys y usage plans: cada
+  cliente tiene su clave y su cupo («100 000 peticiones al mes, 10 por segundo»). Solo en
+  REST API — es <a href="#usage-plans">la sección del proyecto 03</a>.</p></div>
   <div class="ref-card"><h3>Una fachada estable</h3><p>El cliente ve <code>/v1/links</code>
   para siempre; detrás puedes cambiar la Lambda por un contenedor o partir una función en
   tres sin que ningún consumidor cambie una línea.</p></div>
@@ -62,7 +65,7 @@ desde fuera de AWS es que un servicio con permiso lo haga por ti.</p>
   sin un solo proceso persistente tuyo.</p></div>
 </div>
 
-<h2>Los tipos que existen</h2>
+<h2 id="tipos">Los tipos que existen</h2>
 <p>Hay tres productos bajo el mismo nombre, y dos de ellos hacen casi lo mismo. La razón es
 histórica: REST API (2015) acumuló funcionalidad y precio; HTTP API (2019) es la reescritura
 barata y rápida con solo lo que casi todo el mundo usa. En el provider de Terraform la
@@ -73,29 +76,306 @@ WebSocket son <code>aws_apigatewayv2_*</code>.</p>
   <thead><tr><th>Tipo</th><th>Qué lo distingue</th><th>Cuándo</th><th>Coste por millón</th></tr></thead>
   <tbody>
     <tr><td><code>HTTP API</code></td><td>Mínimo y rápido: proxy a Lambda/HTTP, authorizer
-    JWT nativo, CORS, dominios propios. Sin caché, sin API keys, sin WAF.</td>
-    <td>El punto de partida. APIs serverless normales — este curso.</td><td>1,00 USD</td></tr>
+    JWT nativo, CORS, dominios propios, mTLS. Sin caché, sin API keys, sin WAF, sin
+    endpoints privados, sin streaming.</td>
+    <td>El punto de partida. APIs serverless normales — este curso.</td>
+    <td><code>1,00 USD</code><br><span class="small">0,90 a partir de 300 M/mes</span></td></tr>
     <tr><td><code>REST API</code></td><td>Todo lo demás: API keys y usage plans, caché,
-    WAF, validación de request, transformación de body, canary, X-Ray, endpoints privados.</td>
-    <td>Cuando necesites una de esas piezas — y solo entonces.</td><td>3,50 USD</td></tr>
+    WAF, validación de request, transformación de body con VTL, canary, X-Ray, logs de
+    ejecución, endpoints privados y streaming de respuesta.</td>
+    <td>Cuando necesites una de esas piezas — y solo entonces.</td>
+    <td><code>3,50 USD</code><br><span class="small">2,80 · 2,38 · 1,51 en tramos superiores</span></td></tr>
     <tr><td><code>WebSocket API</code></td><td>Conexiones persistentes bidireccionales
     traducidas a invocaciones (<code>$connect</code>, <code>$disconnect</code>, mensajes).</td>
-    <td>Tiempo real: chat, notificaciones push, dashboards.</td><td>1,00 USD + 0,25 USD por
-    millón de minutos de conexión</td></tr>
+    <td>Tiempo real: chat, notificaciones push, dashboards.</td>
+    <td><code>1,00 USD</code> por millón de mensajes<br><span class="small">+ 0,25 USD por millón de minutos de conexión</span></td></tr>
   </tbody>
 </table>
 </div>
-<div class="callout aws">
-  <span class="callout-title">El criterio de decisión</span>
-  <p>Empieza siempre por HTTP API. Pásate a REST API solo cuando puedas nombrar la
-  funcionalidad concreta que te falta — API keys para vender la API, WAF por exigencia de
-  seguridad, caché de respuestas, canary — y acepta que pagas 3,5× por petición por ella. La
-  <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html">tabla
-  oficial de diferencias</a> es la fuente; si tu requisito no está en la columna que le falta
-  a HTTP API, no hay debate.</p>
+<p class="small">Precios de <code>us-east-1</code> verificados el 2026-08-30 contra la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonApiGateway/current/us-east-1/index.json">Price
+List API</a> (publicación 2026-07-24). Tramos completos en <a href="#coste">Cuánto cuesta</a>.</p>
+
+<h3 id="tabla-features">La tabla de features, feature a feature</h3>
+<p>Esta es la comparación que decide, y la que casi todos los tutoriales resumen mal.
+Reproducida de la <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html">tabla
+oficial de diferencias</a>, consultada el 2026-08-30:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Funcionalidad</th><th>REST API</th><th>HTTP API</th><th>Qué significa para ti</th></tr></thead>
+  <tbody>
+    <tr><td>Authorizer IAM (SigV4)</td><td>Sí</td><td>Sí</td><td>Llamadas máquina-a-máquina firmadas con credenciales AWS</td></tr>
+    <tr><td>Authorizer JWT nativo</td><td><strong>No</strong></td><td><strong>Sí</strong></td><td>En REST validas el JWT con un Lambda authorizer que escribes tú</td></tr>
+    <tr><td>Authorizer Lambda</td><td>Sí</td><td>Sí</td><td>Tu código decide; con caché de resultado en ambos</td></tr>
+    <tr><td>Cognito user pool</td><td>Sí (nativo)</td><td>Sí (vía JWT)</td><td>Cognito es un emisor OIDC más para el authorizer JWT</td></tr>
+    <tr><td>Resource policy de la API</td><td><strong>Sí</strong></td><td>No</td><td>Restringir por IP, VPC o cuenta desde la propia puerta</td></tr>
+    <tr><td><strong>API keys</strong></td><td><strong>Sí</strong></td><td><strong>No</strong></td><td><a href="#usage-plans">El dilema del proyecto 03</a></td></tr>
+    <tr><td><strong>Rate limiting por cliente</strong></td><td><strong>Sí</strong></td><td><strong>No</strong></td><td>HTTP API solo sabe limitar por ruta y por stage, no por quién llama</td></tr>
+    <tr><td>Caché de respuestas</td><td><strong>Sí</strong></td><td>No</td><td>Y se paga <a href="#cache">por hora</a>: la única línea de este servicio que no es por uso</td></tr>
+    <tr><td>AWS WAF</td><td><strong>Sí</strong></td><td>No</td><td>Para proteger una HTTP API hay que poner CloudFront delante</td></tr>
+    <tr><td>mTLS (TLS mutuo)</td><td>Sí</td><td><strong>Sí</strong></td><td>Sorpresa habitual: HTTP API sí lo tiene, en el dominio propio</td></tr>
+    <tr><td>Certificados hacia el backend</td><td>Sí</td><td>No</td><td>Que tu backend verifique que quien llama es la puerta</td></tr>
+    <tr><td>Endpoint privado (VPC)</td><td><strong>Sí</strong></td><td>No</td><td><a href="#privadas">Solo REST</a>. HTTP API siempre es pública</td></tr>
+    <tr><td>Endpoint edge-optimized</td><td>Sí</td><td>No</td><td>CloudFront gestionado delante; HTTP API es siempre regional</td></tr>
+    <tr><td>Request validation</td><td><strong>Sí</strong></td><td>No</td><td>Rechazar un body mal formado sin invocar tu función</td></tr>
+    <tr><td>Transformación de body (VTL)</td><td>Sí</td><td>No</td><td>Reescribir el JSON en la puerta. Potente y odiado a partes iguales</td></tr>
+    <tr><td>Transformación de parámetros</td><td>Sí</td><td>Sí</td><td>HTTP API tiene <em>parameter mapping</em>: cabeceras y query, no body</td></tr>
+    <tr><td>CORS</td><td>Sí</td><td>Sí</td><td>En HTTP API es <a href="#cors">un bloque declarativo</a>; en REST, un método OPTIONS que montas</td></tr>
+    <tr><td>Despliegue automático</td><td><strong>No</strong></td><td><strong>Sí</strong></td><td><a href="#stages">La trampa del <code>deployment</code></a> de REST</td></tr>
+    <tr><td>Canary deployments</td><td>Sí</td><td>No</td><td>Mandar el 5% del tráfico a la versión nueva</td></tr>
+    <tr><td>Access logs a CloudWatch</td><td>Sí</td><td>Sí</td><td><a href="#logs">Los dos</a>; y cuestan lo que cuesta CloudWatch Logs</td></tr>
+    <tr><td>Execution logs</td><td><strong>Sí</strong></td><td>No</td><td>El log paso a paso de lo que hizo la puerta. En HTTP API no existe</td></tr>
+    <tr><td>X-Ray</td><td>Sí</td><td>No</td><td>Trazado distribuido desde la puerta</td></tr>
+    <tr><td>Streaming de respuesta</td><td><strong>Sí</strong> <span class="small">(desde nov 2025)</span></td><td>No</td><td><a href="#streaming">Novedad</a> que cambia la comparación con Function URLs</td></tr>
+    <tr><td>Integración privada con Cloud Map</td><td>No</td><td>Sí</td><td>Descubrimiento de servicios sin balanceador</td></tr>
+    <tr><td>Mock integration</td><td>Sí</td><td>No</td><td>Responder sin backend, para prototipos</td></tr>
+  </tbody>
+</table>
 </div>
 
-<h2>Cómo funciona por dentro</h2>
+<div class="callout aws">
+  <span class="callout-title">El criterio honesto de cuándo pagar REST</span>
+  <p>Empieza siempre por HTTP API. La regla no es «REST tiene más cosas»: es
+  <strong>¿puedes nombrar la fila concreta de esa tabla que te falta?</strong> Si no puedes,
+  no hay debate. Si puedes, la pregunta siguiente es cuánto cuesta esa fila:</p>
+  <ul>
+    <li><strong>API keys y límites por cliente</strong> — la razón nº 1 y la más legítima.
+    Es funcionalidad que si no compras, escribes. <a href="#usage-plans">Los números, abajo.</a></li>
+    <li><strong>WAF</strong> — pero se puede tener sobre HTTP API poniendo CloudFront
+    delante, así que no es una razón cerrada: es una comparación de dos montajes.</li>
+    <li><strong>Endpoint privado</strong> — esa sí es exclusiva y sin rodeo: una API que
+    solo se llama desde dentro de la VPC tiene que ser REST.</li>
+    <li><strong>Caché</strong> — cuidado: la caché es la única pieza del servicio que cobra
+    <em>por hora</em>, exista tráfico o no. Ver <a href="#cache">más abajo</a> antes de
+    quererla.</li>
+    <li><strong>Validación de request y VTL</strong> — la más discutible. Validar el body en
+    tu función cuesta 15 líneas y no cuesta 3,5× por petición.</li>
+  </ul>
+  <p>Y el multiplicador, dicho sin adornos: <strong>3,50 frente a 1,00 USD por millón</strong>.
+  A un millón de peticiones al mes son 2,50 USD de diferencia — ruido. A cincuenta millones,
+  125 USD/mes. El multiplicador no decide en pequeño; decide en grande.</p>
+</div>
+
+<h2 id="usage-plans">Usage plans y API keys: el rate limiting por cliente</h2>
+<p>La pieza que el proyecto 03 necesita, y la que más claramente separa los dos productos.
+Un <strong>usage plan</strong> es un contrato de consumo asociado a stages concretas de una
+API, con dos números independientes:</p>
+<ul>
+  <li><strong>Throttle</strong> — <code>rate_limit</code> (peticiones por segundo en
+  régimen estable) y <code>burst_limit</code> (capacidad del cubo de tokens, o sea el pico
+  instantáneo tolerado). Es el «no me hagas 500 por segundo».</li>
+  <li><strong>Quota</strong> — <code>limit</code> peticiones por <code>DAY</code>,
+  <code>WEEK</code> o <code>MONTH</code>. Es el «tu plan son 100 000 al mes».</li>
+</ul>
+<p>Una <strong>API key</strong> es una cadena alfanumérica de 20 a 128 caracteres que el
+cliente manda en la cabecera <code>x-api-key</code>. La clave identifica al cliente; el plan
+al que está asociada define sus números. Una clave puede estar en varios planes, y un plan
+en varias stages, pero <strong>una clave solo puede estar en un plan por cada stage</strong>.</p>
+
+<div class="callout trap">
+  <span class="callout-title">Lo que la propia AWS advierte, y casi nadie lee</span>
+  <ul>
+    <li><strong>Una API key no es autenticación.</strong> Textual en la doc: «Don't use API
+    keys for authentication or authorization to control access to your APIs». Van en una
+    cabecera que se loguea, no se firman, y si tienes varias APIs en un mismo plan, una clave
+    válida para una <em>abre todas las del plan</em>. La autenticación va aparte: IAM,
+    Lambda authorizer o Cognito. La clave dice <em>quién consume</em>, no <em>quién es</em>.</li>
+    <li><strong>Los límites son «best-effort», no barreras.</strong> También textual:
+    «Usage plan throttling and quotas are not hard limits… In some cases, clients can exceed
+    the quotas that you set. Don't rely on usage plan quotas or throttling to control
+    costs». Si tu objetivo es que nadie te arruine la factura, la herramienta es
+    <a href="./aws-budgets.html">Budgets</a> y, si hace falta, WAF — no el usage plan.</li>
+    <li><strong>Actualizar un plan tarda.</strong> Añadir una clave a un plan «might take a
+    few minutes to complete»: no es un cambio inmediato como una política IAM.</li>
+  </ul>
+  <p class="small">Fuente: <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-api-usage-plans.html">Usage
+  plans and API keys for REST APIs</a>, consultada el 2026-08-30.</p>
+</div>
+
+<h3 id="alternativa-http">La alternativa real en HTTP API</h3>
+<p>HTTP API no tiene API keys ni usage plans, y no los va a tener. Lo que sí tiene, y lo que
+puedes montar tú:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Camino</th><th>Qué consigues</th><th>Qué NO consigues</th><th>Coste añadido</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Throttling por stage y por ruta</strong><br><span class="small">nativo en HTTP API</span></td>
+      <td>Un techo global («esta API no pasa de 200 req/s») y techos por ruta
+      (<code>POST /links</code> a 10 req/s, <code>GET /{code}</code> a 500).</td>
+      <td><strong>No distingue quién llama.</strong> Un cliente abusivo consume el cupo de
+      todos y el 429 le llega al inocente.</td>
+      <td>0,00 USD</td></tr>
+    <tr><td><strong>Lambda authorizer + contador en DynamoDB</strong></td>
+      <td>Exactamente lo que quieras: cupo por cliente, por plan, por endpoint, ventanas
+      deslizantes, mensajes de error propios.</td>
+      <td>Nada — pero es <em>tu</em> código: tuyo el bug, tuyas las condiciones de carrera,
+      tuyo el mantenimiento.</td>
+      <td>≈ 0,83 USD/millón <span class="small">(0,20 de invocación + ~0,01 de duración + 0,625 de escritura)</span></td></tr>
+    <tr><td><strong>CloudFront + AWS WAF delante</strong></td>
+      <td>Reglas rate-based sin escribir código, y de paso caché y WAF sobre una HTTP API.</td>
+      <td>El límite es por IP o por clave de petición, no por «cliente de mi plan de pago»;
+      la ventana es gruesa.</td>
+      <td>El de WAF y CloudFront <span class="small">(no verificado en esta ficha)</span></td></tr>
+    <tr><td><strong>Migrar a REST API</strong></td>
+      <td>Usage plans de serie: cero código, consola y Terraform lo soportan, informes de uso
+      por clave incluidos.</td>
+      <td>Pierdes <code>auto_deploy</code>, <code>payload_format_version 2.0</code> y la
+      simplicidad del v2; y pagas 3,5×.</td>
+      <td>+2,50 USD por millón de peticiones</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Precios de Lambda (0,20 USD/millón de invocaciones) y DynamoDB (0,625 USD/millón
+de escrituras on-demand) tomados de <a href="./aws-lambda.html">su ficha</a> y de
+<a href="./aws-dynamodb.html">la suya</a>, ambas verificadas en <code>us-east-1</code>.</p>
+
+<div class="callout why">
+  <span class="callout-title">El dilema del proyecto 03, con los números encima de la mesa</span>
+  <p>No te lo resuelvo. Te dejo las tres columnas que hay que mirar:</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>A tu escala…</th><th>REST API + usage plans</th><th>HTTP API + authorizer propio</th></tr></thead>
+    <tbody>
+      <tr><td>1 M peticiones/mes</td><td><code>3,50 USD/mes</code></td><td><code>≈ 1,83 USD/mes</code> + tu código</td></tr>
+      <tr><td>10 M peticiones/mes</td><td><code>35,00 USD/mes</code></td><td><code>≈ 18,30 USD/mes</code> + tu código</td></tr>
+      <tr><td>100 M peticiones/mes</td><td><code>350,00 USD/mes</code></td><td><code>≈ 183 USD/mes</code> + tu código</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Lo que los números no dicen, y decide más que ellos:</p>
+  <ul>
+    <li><strong>La caché del authorizer te pelea el contador.</strong> Si cacheas el
+    resultado 300 segundos, el authorizer no se invoca en cada petición — y entonces
+    <em>no puede contarlas</em>. O cacheas y cuentas aparte (desde la propia función de
+    negocio), o no cacheas y pagas una invocación y una escritura por petición. Esta
+    tensión no aparece en ningún tutorial y es la que rompe la implementación casera.</li>
+    <li><strong>Latencia.</strong> Sin caché, cada petición lleva una invocación de Lambda
+    extra <em>en serie</em> antes de la tuya: decenas de milisegundos, más los arranques en
+    frío del authorizer.</li>
+    <li><strong>Lo que ya no será tuyo.</strong> Los usage plans traen informes de consumo
+    por clave, integración con AWS Marketplace y un portal de desarrollador. Escribir el
+    contador es fácil; escribir todo lo que lo rodea, no.</li>
+    <li><strong>La vuelta atrás.</strong> Migrar de HTTP API a REST API no es un flag: es
+    reescribir los recursos de Terraform de v2 a v1, montar <code>deployment</code>,
+    <code>method</code>, <code>integration</code> y <code>method_response</code>, y cambiar
+    el formato del evento que recibe tu handler. Decidirlo ahora es más barato que
+    decidirlo en el proyecto 05.</li>
+  </ul>
+</div>
+
+<h2 id="authorizers">Authorizers: quién pone el 401</h2>
+<p>Un authorizer es la pieza que decide, <em>antes</em> de tu integración, si la petición
+pasa. Que el rechazo ocurra en la puerta importa por dos motivos: tu función no se ejecuta
+(no paga) y no ve nunca al no autorizado.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Dónde</th><th>Qué valida</th><th>Cuándo lo quieres</th></tr></thead>
+  <tbody>
+    <tr><td><strong>IAM</strong> (SigV4)</td><td>REST y HTTP</td>
+      <td>Que la petición vaya firmada con credenciales AWS y que la política permita
+      <code>execute-api:Invoke</code> sobre ese ARN de método.</td>
+      <td>Máquina a máquina dentro de AWS: otro servicio tuyo, otra cuenta, un CI. Cero
+      código y cero secretos que rotar.</td></tr>
+    <tr><td><strong>JWT</strong></td><td><strong>Solo HTTP API</strong></td>
+      <td>Firma contra el <code>jwks_uri</code> del emisor, y las claims <code>iss</code>,
+      <code>aud</code> (o <code>client_id</code>), <code>exp</code>, <code>nbf</code>,
+      <code>iat</code>, <code>kid</code> y <code>scope</code>/<code>scp</code>.</td>
+      <td>Usuarios de una app web o móvil. Cognito o cualquier OIDC: Auth0, Okta, Entra ID,
+      Keycloak. Cero código tuyo.</td></tr>
+    <tr><td><strong>Lambda authorizer</strong><br>(<code>REQUEST</code>)</td><td>REST y HTTP</td>
+      <td>Lo que tú decidas: una API key propia, una sesión en DynamoDB, un JWT con reglas
+      raras, una lista de IPs, un cupo.</td>
+      <td>Todo lo que no encaje en los dos anteriores — incluida la validación de JWT en
+      REST API, que no tiene authorizer JWT nativo.</td></tr>
+    <tr><td><strong>Cognito user pool</strong></td><td>Solo REST API</td>
+      <td>El token de un user pool concreto, sin escribir nada.</td>
+      <td>REST API con Cognito. En HTTP API el equivalente es el authorizer JWT apuntando
+      al pool.</td></tr>
+    <tr><td><strong>Resource policy</strong></td><td>Solo REST API</td>
+      <td>No es un authorizer: es una política pegada a la API que filtra por IP de origen,
+      VPC endpoint (<code>aws:SourceVpce</code>) o cuenta.</td>
+      <td>Restringir el <em>dónde</em>, no el <em>quién</em>. Es lo que hace privada de
+      verdad a una API privada.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="authorizer-cache">La caché del authorizer y sus tres trampas</h3>
+<p>Un authorizer Lambda se puede cachear: <code>authorizer_result_ttl_in_seconds</code>, que
+en el provider de Terraform <strong>vale 300 por defecto</strong> y admite hasta 3 600. Es
+la diferencia entre invocar una Lambda extra en cada petición y hacerlo una vez cada cinco
+minutos. Lo que hay que saber antes de activarla:</p>
+<ul>
+  <li><strong>La clave de caché son las <em>identity sources</em>, no el usuario.</strong>
+  Si tu identity source es <code>$request.header.Authorization</code>, dos peticiones con el
+  mismo token comparten la respuesta cacheada. Y <strong>sin identity sources no hay caché
+  posible</strong>: la doc lo dice explícito.</li>
+  <li><strong>Por defecto la respuesta cacheada vale para <em>todas las rutas</em> de la
+  API.</strong> Con <code>enable_simple_responses</code> (el booleano <code>isAuthorized</code>),
+  un «sí» cacheado abre todo lo que use ese authorizer. Si quieres permisos por ruta, o
+  añades <code>$context.routeKey</code> a las identity sources, o devuelves una política IAM
+  en vez del booleano.</li>
+  <li><strong>Revocar un token no es inmediato.</strong> Con TTL de 300 s, un token que
+  acabas de invalidar sigue entrando hasta cinco minutos. Es un compromiso legítimo — pero
+  hay que tomarlo a propósito, no heredarlo del default del provider.</li>
+</ul>
+<p>Dos comportamientos más que explican errores confusos: si el cliente <strong>no manda</strong>
+la identity source, API Gateway <strong>ni invoca</strong> tu authorizer y devuelve
+<code>401</code> directamente; y si API Gateway no tiene permiso para invocar el authorizer,
+o el authorizer devuelve un formato inválido, el cliente recibe <code>500</code> — el mismo
+síntoma mudo que la Lambda de negocio sin <code>aws_lambda_permission</code>. El authorizer
+necesita <strong>su propio</strong> permiso, con <code>source_arn</code> apuntando a
+<code>…:{api-id}/authorizers/{authorizer-id}</code>.</p>
+<p class="small">Fuentes: <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-lambda-authorizer.html">Lambda
+authorizers para HTTP APIs</a> y <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html">JWT
+authorizers</a>, consultadas el 2026-08-30.</p>
+
+<div class="callout aws">
+  <span class="callout-title">Detalles del authorizer JWT que ahorran una tarde</span>
+  <ul>
+    <li><strong>Solo algoritmos RSA.</strong> Un emisor que firme con HS256 (clave simétrica)
+    no sirve: necesitas un authorizer Lambda.</li>
+    <li><strong>La clave pública se cachea dos horas.</strong> Al rotar claves en el IdP,
+    deja un periodo de gracia en el que la vieja y la nueva sean válidas.</li>
+    <li><strong>No distingue un access token de un ID token.</strong> La propia doc lo dice:
+    «There is no standard mechanism to differentiate JWT access tokens from other types of
+    JWTs». La recomendación de AWS es exigir <em>scopes</em> en la ruta
+    (<code>authorization_scopes</code>) o un <code>aud</code>/<code>iss</code> que tu IdP
+    solo use al emitir access tokens.</li>
+    <li><strong>Las claims llegan a tu handler</strong> en
+    <code>event.requestContext.authorizer.jwt.claims</code> — no vuelvas a decodificar el
+    token dentro de la función.</li>
+  </ul>
+</div>
+
+<h3 id="cors">CORS: por qué el <code>curl</code> no se entera</h3>
+<p>CORS no es una protección del servidor: es una <strong>restricción que aplica el
+navegador</strong>. Por eso el síntoma es siempre el mismo desconcierto — tu
+<code>curl</code> funciona perfecto, y la misma petición desde una web falla con
+<code>Cross-Origin Request Blocked</code>. El <code>curl</code> no manda cabecera
+<code>origin</code> y no hace preflight; el navegador sí. Si toda tu verificación es por
+terminal, CORS es invisible hasta que hay front.</p>
+<p>En HTTP API se declara y se acabó: un bloque <code>cors_configuration</code> con
+<code>allow_origins</code>, <code>allow_methods</code>, <code>allow_headers</code>,
+<code>expose_headers</code>, <code>max_age</code> y <code>allow_credentials</code>. Con eso,
+<strong>API Gateway responde solo a los <code>OPTIONS</code> de preflight</strong> aunque no
+tengas ninguna ruta <code>OPTIONS</code>. Las dos trampas:</p>
+<ul>
+  <li><strong>Si configuras CORS en la API, API Gateway <em>ignora</em> las cabeceras CORS
+  que devuelva tu integración.</strong> Textual en la doc. Elige un sitio: la puerta o tu
+  código. Ponerlo en los dos no duplica — silencia al de abajo, que es peor porque parece
+  que tu código no hace efecto.</li>
+  <li><strong>Ruta <code>$default</code> + authorizer = preflight roto.</strong> La ruta
+  <code>$default</code> atrapa también los <code>OPTIONS</code>, y si lleva authorizer, el
+  navegador recibe un 401 en el preflight y ni siquiera intenta la petición real. La
+  solución documentada: añade una ruta <code>OPTIONS /{proxy+}</code> sin autorización —
+  tiene más prioridad que <code>$default</code>.</li>
+</ul>
+<p>Un tercer detalle que rompe en producción y no en desarrollo: <code>allow_credentials =
+true</code> junto a <code>allow_origins = ["*"]</code> es una combinación que el navegador
+rechaza por especificación. Con credenciales hay que listar orígenes concretos.</p>
+
+<h2 id="por-dentro">Cómo funciona por dentro</h2>
 <p>Cuatro piezas que se declaran por separado, y una petición las atraviesa en orden:</p>
 <ul>
   <li><strong>API</strong> — el contenedor. Al crearla, AWS le asigna una URL regional del
@@ -116,40 +396,274 @@ WebSocket son <code>aws_apigatewayv2_*</code>.</p>
   <code>auto_deploy</code> publica cada cambio solo y desaparece de la URL.</li>
 </ul>
 <p>Garantías que importan: es <strong>síncrono</strong> (el cliente espera la respuesta
-entera), el timeout de integración es <strong>30 segundos y no se puede subir</strong> — da
-igual que tu Lambda admita 15 minutos, la puerta corta antes — y el throttling por defecto es
-el de la cuenta: 10 000 peticiones/segundo con ráfagas de 5 000. Y una asimetría de permisos
-que hay que saberse: tu rol IAM dice lo que tu función <em>puede hacer</em>; quién puede
-<em>invocarla</em> se decide en una política pegada a la propia función (<em>resource-based
-policy</em>), que es donde API Gateway pide paso.</p>
+entera) y hay una asimetría de permisos que hay que saberse: tu rol IAM dice lo que tu
+función <em>puede hacer</em>; quién puede <em>invocarla</em> se decide en una política
+pegada a la propia función (<em>resource-based policy</em>), que es donde API Gateway pide
+paso.</p>
 
-<h2>Cuánto cuesta</h2>
+<h3 id="timeout">El timeout, con el matiz que casi nadie cuenta</h3>
+<p>La frase corta que circula — «API Gateway corta a los 30 segundos y no hay más» — es
+cierta para HTTP API y <strong>falsa para REST API</strong>:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Producto</th><th>Timeout de integración</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>HTTP API</td><td><code>30 s</code></td><td><strong>No.</strong> Punto final</td></tr>
+    <tr><td>REST API regional o privada</td><td><code>50 ms – 29 s</code></td>
+      <td><strong>Sí</strong>, por Service Quotas — «you can raise the integration timeout to
+      greater than 29 seconds, but this might require a reduction in your Region-level
+      throttle quota». Se paga en cuota de throttling, no en dólares</td></tr>
+    <tr><td>REST API edge-optimized</td><td><code>50 ms – 29 s</code></td><td>No</td></tr>
+    <tr><td>REST API con <a href="#streaming">response streaming</a></td><td><code>hasta 15 min</code></td>
+      <td>No aplica: en modo <code>STREAM</code> no hay que esperar la respuesta entera</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Da igual que tu Lambda admita 15 minutos: con integración normal la puerta corta antes.
+Lo largo va por ejecución asíncrona (cola + polling) o, desde nov-2025 y solo en REST, por
+streaming.</p>
+
+<h3 id="stages">Stages y deployments: la asimetría que rompe el <code>apply</code></h3>
+<p>En los dos productos, una configuración de rutas no atiende tráfico hasta que se publica.
+La diferencia es quién pulsa el botón:</p>
+<ul>
+  <li><strong>HTTP API</strong>: <code>auto_deploy = true</code> en el stage y se acabó.
+  Cada cambio de ruta o integración se publica solo. Es el default sensato que hace que el
+  proyecto 01 no tenga que pensar en esto.</li>
+  <li><strong>REST API</strong>: un <code>deployment</code> es una <em>foto</em> inmutable
+  de la configuración, y el stage apunta a una foto. Si cambias un método y no creas un
+  deployment nuevo, <strong>Terraform dice <code>Apply complete</code> y la API sigue
+  sirviendo lo viejo</strong>. Es el fallo nº 1 de REST API en Terraform, porque no hay
+  error: hay silencio.</li>
+</ul>
+<p>El patrón correcto en el provider es <code>triggers</code> + <code>create_before_destroy</code>
+(ver <a href="#terraform">En Terraform</a>). Sin <code>create_before_destroy</code>, el
+propio provider avisa de qué se rompe:
+<code>BadRequestException: Active stages pointing to this deployment must be moved or
+deleted</code>.</p>
+
+<h3 id="throttling">Throttling: cuatro capas, y se aplican en este orden</h3>
+<p>Hay cuatro techos distintos, y no son alternativas: la petición los cruza todos. El orden
+en que API Gateway los evalúa, según la doc:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>#</th><th>Capa</th><th>Alcance</th><th>Dónde se configura</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Por cliente / por método en un usage plan</td><td>Una API key</td>
+      <td><code>aws_api_gateway_usage_plan</code> — solo REST</td></tr>
+    <tr><td>2</td><td>Por método o por ruta en el stage</td><td>Todos los clientes de esa ruta</td>
+      <td><code>route_settings</code> (v2) o <code>aws_api_gateway_method_settings</code> (v1)</td></tr>
+    <tr><td>3</td><td>De la cuenta, por región</td><td>Todas tus APIs de la región</td>
+      <td>Service Quotas: <code>10 000 req/s</code>, ráfaga <code>5 000</code></td></tr>
+    <tr><td>4</td><td>De AWS</td><td>Toda la región, todas las cuentas</td>
+      <td>No se toca. Es el techo del servicio</td></tr>
+  </tbody>
+</table>
+</div>
+<p>El algoritmo es un <strong>token bucket</strong>: <code>rate</code> es a qué velocidad se
+rellena el cubo y <code>burst</code> cuántos tokens caben. Por eso un pico corto pasa y uno
+sostenido no. Cuando se agota, el cliente recibe <code>429 Too Many Requests</code>, y la
+doc insiste en que todos estos números son objetivos, no garantías: «Both throttles and
+quotas are applied on a best-effort basis and should be thought of as targets rather than
+guaranteed request ceilings».</p>
+<p><strong>El límite de cuenta es compartido entre HTTP, REST y WebSocket</strong> — una API
+ruidosa se come el cupo de las demás. El <em>rate</em> se sube por Service Quotas; la
+<em>ráfaga</em> no: «It is not a quota that a customer can control or request changes to».
+Y ojo con la región: en trece regiones (Ciudad del Cabo, Milán, Yakarta, Emiratos,
+Hyderabad, Melbourne, España, Zúrich, Tel Aviv, Calgary, Malasia, Tailandia y México) el
+default no es 10 000/5 000 sino <strong>2 500/1 250</strong>.</p>
+
+<h2 id="operacion">La puerta en producción: dominio, logs, caché, privado, mTLS</h2>
+
+<h3 id="dominios">Dominios propios y ACM</h3>
+<p>La URL que da AWS (<code>https://a1b2c3d4e5.execute-api.us-east-1.amazonaws.com</code>)
+sirve para el curso y para nada más: lleva un ID aleatorio y ata tu API a una región visible
+en el nombre. Un dominio propio son tres piezas: un certificado en ACM, un
+<code>domain_name</code> en API Gateway, y un <em>API mapping</em> que dice qué stage
+atiende qué camino base.</p>
+<p>La regla que cuesta media hora si no la sabes, textual en la doc:</p>
+<ul>
+  <li><strong>Dominio regional</strong> (el de HTTP API, y el recomendado en REST): «you
+  must request or import the certificate <strong>in the same Region as your API</strong>».</li>
+  <li><strong>Dominio edge-optimized</strong> (solo REST): «you must request or import the
+  certificate in the <strong>US East (N. Virginia) – <code>us-east-1</code></strong>
+  Region», porque por debajo es CloudFront.</li>
+</ul>
+<p>El certificado público de ACM es gratis y se renueva solo si la validación es por DNS. El
+dominio propio de API Gateway <strong>no tiene coste propio</strong>: no hay línea de
+factura por tenerlo. Y hay un detalle útil para el proyecto 05: puedes
+<strong>desactivar el endpoint por defecto</strong> para que nadie siga usando la URL fea —
+los clientes que insistan reciben <code>403</code>.</p>
+
+<h3 id="logs">Access logging: el único sitio donde vive el 500 mudo</h3>
+<p>Los dos productos escriben <em>access logs</em> a CloudWatch Logs: una línea por
+petición, con el formato que tú definas a base de variables <code>$context</code>. Es
+literalmente el único lugar donde aparece el error cuando la puerta falla <em>antes</em> de
+invocar tu función — el 500 por permiso ausente, el authorizer que devolvió basura. Dos
+variables que conviene meter siempre en el formato:</p>
+<ul>
+  <li><code>$context.integrationErrorMessage</code> — por qué falló la integración.</li>
+  <li><code>$context.authorizer.error</code> — por qué falló el authorizer.</li>
+</ul>
+<p>Los <em>execution logs</em> (el paso a paso interno de la puerta, con el evento y la
+respuesta) <strong>solo existen en REST API</strong>. En HTTP API, lo que no capture el
+access log no está en ningún sitio.</p>
+<div class="callout cost">
+  <span class="callout-title">Los logs no son gratis, y esta es la parte que sorprende</span>
+  <p>API Gateway no cobra por loguear; <strong>CloudWatch Logs sí</strong>:
+  <code>0,50 USD por GB ingerido</code> y <code>0,03 USD por GB-mes almacenado</code>
+  (Standard, <code>us-east-1</code>, verificado el 2026-08-30 contra la
+  <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/current/us-east-1/index.json">Price
+  List API</a>). Una línea JSON de access log ronda los 400 bytes: un millón de peticiones
+  ≈ 0,4 GB ≈ <strong>0,20 USD/mes</strong> — comparable a lo que cuesta la propia HTTP API.
+  Y el almacenamiento es <em>para siempre</em> si no pones retención: exactamente la misma
+  trampa que los logs de Lambda. <code>retention_in_days</code> en el log group, siempre.
+  Los detalles, en la <a href="./aws-cloudwatch.html">ficha de CloudWatch</a>.</p>
+</div>
+
+<h3 id="cache">La caché de REST API: la trampa directa contra la regla de coste del curso</h3>
+<p>Este curso tiene una regla: <em>saber siempre qué cobra por hora</em>. En API Gateway
+casi todo es por uso… menos esto. La caché de REST API se aprovisiona
+<strong>por stage</strong>, se cobra <strong>por hora</strong>, y
+<strong>no entra en la capa gratuita</strong> («Caching is charged by the hour based on the
+cache size that you select. Caching is not eligible for the AWS Free Tier»).</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Tamaño</th><th>USD/hora</th><th>≈ USD/mes (730 h)</th><th>Modelo</th></tr></thead>
+  <tbody>
+    <tr><td><code>0,5 GB</code></td><td>0,020</td><td><strong>14,60</strong></td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>1,6 GB</code></td><td>0,038</td><td>27,74</td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>6,1 GB</code></td><td>0,200</td><td>146,00</td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>13,5 GB</code></td><td>0,250</td><td>182,50</td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>28,4 GB</code></td><td>0,500</td><td>365,00</td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>58,2 GB</code></td><td>1,000</td><td>730,00</td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>118 GB</code></td><td>1,900</td><td>1 387,00</td><td><span class="tag-cost hour">por hora</span></td></tr>
+    <tr><td><code>237 GB</code></td><td>3,800</td><td>2 774,00</td><td><span class="tag-cost hour">por hora</span></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Tabla completa de la Price List API de <code>AmazonApiGateway</code>,
+<code>us-east-1</code>, verificada el 2026-08-30 (publicación 2026-07-24).</p>
+<p>Lo demás que hay que saber antes de tocarla: TTL por defecto <strong>300 s</strong>,
+máximo <strong>3 600 s</strong>, <code>0</code> la desactiva; respuesta cacheable máxima
+<strong>1 048 576 bytes</strong>; solo los métodos <code>GET</code> se cachean por defecto;
+crear o borrar el clúster tarda <strong>unos 4 minutos</strong>; y cambiar el tamaño
+<strong>borra todo lo cacheado</strong> (destruye la instancia y crea otra). Un cliente
+puede invalidar una entrada mandando <code>Cache-Control: max-age=0</code> — y si no
+proteges esa acción con IAM (<code>execute-api:InvalidateCache</code>),
+<strong>cualquiera puede vaciarte la caché que estás pagando</strong>.</p>
+<div class="callout trap">
+  <span class="callout-title">La factura fantasma</span>
+  <p>Un stage de pruebas con caché de 0,5 GB, olvidado un mes sin una sola petición, factura
+  <strong>14,60 USD</strong>. La API no cobra nada, la Lambda no cobra nada, DynamoDB no
+  cobra nada — y llega un cargo que no cuadra con ningún tráfico. Si activas caché,
+  apúntalo en el <code>destroy</code> del proyecto.</p>
+</div>
+
+<h3 id="privadas">APIs privadas y VPC endpoints</h3>
+<p>Una <em>private API</em> es una REST API que <strong>solo se puede llamar desde dentro de
+una VPC</strong>, a través de un interface VPC endpoint (AWS PrivateLink). No tiene URL
+pública que valga: el tráfico no sale de la red de Amazon. Lo que hay que saber:</p>
+<ul>
+  <li><strong>Solo REST API.</strong> Textual: «Only REST APIs are supported». Si necesitas
+  una API privada, la decisión HTTP vs REST está tomada por ti.</li>
+  <li><strong>El endpoint no basta: hace falta la resource policy.</strong> Sin una política
+  con condición <code>aws:SourceVpc</code> o <code>aws:SourceVpce</code>, tu API privada es
+  invocable desde <em>cualquier</em> VPC endpoint de cualquier cuenta que la conozca.</li>
+  <li><strong>El DNS privado tiene efecto colateral.</strong> Al activarlo en la VPC, dejas
+  de poder resolver los endpoints por defecto de las APIs <em>públicas</em> desde esa VPC.
+  Se arregla con una hosted zone privada por API, pero hay que saberlo antes.</li>
+  <li><strong>No es gratis.</strong> El PrivateLink cobra por hora: ~0,01 USD/h por zona de
+  disponibilidad más ~0,01 USD/GB procesado. Dos AZ ≈ <strong>14,60 USD/mes</strong> exista
+  o no tráfico. Otra línea por horas que apuntar.</li>
+  <li>Y dos detalles finos: las APIs privadas solo aceptan <strong>TLS 1.2</strong>, y una
+  API privada <strong>no se puede convertir</strong> en edge-optimized.</li>
+</ul>
+
+<h3 id="mtls">mTLS: el cliente también enseña certificado</h3>
+<p>TLS mutuo significa que, además de que tú demuestres ser quien dices, el cliente presenta
+un certificado y tú lo validas. Lo tienen <strong>los dos productos</strong> — es la fila de
+la tabla que más gente da por perdida en HTTP API — y se configura en el
+<strong>dominio propio</strong>, no en la API: un <em>truststore</em> (un fichero PEM con
+las CAs que aceptas) subido a S3, y su versión. Límite: <strong>1 000 certificados y 1 MB</strong>
+por truststore. Para actualizarlo, subes una versión nueva del objeto S3 y apuntas el dominio
+a ella — de ahí que el bucket necesite versionado.</p>
+<p>Cuándo importa: integraciones B2B y sectores regulados donde «el cliente es una empresa
+con su PKI», no un usuario con contraseña. Los datos del certificado llegan a tu authorizer
+en <code>requestContext.authentication.clientCert</code>.</p>
+
+<h3 id="streaming">Response streaming en REST API (novedad de nov-2025)</h3>
+<p>Si tu conocimiento de este servicio es de 2024, esta parte está desactualizada en tu
+cabeza: hasta 2025, «quiero que la respuesta llegue por trozos» significaba
+<em>Lambda Function URL</em>, porque API Gateway siempre esperaba la respuesta entera. Desde
+<a href="https://aws.amazon.com/about-aws/whats-new/2025/11/api-gateway-response-streaming-rest-apis/">noviembre
+de 2025</a>, <strong>REST API</strong> soporta <code>responseTransferMode = STREAM</code> en
+integraciones <code>AWS_PROXY</code> y <code>HTTP_PROXY</code>. Lo que compra:</p>
+<ul>
+  <li>Time-to-first-byte bajo en chatbots y SSE, y ficheros grandes sin URL prefirmada.</li>
+  <li><strong>Se salta los dos límites duros</strong>: los 10 MB de payload de respuesta y
+  los 29 segundos de timeout. En streaming puedes emitir hasta <strong>15 minutos</strong>.</li>
+</ul>
+<p>Lo que cuesta: <strong>HTTP API no lo tiene</strong> (solo REST, a 3,50 USD/millón);
+desactiva la caché, la compresión y la transformación VTL; los primeros 10 MB van sin
+restricción de ancho de banda y a partir de ahí te limita a 2 MB/s; el idle timeout es de
+5 minutos en regional y privada, pero de <strong>30 segundos</strong> en edge-optimized; y
+las respuestas en streaming se facturan en incrementos de 10 MB. Request streaming
+(subida por trozos) sigue sin existir.</p>
+
+<h3 id="portal">Developer portal gestionado (novedad de nov-2025)</h3>
+<p>Otra pieza nueva que conviene conocer aunque no la uses: API Gateway ahora ofrece
+<a href="https://aws.amazon.com/about-aws/whats-new/2025/11/api-gateway-developer-portal-capabilities/">portales
+gestionados</a> donde tus clientes descubren, prueban y se suscriben a tus APIs. Es la
+funcionalidad que antes había que montarse con una plantilla. El precio la sitúa sola en su
+sitio: <strong>125,00 USD/mes por portal</strong> más <strong>12,50 USD/mes por producto</strong>
+publicado (Price List API, <code>us-east-1</code>, 2026-08-30). No es una pieza de proyecto
+personal; es una pieza de «vendo mi API a terceros».</p>
+
+<h2 id="coste">Cuánto cuesta</h2>
 <table class="cost-table">
   <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
   <tbody>
     <tr><td>HTTP API — primeros 300 M de peticiones/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>1,00 USD / millón</code></td></tr>
     <tr><td>HTTP API — a partir de 300 M</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,90 USD / millón</code></td></tr>
-    <tr><td>REST API — primeros 333 M de peticiones/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>3,50 USD / millón</code></td></tr>
-    <tr><td>WebSocket — mensajes / minutos de conexión</td><td><span class="tag-cost usage">por uso</span></td><td><code>1,00 / 0,25 USD por millón</code></td></tr>
+    <tr><td>REST API — primeros 333 M</td><td><span class="tag-cost usage">por uso</span></td><td><code>3,50 USD / millón</code></td></tr>
+    <tr><td>REST API — de 333 M a 1 000 M</td><td><span class="tag-cost usage">por uso</span></td><td><code>2,80 USD / millón</code></td></tr>
+    <tr><td>REST API — de 1 000 M a 20 000 M</td><td><span class="tag-cost usage">por uso</span></td><td><code>2,38 USD / millón</code></td></tr>
+    <tr><td>REST API — más de 20 000 M</td><td><span class="tag-cost usage">por uso</span></td><td><code>1,51 USD / millón</code></td></tr>
+    <tr><td>WebSocket — mensajes (primeros 1 000 M)</td><td><span class="tag-cost usage">por uso</span></td><td><code>1,00 USD / millón</code></td></tr>
+    <tr><td>WebSocket — minutos de conexión</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,25 USD / millón</code></td></tr>
+    <tr><td><strong>Caché de REST API</strong></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,020 – 3,80 USD/h</code> según tamaño — <a href="#cache">tabla completa</a></td></tr>
+    <tr><td>Developer portal</td><td><span class="tag-cost hour">por mes</span></td><td><code>125,00 USD/mes</code> + 12,50 por producto</td></tr>
+    <tr><td>Transferencia de datos de salida</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,09 USD / GB</code></td></tr>
     <tr><td>API en reposo (cualquier tipo salvo caché de REST)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
-    <tr><td>Free tier — 1 M de peticiones HTTP API al mes</td><td><span class="tag-cost free">12 meses</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Free tier — 1 M HTTP + 1 M REST + 1 M mensajes WS + 750 000 min de conexión al mes</td><td><span class="tag-cost free">12 meses</span></td><td><code>0,00 USD</code></td></tr>
   </tbody>
 </table>
-<p class="cost-stamp">Precios de us-east-1, verificados el 2026-08-28 contra la
-<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonApiGateway/current/us-east-1/index.json">Price
-List API</a> y la <a href="https://aws.amazon.com/api-gateway/pricing/">página de precios</a>.
-Cámbialos si han pasado meses.</p>
+<p class="cost-stamp">Precios de <code>us-east-1</code>, verificados el <strong>2026-08-30</strong>
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonApiGateway/current/us-east-1/index.json">Price
+List API</a> (publicación 2026-07-24) y la
+<a href="https://aws.amazon.com/api-gateway/pricing/">página de precios</a>. Cámbialos si han
+pasado meses.</p>
 <div class="callout cost">
   <span class="callout-title">Lo que sorprende en la factura</span>
-  <p>Dos cosas. Una: el free tier de API Gateway <strong>caduca a los 12 meses</strong> de
+  <p>Cuatro cosas. Una: el free tier de API Gateway <strong>caduca a los 12 meses</strong> de
   crear la cuenta — no es como el de Lambda o DynamoDB, que son para siempre; a tu escala da
   igual (mil peticiones son 0,001 USD), pero conviene saber qué columna del free tier estás
   mirando. Dos: las peticiones se miden <strong>en incrementos de 512 KB</strong> — una
-  respuesta de 4,5 MB se factura como 9 peticiones. Con JSONs pequeños no lo notarás nunca;
-  sirviendo ficheros, sí.</p>
+  respuesta de 4,5 MB se factura como 9 peticiones (y las respuestas en streaming, en
+  incrementos de 10 MB). Con JSONs pequeños no lo notarás nunca; sirviendo ficheros, sí.
+  Tres: <strong>la caché y el portal cobran por tiempo</strong>, no por uso — son las dos
+  únicas líneas del servicio que siguen corriendo con la API dormida. Y cuatro: los
+  <strong>access logs se pagan en CloudWatch</strong>, no aquí, y a un millón de peticiones
+  pueden costar tanto como la propia puerta.</p>
 </div>
 
-<h2>Límites que vas a chocar</h2>
+<h2 id="limites">Límites que vas a chocar</h2>
+<p class="small">Fuentes: <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html">cuotas
+de HTTP APIs</a>,
+<a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-execution-service-limits-table.html">cuotas
+de REST APIs</a> y <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html">cuotas
+de cuenta</a>, consultadas el 2026-08-30.</p>
 <div class="scroll-x">
 <table>
   <thead><tr><th>Límite (HTTP API)</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
@@ -158,17 +672,47 @@ Cámbialos si han pasado meses.</p>
     <tr><td>Payload por petición</td><td><code>10 MB</code></td><td>No</td></tr>
     <tr><td>Throttling de la cuenta, por región</td><td><code>10 000 req/s</code> (ráfaga 5 000)</td><td>Sí, por Service Quotas (la ráfaga, no)</td></tr>
     <tr><td>Rutas por API</td><td><code>300</code></td><td>Sí, por Service Quotas</td></tr>
+    <tr><td>Integraciones por API</td><td><code>300</code></td><td><strong>No</strong></td></tr>
     <tr><td>Stages por API</td><td><code>10</code></td><td>Sí, por Service Quotas</td></tr>
     <tr><td>Línea de petición + cabeceras</td><td><code>10 240 B</code></td><td>No</td></tr>
     <tr><td>Authorizers por API</td><td><code>10</code></td><td>Sí, por ticket de soporte</td></tr>
+    <tr><td>Audiences por authorizer JWT</td><td><code>50</code></td><td>No</td></tr>
+    <tr><td>Scopes por ruta</td><td><code>10</code></td><td>No</td></tr>
+    <tr><td>Timeout de respuesta del Lambda authorizer</td><td><code>10 000 ms</code></td><td>No</td></tr>
+    <tr><td>Timeout del endpoint JWKS / OIDC discovery</td><td><code>1 500 ms</code></td><td>No — un IdP lento te tumba la auth</td></tr>
+    <tr><td>Dominios propios por cuenta y región</td><td><code>120</code></td><td>Sí</td></tr>
+    <tr><td>Plantilla de access log</td><td><code>3 KB</code></td><td>No</td></tr>
   </tbody>
 </table>
 </div>
-<p class="small">Fuente: <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html">cuotas
-de HTTP APIs</a> y <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html">cuotas de cuenta</a>,
-consultadas el 2026-08-28.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite (REST API — lo que cambia)</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Timeout de integración</td><td><code>50 ms – 29 s</code></td><td><strong>Sí</strong> en regional y privada, a cambio de bajar la cuota de throttling de la región</td></tr>
+    <tr><td>Recursos por API</td><td><code>300</code></td><td>Sí — o usa <code>{proxy+}</code> y gasta uno</td></tr>
+    <tr><td>API keys por cuenta y región</td><td><code>10 000</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Usage plans por cuenta y región</td><td><code>300</code></td><td>Sí</td></tr>
+    <tr><td>Usage plans por API key</td><td><code>10</code></td><td>Sí</td></tr>
+    <tr><td>Throttling por método en un stage de un usage plan</td><td><code>20</code></td><td>Sí, por ticket</td></tr>
+    <tr><td>TTL de la caché</td><td><code>300 s</code> por defecto, <code>0–3 600</code></td><td>No por encima de 3 600</td></tr>
+    <tr><td>Respuesta cacheable</td><td><code>1 048 576 B</code></td><td>No</td></tr>
+    <tr><td>Cabeceras (total)</td><td><code>20 480 B</code> · <code>8 000 B</code> en privadas</td><td>No</td></tr>
+    <tr><td>Longitud del ARN de método</td><td><code>1 600 B</code></td><td>No — pasarse devuelve <code>414</code></td></tr>
+    <tr><td>Plantilla de mapping (VTL)</td><td><code>300 KB</code>, 1 000 iteraciones por <code>#foreach</code></td><td>No</td></tr>
+    <tr><td>Certificados por truststore de mTLS</td><td><code>1 000</code> y 1 MB</td><td>No</td></tr>
+    <tr><td>Idle connection timeout</td><td><code>310 s</code></td><td>No</td></tr>
+    <tr><td>Longitud de la resource policy</td><td><code>8 192</code> caracteres</td><td>Sí — o mete las IP en WAF</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Cuotas de <em>ritmo de administración</em> que muerden en CI/CD y casi nadie
+espera: <code>CreateDeployment</code> admite <strong>1 petición cada 5 segundos por
+cuenta</strong>, y <code>CreateDomainName</code> <strong>1 cada 30 segundos</strong>. Un
+<code>apply</code> que cree veinte APIs REST de golpe se encuentra con
+<code>TooManyRequestsException</code> — y el provider reintenta, pero el plan tarda.</p>
 
-<h2>Cuándo NO usarlo</h2>
+<h2 id="cuando-no">Cuándo NO usarlo</h2>
 <div class="verdict">
   <div class="yes"><h3>Úsalo si</h3><ul>
     <li>El backend es Lambda y la API es pública o multi-cliente.</li>
@@ -180,7 +724,7 @@ consultadas el 2026-08-28.</p>
     gratis y son tres líneas.</li>
     <li>El tráfico es masivo y sostenido: a decenas de millones de peticiones al día, un ALB
     por horas sale más barato que pagar cada petición.</li>
-    <li>La respuesta tarda más de 30 segundos sí o sí.</li>
+    <li>La respuesta tarda más de 30 segundos y no puedes usar streaming ni asincronía.</li>
   </ul></div>
 </div>
 <div class="scroll-x">
@@ -188,33 +732,121 @@ consultadas el 2026-08-28.</p>
   <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
   <tbody>
     <tr><td><strong>Lambda Function URL</strong></td><td>URL HTTPS directa a <em>una</em>
-    función: gratis, sin rutas, sin throttling propio, auth solo IAM o ninguna.</td>
-    <td>Un solo endpoint interno, un webhook, o el streaming de respuesta del proyecto 03.</td></tr>
-    <tr><td><strong>ALB</strong></td><td>Balanceador de capa 7: cobra ~0,023 USD/h exista o
-    no tráfico, pero no cobra por petición pequeña. Sin transformación de eventos, sin usage
-    plans.</td><td>Tráfico alto y constante, o backends en contenedores/EC2 — proyecto 04.</td></tr>
+    función: gratis, sin rutas, sin throttling propio (solo <em>reserved concurrency</em>),
+    auth solo IAM o ninguna, sin dominio propio.</td>
+    <td>Un solo endpoint interno, un webhook, o streaming sin pagar REST.</td></tr>
+    <tr><td><strong>ALB</strong></td><td>Balanceador de capa 7: cobra ~0,0325 USD/h exista o
+    no tráfico (0,0225 del ALB + sus 2 IPv4 públicas), pero no cobra por petición pequeña. Sin
+    transformación de eventos, sin usage plans.</td><td>Tráfico alto y constante, o backends en contenedores/EC2 — proyecto 04.</td></tr>
     <tr><td><strong>REST API</strong> (el hermano caro)</td><td>Mismo servicio, más
     funcionalidad, 3,5× el precio y sin <code>auto_deploy</code>.</td><td>API keys, WAF,
-    caché, canary o endpoints privados — nómbralo antes de pagarlo.</td></tr>
+    caché, canary, privado o streaming — nómbralo antes de pagarlo.</td></tr>
     <tr><td><strong>CloudFront</strong></td><td>CDN: cachea contenido en el borde, no enruta
     a Lambdas por método y camino.</td><td>Estáticos y caché global — proyecto 05. Se pueden
-    combinar: CloudFront delante de la API.</td></tr>
+    combinar: CloudFront delante de la API (y así una HTTP API gana WAF y caché).</td></tr>
+    <tr><td><strong>AppSync</strong></td><td>La misma idea pero para GraphQL: un esquema,
+    resolvers, suscripciones en tiempo real.</td><td>El contrato con el cliente es GraphQL y
+    no REST.</td></tr>
   </tbody>
 </table>
 </div>
 
-<h2>En Terraform</h2>
+<h2 id="decision">La tabla de decisión: qué puerta le pongo</h2>
+<p>Las cuatro opciones reales para poner una Lambda (o un servicio) en internet, comparadas
+desde el criterio de la puerta y no desde el del backend:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr>
+    <th>Criterio</th><th>HTTP API</th><th>REST API</th><th>Lambda Function URL</th><th>ALB</th>
+  </tr></thead>
+  <tbody>
+    <tr><td><strong>Auth incluida</strong></td>
+      <td>IAM, JWT (OIDC/Cognito), Lambda authorizer</td>
+      <td>IAM, Cognito, Lambda authorizer, resource policy</td>
+      <td><strong>Solo IAM o nada</strong></td>
+      <td>OIDC/Cognito en el listener; nada más</td></tr>
+    <tr><td><strong>Rate limiting por cliente</strong></td>
+      <td>No — solo por ruta y stage</td>
+      <td><strong>Sí: usage plans + API keys</strong></td>
+      <td>No — solo <em>reserved concurrency</em> (RPS ≈ 10× la concurrencia)</td>
+      <td>No — se delega a WAF</td></tr>
+    <tr><td><strong>Dominio propio</strong></td>
+      <td>Sí, regional, ACM en la región de la API</td>
+      <td>Sí, regional o edge (ACM en <code>us-east-1</code>)</td>
+      <td><strong>No</strong> — hace falta CloudFront delante</td>
+      <td>Sí, ACM en la región</td></tr>
+    <tr><td><strong>Enrutado por método y camino</strong></td>
+      <td>Sí, <em>route keys</em></td><td>Sí, recursos y métodos</td>
+      <td><strong>No</strong> — todo llega a una función y enrutas en el código</td>
+      <td>Sí, reglas del listener</td></tr>
+    <tr><td><strong>Streaming de respuesta</strong></td>
+      <td><strong>No</strong></td><td>Sí (desde nov-2025)</td><td><strong>Sí</strong></td><td>No con target Lambda</td></tr>
+    <tr><td><strong>Timeout máximo</strong></td>
+      <td><code>30 s</code>, duro</td>
+      <td><code>29 s</code> ampliable; <code>15 min</code> en streaming</td>
+      <td>El de la función: hasta <code>15 min</code></td>
+      <td>Configurable, minutos</td></tr>
+    <tr><td><strong>Coste en reposo</strong></td>
+      <td><code>0,00 USD</code></td>
+      <td><code>0,00 USD</code> — salvo caché</td>
+      <td><code>0,00 USD</code></td>
+      <td><strong>~24 USD/mes</strong> aunque no entre nadie (IPv4 incluidas)</td></tr>
+    <tr><td><strong>Coste por millón</strong></td>
+      <td><code>1,00 USD</code></td><td><code>3,50 USD</code></td>
+      <td><code>0,00 USD</code> — solo pagas la Lambda</td>
+      <td>Por LCU, no por petición</td></tr>
+    <tr><td><strong>WAF</strong></td>
+      <td>Solo con CloudFront delante</td><td>Sí, directo</td>
+      <td>Solo con CloudFront delante</td><td>Sí, directo</td></tr>
+    <tr><td><strong>Privado (sin internet)</strong></td>
+      <td>No</td><td><strong>Sí</strong>, VPC endpoint</td><td>No — «function URLs do not support PrivateLink»</td><td>Sí, ALB interno</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Leído de arriba abajo, el criterio queda así: <strong>si nadie más que tú llama y no hay
+dominio ni auth de usuario, Function URL</strong> (gratis, tres líneas). <strong>Si hay
+varios endpoints, usuarios y dominio, HTTP API</strong> — el default de este curso.
+<strong>Si además vendes acceso, necesitas WAF directo, privacidad de VPC o streaming,
+REST API</strong>, y aceptas el 3,5×. <strong>Si el tráfico es alto, plano y el backend no
+es Lambda, ALB</strong>, y pagas por hora a cambio de no pagar por petición. La
+<a href="./aws-lambda.html">ficha de Lambda</a> cuenta la misma frontera desde el otro
+lado.</p>
+
+<h2 id="terraform">En Terraform</h2>
 <div class="code">
   <div class="code-label"><span>ejemplo mínimo — HTTP API delante de una Lambda</span><span class="tag">hcl</span></div>
 <pre><code>resource "aws_apigatewayv2_api" "api" {
   name          = "mi-api"
   protocol_type = "HTTP"          # o "WEBSOCKET"; REST API es otro recurso (v1)
+
+  cors_configuration {            # sin esto, el navegador bloquea; el curl no se entera
+    allow_origins = ["https://mi-front.example.com"]
+    allow_methods = ["GET", "POST"]
+    allow_headers = ["content-type", "authorization"]
+    max_age       = 300
+  }
 }
 
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"        # sin sufijo en la URL
   auto_deploy = true              # sin esto, los cambios de rutas NO se publican
+
+  default_route_settings {        # el único throttling que HTTP API sabe hacer
+    throttling_rate_limit  = 100  # req/s en régimen estable
+    throttling_burst_limit = 200  # capacidad del cubo de tokens
+  }
+
+  access_log_settings {           # el único sitio donde aparece el 500 mudo
+    destination_arn = aws_cloudwatch_log_group.api.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      integrationErr = "$context.integrationErrorMessage"
+      authorizerErr  = "$context.authorizer.error"
+    })
+  }
 }
 
 resource "aws_apigatewayv2_integration" "fn" {
@@ -240,6 +872,85 @@ resource "aws_lambda_permission" "api" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }</code></pre>
 </div>
+
+<div class="code">
+  <div class="code-label"><span>authorizer JWT — el 401 sin escribir código</span><span class="tag">hcl</span></div>
+<pre><code>resource "aws_apigatewayv2_authorizer" "jwt" {
+  api_id           = aws_apigatewayv2_api.api.id
+  authorizer_type  = "JWT"
+  name             = "cognito"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    issuer   = "https://${aws_cognito_user_pool.pool.endpoint}"
+    audience = [aws_cognito_user_pool_client.app.id]
+  }
+}
+
+resource "aws_apigatewayv2_route" "protegida" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /links"
+  target             = "integrations/${aws_apigatewayv2_integration.fn.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
+  # authorization_scopes = ["links:write"]   # exige un scope concreto en el token
+}</code></pre>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>REST API — usage plan y API key (lo que HTTP API no tiene)</span><span class="tag">hcl</span></div>
+<pre><code># El deployment es una FOTO de la configuración. Sin triggers, cambias un método
+# y la API sigue sirviendo lo viejo con un "Apply complete" tranquilizador.
+resource "aws_api_gateway_deployment" "this" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+
+  triggers = {
+    redeployment = sha1(jsonencode(aws_api_gateway_rest_api.api.body))
+  }
+
+  lifecycle {
+    create_before_destroy = true   # sin esto: "Active stages pointing to this deployment..."
+  }
+}
+
+resource "aws_api_gateway_stage" "prod" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  deployment_id = aws_api_gateway_deployment.this.id
+  stage_name    = "prod"
+  # cache_cluster_enabled = true   # ← 0,020 USD/HORA con 0.5 GB, haya tráfico o no
+  # cache_cluster_size    = "0.5"
+}
+
+resource "aws_api_gateway_usage_plan" "basico" {
+  name = "plan-basico"
+
+  api_stages {
+    api_id = aws_api_gateway_rest_api.api.id
+    stage  = aws_api_gateway_stage.prod.stage_name
+  }
+
+  throttle_settings {              # el ritmo
+    rate_limit  = 10               # req/s por clave
+    burst_limit = 20
+  }
+
+  quota_settings {                 # el cupo
+    limit  = 100000
+    period = "MONTH"
+  }
+}
+
+resource "aws_api_gateway_api_key" "cliente_a" {
+  name = "cliente-a"
+}
+
+resource "aws_api_gateway_usage_plan_key" "cliente_a" {
+  key_id        = aws_api_gateway_api_key.cliente_a.id
+  key_type      = "API_KEY"
+  usage_plan_id = aws_api_gateway_usage_plan.basico.id
+}</code></pre>
+</div>
+
 <div class="callout trap">
   <span class="callout-title">Trampas conocidas</span>
   <ul>
@@ -252,6 +963,10 @@ resource "aws_lambda_permission" "api" {
     <code>{"message":"Internal Server Error"}</code> y — aquí la trampa — <strong>cero líneas
     en los logs de la Lambda</strong>, porque la Lambda nunca llegó a invocarse. El error
     solo vive en los access logs del stage, si los activaste.</li>
+    <li><strong>El authorizer necesita su propio permiso.</strong> Es una segunda Lambda y
+    una segunda política de recurso, con <code>source_arn</code> apuntando a
+    <code>{execution_arn}/authorizers/{id}</code>. El síntoma de olvidarlo es idéntico: 500
+    y silencio.</li>
     <li><strong><code>execution_arn</code> ≠ <code>api_endpoint</code></strong>: el primero
     es el ARN para permisos (<code>arn:aws:execute-api:…</code>), el segundo la URL pública.
     En <code>source_arn</code> va el primero, con <code>/*/*</code> (stage y ruta).</li>
@@ -259,13 +974,26 @@ resource "aws_lambda_permission" "api" {
     un espacio exacto. <code>"POST/links"</code> o una barra final de más crean una ruta que
     jamás casará, y nadie te avisa: las peticiones caen en el 404 <code>Not Found</code> de
     la API.</li>
+    <li><strong>En REST API, un <code>deployment</code> sin <code>triggers</code> es una
+    foto congelada.</strong> Terraform no ve que cambiaste un método porque el
+    <code>deployment</code> no depende de él: hay que forzarlo con <code>triggers</code> y
+    <code>create_before_destroy</code>. Es el equivalente v1 de olvidar
+    <code>auto_deploy</code>, pero silencioso.</li>
+    <li><strong><code>authorizer_result_ttl_in_seconds</code> vale 300 por defecto.</strong>
+    Si no lo fijas, tu authorizer cachea cinco minutos — y con
+    <code>enable_simple_responses</code> ese «sí» cacheado vale para <em>todas</em> las
+    rutas de la API. Ponlo a <code>0</code> mientras desarrollas, o te volverás loco
+    depurando permisos que «no cambian».</li>
+    <li><strong>El certificado ACM del dominio tiene región obligatoria</strong>: la de la
+    API si el dominio es regional, <code>us-east-1</code> si es edge-optimized. El error de
+    Terraform en este caso es genérico y no menciona la región.</li>
   </ul>
 </div>
 
-<h2>Comprueba</h2>
+<h2 id="comprueba">Comprueba</h2>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-kicker">Pregunta 1 de 6 · el síntoma mudo</p>
   <p class="quiz-q">Acabas de aplicar la puerta, haces el <code>curl</code> y recibes
   <code>{"message":"Internal Server Error"}</code>. Abres los logs de la función:
   vacíos, ni siquiera un <code>START</code>. ¿Cuál es el sospechoso número uno?</p>
@@ -278,19 +1006,19 @@ resource "aws_lambda_permission" "api" {
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-kicker">Pregunta 2 de 6 · elegir entre variantes</p>
   <p class="quiz-q">Te piden vender el acceso a tu API con claves por cliente y límites de
   peticiones distintos para cada uno. Estás en HTTP API. ¿Qué haces?</p>
   <ul class="quiz-opts">
-    <li><button data-correct="false" data-why="Puedes escribirlo (un authorizer Lambda + contadores en DynamoDB), pero estarías reimplementando usage plans a mano: más código tuyo que mantener para algo que el otro producto trae de serie.">Implementar las claves en un authorizer propio</button></li>
+    <li><button data-correct="false" data-why="Puedes escribirlo (un authorizer Lambda + contadores en DynamoDB), pero estarías reimplementando usage plans a mano: más código tuyo que mantener para algo que el otro producto trae de serie. Es una opción defendible, no la de libro.">Implementar las claves en un authorizer propio</button></li>
     <li><button data-correct="true" data-why="API keys y usage plans (límites por cliente) son exactamente la funcionalidad que HTTP API no tiene y REST API sí. Es el caso de libro para pagar el 3,5×: puedes nombrar la pieza concreta que necesitas.">Migrar a REST API por usage plans</button></li>
-    <li><button data-correct="false" data-why="El throttling de HTTP API es por ruta o por stage, no por cliente: no distingue quién llama. Para límites POR CLIENTE necesitas usage plans, y eso vive en REST API.">Configurar el throttling por stage del API</button></li>
+    <li><button data-correct="false" data-why="El throttling de HTTP API es por ruta o por stage, no por cliente: no distingue quién llama. Un abusivo consume el cupo de todos y el 429 le llega al inocente.">Configurar el throttling por stage del API</button></li>
   </ul>
   <div class="quiz-feedback"></div>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-kicker">Pregunta 3 de 6 · coste</p>
   <p class="quiz-q">Un servicio interno recibe 40 millones de peticiones al día, planas y
   predecibles, desde otros sistemas tuyos. ¿Qué puerta le pones, pensando en coste?</p>
   <ul class="quiz-opts">
@@ -302,7 +1030,7 @@ resource "aws_lambda_permission" "api" {
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-kicker">Pregunta 4 de 6 · el contrato del evento</p>
   <p class="quiz-q">Tu handler lee <code>event.rawPath</code> y devuelve
   <code>{statusCode: 201}</code>. En Terraform declaras la integración sin
   <code>payload_format_version</code>. ¿Qué pasa en producción?</p>
@@ -314,18 +1042,57 @@ resource "aws_lambda_permission" "api" {
   <div class="quiz-feedback"></div>
 </div>
 
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 5 de 6 · el criterio del proyecto 03</p>
+  <p class="quiz-q">Tu API hace un millón de peticiones al mes y te piden límites por
+  cliente. Migrar a REST cuesta 2,50 USD/mes más; montarlo tú con authorizer y DynamoDB,
+  algo menos de un dólar. ¿Qué zanja la decisión?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="A esa escala la diferencia de precio es ruido: 2,50 USD/mes no decide nada. Lo que decides de verdad es quién mantiene la lógica de cupos, sus condiciones de carrera y su tensión con la caché del authorizer.">El código propio que tendrás que mantener</button></li>
+    <li><button data-correct="false" data-why="El multiplicador de 3,5× importa a decenas de millones de peticiones, no a un millón. Elegir por 2,50 USD al mes es dejar que un número irrelevante decida una cuestión de arquitectura.">El precio por millón de cada producto</button></li>
+    <li><button data-correct="false" data-why="Existe —una invocación en serie antes de la tuya— pero se mide en milisegundos y la caché del authorizer la elimina casi entera. Es un factor, no el que zanja.">La latencia añadida por el authorizer propio</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 6 de 6 · coste por hora</p>
+  <p class="quiz-q">Activas la caché de 0,5 GB en un stage de REST API para acelerar unas
+  consultas. Luego el proyecto se queda parado un mes entero, sin una sola petición. ¿Qué
+  factura la caché?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="0,020 USD/h × 730 h = 14,60 USD. La caché se aprovisiona como una instancia dedicada y se cobra por hora exista o no tráfico: es la única línea de API Gateway que no es por uso.">Unos catorce dólares y medio, sin tráfico</button></li>
+    <li><button data-correct="false" data-why="Eso valdría para las peticiones, que sí son por uso. La caché no: es capacidad reservada, y AWS la cobra mientras el clúster exista, aunque nadie llame a la API.">Cero dólares, porque no hubo ninguna petición</button></li>
+    <li><button data-correct="false" data-why="La documentación es explícita: «Caching is not eligible for the AWS Free Tier». El millón de peticiones gratis del free tier no cubre ni un minuto de clúster de caché.">Cero dólares, la cubre la capa gratuita</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
 <div class="next">
+  <h3>Seguir</h3>
   <div class="nav-links">
-    <a href="./README.md">Todas las referencias</a>
+    <a href="./aws-lambda.html">Ficha: AWS Lambda</a>
+    <a href="./aws-dynamodb.html">Ficha: Amazon DynamoDB</a>
     <a href="../lessons/0008-la-puerta-publica.html">Lección 08 — la puerta pública</a>
+    <a href="./README.md">Todas las referencias</a>
     <a href="../GLOSSARY.md">Glosario</a>
-    <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html">Doc oficial de HTTP APIs</a>
   </div>
   <div class="ask">
-    <b>Pregúntame.</b> Quedan fuera a propósito: los authorizers JWT y Lambda (llegan con el
-    proyecto 03), los dominios propios con ACM (proyecto 05) y las integraciones directas con
-    servicios AWS sin Lambda en medio — que una ruta escriba en SQS o en DynamoDB ella sola.
-    Si alguna te pica ya, pídemela y la abrimos sobre tu acortador.
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html">tabla
+    oficial HTTP vs REST</a> (la sección que más decide), los <a
+    href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-api-usage-plans.html">usage
+    plans y API keys</a> con sus advertencias sobre qué NO son, la <a
+    href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html">página
+    de throttling</a> con el orden de las cuatro capas, y las cuotas de <a
+    href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html">HTTP</a>
+    y <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-execution-service-limits-table.html">REST</a>.
+    <br><br>
+    <b>Quedan fuera a propósito</b>: la API WebSocket a fondo (selection expressions,
+    <code>@connections</code>), las integraciones directas con servicios AWS sin Lambda en
+    medio — que una ruta escriba en SQS o en DynamoDB ella sola —, la validación de request
+    con modelos JSON Schema y el lenguaje VTL de las transformaciones. Si alguna te pica ya,
+    pídemela y la abrimos sobre tu acortador.
   </div>
 </div>
 

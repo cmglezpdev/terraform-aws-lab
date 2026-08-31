@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon Bedrock</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon Bedrock</h1>
+  <p class="deck">Modelos fundacionales —Claude entre ellos— servidos como una API más de AWS:
+  el llamante se autentica con IAM, la factura llega en la de AWS, y no existe ninguna clave
+  que guardar. No es un modelo nuevo ni un producto de AWS: es la <em>puerta</em>, y lo que
+  compras al cruzarla es que la credencial deje de ser un secreto tuyo.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>IA generativa / inferencia gestionada</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (con enrutado global opcional)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> por token</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — sin invocaciones cuesta 0,00 USD. <strong>Salvo</strong> reserved tier, provisioned throughput y el vector store de un Knowledge Base autogestionado, que sí cobran por hora</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_bedrock_*</code> — pero la invocación <strong>no</strong> es infraestructura</dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/03-ai-gateway">proyecto 03</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un catálogo de modelos fundacionales de varios proveedores (Anthropic, Amazon Nova, Meta,
+Mistral, OpenAI, Qwen, xAI…) expuesto detrás del plano de control de AWS. Concretamente
+Bedrock te da cuatro cosas que no tienes llamando al proveedor directamente:</p>
+<ul>
+  <li><strong>Autenticación por IAM.</strong> No hay API key. Tu Lambda firma la petición con
+  su rol de ejecución, igual que cuando escribe en DynamoDB. La regla del curso —<em>cero
+  secretos en el repo</em>— deja de necesitar disciplina: no hay secreto que se pueda colar.</li>
+  <li><strong>Una sola factura.</strong> Los tokens aparecen en la factura de AWS, dentro del
+  mismo presupuesto y las mismas alarmas del <a href="../projects/00-foundations">proyecto 00</a>.</li>
+  <li><strong>Un formato común.</strong> La API <code>Converse</code> habla igual con Claude que
+  con Nova: cambias un <code>modelId</code> y no tocas el resto del código.</li>
+  <li><strong>Piezas alrededor</strong>: guardrails, RAG gestionado, agentes, logging de
+  invocaciones a S3/CloudWatch, todo con recursos IAM y de red de AWS.</li>
+</ul>
+<p>Lo que <strong>no</strong> es: un modelo propio de AWS, ni un hosting donde tú despliegas
+pesos, ni algo que se «arranque» y se «pare». En reposo no existe: es un endpoint.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Un datáfono. El modelo lo pone otro (Anthropic), la infraestructura y el cobro los pone
+  AWS, y tú solo pasas la tarjeta que ya tenías —tu rol IAM—. Dónde se rompe: el datáfono
+  cobra comisión por operación y aquí <strong>la comisión es cero</strong>; el precio por
+  token del endpoint global es exactamente el de Anthropic. Lo que pagas de más, si lo pagas,
+  es por exigir <em>dónde</em> se procesa (+10 %), no por pasar por AWS.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Un endpoint propio delante del modelo</h3><p>Tu caso: el proyecto 03.
+  Una Lambda con Function URL recibe el prompt, llama a Claude con su rol, cachea la respuesta
+  en DynamoDB con TTL y devuelve el stream. Ningún cliente ve nunca una credencial del
+  modelo.</p></div>
+  <div class="ref-card"><h3>Clasificar y extraer sin montar nada</h3><p>«De estos 40 000
+  tickets, dime cuáles son bajas.» Con batch inference se lanza como un job asíncrono y
+  cuesta la mitad. Sin servidores, sin colas propias.</p></div>
+  <div class="ref-card"><h3>Chat sobre documentos de la empresa</h3><p>Knowledge Bases indexa
+  un bucket S3 y responde citando la fuente. El RAG completo —chunking, embeddings,
+  reranking— sin escribir el pipeline.</p></div>
+  <div class="ref-card"><h3>Poner un filtro delante y detrás</h3><p>Guardrails bloquea temas
+  vetados, PII y prompt injection <em>antes</em> de que el prompt llegue al modelo y
+  <em>después</em> de la respuesta. Es política, no <code>if</code>s en tu código.</p></div>
+  <div class="ref-card"><h3>Auditar quién llamó y con qué</h3><p>Cada invocación deja rastro en
+  CloudTrail, y el <em>model invocation logging</em> puede volcar prompts y respuestas a S3.
+  En un entorno regulado esto es el requisito, no un extra.</p></div>
+</div>
+
+<h2>El paso previo que sorprende: model access</h2>
+<p>El primer <code>InvokeModel</code> de una cuenta nueva casi siempre devuelve
+<code>AccessDeniedException</code>, y el error no dice por qué. Bedrock no vende los modelos
+de terceros: los revende a través de <strong>AWS Marketplace</strong>, y hay tres puertas
+distintas antes de la primera respuesta.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Puerta</th><th>Qué es</th><th>Cuándo la cruzas</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Permisos de Marketplace</strong></td>
+      <td><code>aws-marketplace:Subscribe</code>, <code>Unsubscribe</code>,
+      <code>ViewSubscriptions</code> en el rol que invoca</td>
+      <td>Solo la <strong>primera</strong> vez que se usa el modelo en la cuenta. Después, invocar
+      no los necesita.</td></tr>
+    <tr><td><strong>El formulario FTU de Anthropic</strong></td>
+      <td>«First Time Use»: nombre de empresa, web, industria, usuarios previstos y descripción
+      del caso de uso. <em>Solo para modelos de Anthropic.</em></td>
+      <td>Una vez por cuenta —o por cuenta raíz de la organización, y se hereda—. El acceso se
+      concede <strong>inmediatamente</strong> al enviarlo: no hay revisión humana esperándote.</td></tr>
+    <tr><td><strong>El acuerdo por modelo</strong></td>
+      <td>La suscripción de Marketplace a ese modelo concreto (EULA incluido)</td>
+      <td>Bedrock la inicia <em>sola</em> en la primera invocación. Tarda hasta 15 minutos, y
+      durante ese rato las llamadas pueden fallar y luego empezar a funcionar sin que hayas
+      tocado nada.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Detalles que ahorran una tarde: el formulario admite un GitHub o un portfolio personal como
+«web de empresa» si eres un desarrollador individual; el acceso concedido en una región vale
+para todas las demás donde el modelo exista; y <strong>borrar el acceso no bloquea nada</strong>
+—volver a invocar lo recrea—, así que si quieres prohibir un modelo, se prohíbe con un
+<code>Deny</code> de IAM o una SCP sobre <code>bedrock:InvokeModel</code>, no quitando la
+suscripción.</p>
+<div class="callout aws">
+  <span class="callout-title">La excepción que casi nadie conoce</span>
+  <p>El formulario FTU <strong>no aplica</strong> si llamas por el endpoint
+  <code>bedrock-mantle</code> (ver la tabla de integraciones más abajo). Si te has atascado en
+  el formulario y solo quieres la Messages API, esa puerta ni existe.</p>
+</div>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html">Request
+access to models</a>, consultada el 2026-08-30.</p>
+
+<h2>Los tipos que existen</h2>
+<p>«Bedrock» es cuatro decisiones independientes que la gente confunde entre sí: por qué
+<em>endpoint</em> entras, con qué <em>API</em> hablas, por qué <em>perfil de inferencia</em> se
+enruta y en qué <em>service tier</em> se factura.</p>
+
+<h3>1. Los dos endpoints</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Endpoint</th><th>Qué habla</th><th>Qué gana</th><th>Qué pierde</th></tr></thead>
+  <tbody>
+    <tr><td><code>bedrock-runtime</code><br><span class="small">la integración clásica</span></td>
+      <td><code>InvokeModel</code>, <code>Converse</code> y sus variantes streaming</td>
+      <td>Todo el resto de Bedrock: Guardrails, Knowledge Bases, Agents, Flows, evaluaciones,
+      batch. Es lo que AWS recomienda para aplicaciones nuevas.</td>
+      <td>El body de <code>InvokeModel</code> es específico del proveedor y los IDs llevan
+      versión (<code>…-v1:0</code>).</td></tr>
+    <tr><td><code>bedrock-mantle</code><br><span class="small">la integración nueva (Opus 4.7 en adelante)</span></td>
+      <td>La <strong>Messages API</strong> de Anthropic tal cual, en
+      <code>/anthropic/v1/messages</code>, con SSE estándar</td>
+      <td>El mismo cuerpo de petición que la API de Anthropic: copiar y pegar código. Sin
+      formulario FTU. Con <code>count_tokens</code>.</td>
+      <td><strong>No</strong> tiene Guardrails, ni Knowledge Bases, ni Agents, ni Converse, ni
+      batch. Y vive en pocas regiones.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>2. Las cuatro operaciones de inferencia</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Operación</th><th>Formato</th><th>Streaming</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><code>InvokeModel</code></td><td>El JSON nativo del proveedor
+      (<code>anthropic_version</code>, <code>messages</code>, <code>max_tokens</code>…)</td>
+      <td>No</td>
+      <td>Cuando necesitas un parámetro que solo existe en ese modelo y Converse aún no expone.</td></tr>
+    <tr><td><code>InvokeModelWithResponseStream</code></td><td>Igual, con eventos</td><td>Sí</td>
+      <td>Lo mismo, pero devolviendo tokens conforme salen.</td></tr>
+    <tr><td><strong><code>Converse</code></strong></td><td>Formato <strong>unificado</strong>:
+      los mismos campos para todos los modelos que soportan mensajes</td><td>No</td>
+      <td><strong>El predeterminado.</strong> Escribes una vez y cambias de modelo cambiando el
+      <code>modelId</code>.</td></tr>
+    <tr><td><strong><code>ConverseStream</code></strong></td><td>Unificado, con eventos</td><td>Sí</td>
+      <td><strong>El del proyecto 03.</strong> Es la mitad de servidor del streaming: la otra
+      mitad es la Function URL.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Converse por defecto.</strong> La documentación lo dice sin rodeos: «provides a
+  consistent API that works with all Amazon Bedrock models that support messages… you can write
+  code once and use it with different models». Además es donde viven <em>tool use</em> y la
+  integración con Guardrails. Baja a <code>InvokeModel</code> solo cuando puedas nombrar el
+  parámetro concreto que te falta; y si lo que quieres es <em>exactamente</em> la API de
+  Anthropic, no bajes a <code>InvokeModel</code>: sube a <code>bedrock-mantle</code>.</p>
+</div>
+<p><strong>El streaming, de punta a punta.</strong> <code>ConverseStream</code> te devuelve un
+flujo de eventos, pero eso solo sirve si tu propio endpoint también sabe emitir a trozos. Ahí
+entra la <a href="./aws-lambda.html">Lambda Function URL</a> con
+<code>invoke_mode = "RESPONSE_STREAM"</code>: sin ella, tu Lambda acumula el stream de Bedrock
+en memoria y lo entrega de golpe al final —y habrás pagado la latencia sin comprar la
+sensación de rapidez—. API Gateway <em>no</em> hace streaming: es el motivo real de que el
+proyecto 03 use una Function URL para la ruta de chat.</p>
+
+<h3>3. Los tres enrutados: in-region, geo y global</h3>
+<p>Un <strong>inference profile</strong> es un alias sobre un modelo que dice a qué regiones
+puede irse la petición. Se elige poniendo un prefijo en el <code>modelId</code>:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Enrutado</th><th><code>modelId</code></th><th>Dónde se procesa</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Global</strong></td><td><code>global.anthropic.claude-opus-5</code></td>
+      <td>Cualquier región comercial del mundo</td>
+      <td><strong>El de referencia</strong> — «approximately 10% savings»</td></tr>
+    <tr><td><strong>Geo</strong> (US, EU, AU, JP)</td><td><code>us.anthropic.claude-opus-5</code></td>
+      <td>Dentro de esa geografía (US incluye Canadá)</td><td>+10 %</td></tr>
+    <tr><td><strong>In-region</strong></td><td><code>anthropic.claude-opus-5</code></td>
+      <td>Solo esa región</td><td>+10 %, y <strong>no está disponible para todos los modelos</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Por qué a veces el perfil es obligatorio</span>
+  <p>Claude Opus 5 sobre <code>bedrock-runtime</code> tiene In-Region marcado como
+  <strong>no soportado en todas las regiones</strong>, us-east-1 incluida: solo Geo y Global.
+  Es decir, el <code>modelId</code> «a secas» que copiaste de un tutorial de 2024
+  <strong>no funciona</strong> y devuelve un error de validación. Regla práctica para el curso:
+  <strong>usa siempre el prefijo <code>global.</code></strong> — es el más disponible y el más
+  barato, y solo lo cambias si alguien te exige residencia de datos.</p>
+</div>
+<p>Hay además <strong>application inference profiles</strong>: copias un perfil del sistema,
+le pones <code>tags</code>, y a partir de ahí el coste de ese equipo o proyecto sale separado
+en Cost Explorer. Eso <em>sí</em> es un recurso de Terraform
+(<code>aws_bedrock_inference_profile</code>); los perfiles del sistema
+(<code>global.</code>, <code>us.</code>) ya existen y no se crean.</p>
+
+<h3>4. Los service tiers</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tier</th><th>Qué es</th><th>Precio relativo</th><th>Para Claude Opus 5</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Standard</strong></td><td>Pago por token, sin compromiso. <code>service_tier: "default"</code> o nada</td><td>×1</td><td>Sí</td></tr>
+    <tr><td><strong>Batch</strong></td><td>Job asíncrono sobre un fichero en S3; horas, no segundos</td><td><strong>×0,5</strong></td><td>Sí</td></tr>
+    <tr><td><strong>Priority</strong></td><td>Latencia más baja pagando prima</td><td>&gt;×1</td><td>No</td></tr>
+    <tr><td><strong>Flex</strong></td><td>Más barato a cambio de no garantizar cuándo</td><td>&lt;×1</td><td>No</td></tr>
+    <tr><td><strong>Reserved</strong></td><td>Throughput dedicado con compromiso de 1 o 3 meses, a nivel de cuenta</td><td><span class="tag-cost hour">por hora</span></td><td>No</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Las piezas que rodean al modelo</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Pieza</th><th>Qué resuelve</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Guardrails</strong></td><td>Filtros de contenido, temas vetados, PII,
+      <em>contextual grounding</em> (¿la respuesta se apoya en la fuente?) y detección de prompt
+      attack. Se aplican al prompt y a la respuesta, y funcionan también con modelos ajenos vía
+      <code>ApplyGuardrail</code>.</td>
+      <td><span class="tag-cost usage">por uso</span> por unidad de texto</td></tr>
+    <tr><td><strong>Knowledge Bases</strong></td><td>RAG gestionado: ingesta, chunking,
+      embeddings, índice vectorial y <code>Retrieve</code>. Dos sabores: <em>managed</em> (AWS
+      pone también el almacén) y <em>self-managed</em> (traes tu vector store).</td>
+      <td>Managed: <span class="tag-cost usage">por uso</span>. Self-managed:
+      <span class="tag-cost hour">depende del store</span></td></tr>
+    <tr><td><strong>Agents</strong> / <strong>AgentCore</strong></td><td>Bucle de agente
+      gestionado: el modelo planifica, llama a <em>action groups</em> (Lambdas o APIs) y a
+      knowledge bases. AgentCore añade runtime, gateway, memoria y sandbox.</td>
+      <td><span class="tag-cost usage">por uso</span> (tokens + el runtime que consumas)</td></tr>
+    <tr><td><strong>Flows</strong></td><td>Orquestación visual de prompts, condiciones y
+      Lambdas. Step Functions para prompts.</td><td><span class="tag-cost usage">por uso</span></td></tr>
+    <tr><td><strong>Custom models</strong></td><td>Fine-tuning, <em>continued pre-training</em>,
+      <em>distillation</em> e importación de pesos propios.</td>
+      <td>Entrenamiento por token + almacenamiento del modelo + <strong>provisioned
+      throughput obligatorio para servirlo</strong></td></tr>
+    <tr><td><strong>Model invocation logging</strong></td><td>Vuelca prompts y respuestas a S3 o
+      CloudWatch. Es la única forma de auditar el <em>contenido</em>: CloudTrail solo registra
+      que hubo una llamada.</td><td>Gratis; pagas S3/CloudWatch</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+<p>El modelo mental mínimo para no cometer errores caros:</p>
+<ul>
+  <li><strong>Es síncrono y sin estado.</strong> Cada llamada lleva la conversación entera. No
+  hay «sesión» en Bedrock: si tu chat recuerda algo, es porque tú lo guardaste (DynamoDB, en el
+  proyecto 03) y lo reenviaste. El coste crece con el cuadrado de la conversación si no
+  cacheas.</li>
+  <li><strong>No hay clave.</strong> La petición se firma con SigV4 usando las credenciales del
+  rol. En una Lambda eso significa: no hay variable de entorno, no hay Secrets Manager, no hay
+  rotación. Solo un <code>Allow</code> sobre <code>bedrock:InvokeModel*</code>. (Existen
+  <em>Bedrock API keys</em> de portador para desarrollo local; la propia documentación de
+  Anthropic las llama la opción <em>least preferred</em>, y en el curso no se usan.)</li>
+  <li><strong>Se factura por token, en los dos sentidos.</strong> Entrada y salida a precios
+  distintos —la salida cuesta 5× la entrada en toda la familia Claude— y todo lo que reenvías
+  se vuelve a cobrar como entrada.</li>
+  <li><strong>Prompt caching no es una caché de respuestas.</strong> Cachea el <em>prefijo</em>
+  del prompt (system prompt, herramientas, documentos) para no reprocesarlo. Escribir en la
+  caché cuesta 1,25× la entrada (TTL 5 min) o 2× (TTL 1 h); leer cuesta <strong>0,1×</strong>.
+  Sale rentable a partir de la primera lectura con TTL de 5 minutos. En Claude Opus 5: mínimo
+  512 tokens por checkpoint, máximo 4 checkpoints. <em>No</em> ahorra nada si la respuesta es la
+  misma para la misma pregunta: eso es la caché de DynamoDB, otra cosa distinta.</li>
+  <li><strong>Cross-region no cuesta más ni sale de AWS.</strong> «There's no additional routing
+  cost… All data transmitted during cross-Region operations remains on the AWS network and does
+  not traverse the public internet.» El precio se calcula por la región desde la que llamas.
+  CloudTrail registra dónde se procesó en <code>additionalEventData.inferenceRegion</code>.</li>
+  <li><strong>Los límites que te van a frenar son de <em>throughput</em>, no de tamaño.</strong>
+  Un <code>ThrottlingException</code> por TPM es la incidencia típica en producción, y no se
+  arregla con reintentos inmediatos: se arregla con backoff, con caché, o pidiendo cuota.</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+<p class="cost-stamp">Precios de <code>us-east-1</code>, <strong>verificados el 2026-08-30</strong>
+resolviendo el mapa de precios que alimenta la <a href="https://aws.amazon.com/bedrock/pricing/">página
+de precios de Bedrock</a>
+(<code>b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrockfoundationmodels/USD/current/</code>)
+y la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json">Price
+List API</a>. En Bedrock el catálogo cambia cada pocas semanas: <strong>si han pasado meses,
+vuelve a mirarlo.</strong></p>
+
+<h3>Modelos Claude, endpoint global — USD por millón de tokens</h3>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Modelo</th><th>Entrada</th><th>Salida</th><th>Batch in</th><th>Batch out</th><th>Cache write 5 min</th><th>Cache write 1 h</th><th>Cache read</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Claude Sonnet 5</strong></td><td><code>2,00</code></td><td><code>10,00</code></td><td>—</td><td>—</td><td>2,50</td><td>4,00</td><td><code>0,20</code></td></tr>
+    <tr><td><strong>Claude Haiku 4.5</strong></td><td><code>1,00</code></td><td><code>5,00</code></td><td>0,50</td><td>2,50</td><td>1,25</td><td>2,00</td><td><code>0,10</code></td></tr>
+    <tr><td><strong>Claude Opus 5</strong></td><td><code>5,00</code></td><td><code>25,00</code></td><td>2,50</td><td>12,50</td><td>6,25</td><td>10,00</td><td><code>0,50</code></td></tr>
+    <tr><td>Claude Opus 4.8</td><td>5,00</td><td>25,00</td><td>—</td><td>—</td><td>6,25</td><td>10,00</td><td>0,50</td></tr>
+    <tr><td>Claude Opus 4.7</td><td>5,00</td><td>25,00</td><td>—</td><td>—</td><td>6,25</td><td>10,00</td><td>0,50</td></tr>
+    <tr><td>Claude Opus 4.6</td><td>5,00</td><td>25,00</td><td>2,50</td><td>12,50</td><td>6,25</td><td>10,00</td><td>0,50</td></tr>
+    <tr><td>Claude Sonnet 4.6</td><td>3,00</td><td>15,00</td><td>1,50</td><td>7,50</td><td>3,75</td><td>6,00</td><td>0,30</td></tr>
+    <tr><td>Claude Fable 5</td><td>10,00</td><td>50,00</td><td>—</td><td>—</td><td>12,50</td><td>20,00</td><td>1,00</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Con perfil geo o in-region, multiplica todo por 1,1.</strong> No es una regla
+aproximada: la tabla de AWS es literalmente ×1,1 fila a fila. Opus 5 pasa de 5,00/25,00 a
+5,50/27,50; Sonnet 5 de 2,00/10,00 a 2,20/11,00; Haiku 4.5 de 1,00/5,00 a 1,10/5,50. Ese 10 %
+es el precio de decir <em>dónde</em>, y para el proyecto 03 no compra nada.</p>
+<p class="small">Nota de tokenizador: Claude 4.7 en adelante usa un tokenizador nuevo que
+produce <strong>~30 % más tokens</strong> para el mismo texto. Comparar «USD por millón de
+tokens» entre Opus 4.6 y Opus 5 sin medir tu propio prompt subestima el segundo.</p>
+
+<h3>Lo demás</h3>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Tener el modelo habilitado, sin invocarlo</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Guardrails · filtros de contenido (texto)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,15 USD / 1 000 text units</code></td></tr>
+    <tr><td>Guardrails · temas vetados</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,15 USD / 1 000 text units</code></td></tr>
+    <tr><td>Guardrails · filtros de información sensible (PII)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD / 1 000 text units</code></td></tr>
+    <tr><td>Guardrails · contextual grounding</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD / 1 000 text units</code></td></tr>
+    <tr><td>Guardrails · automated reasoning</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,17 USD / 1 000 text units</code> y por policy</td></tr>
+    <tr><td>Guardrails · filtros de palabras y de regex</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Guardrails · imágenes</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,00075 USD / imagen</code></td></tr>
+    <tr><td>Knowledge Base gestionada · índice</td><td><span class="tag-cost usage">por uso</span></td><td><code>5,00 USD / GB de datos crudos al mes</code></td></tr>
+    <tr><td>Knowledge Base gestionada · <code>Retrieve</code></td><td><span class="tag-cost usage">por uso</span></td><td><code>1,00 USD / 1 000 llamadas</code></td></tr>
+    <tr><td>Knowledge Base gestionada · parsing, embeddings y reranking</td><td><span class="tag-cost free">incluido</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Knowledge Base · agentic retrieval</td><td><span class="tag-cost usage">por uso</span></td><td><code>4,00 USD / 1 000</code> + <code>1,00 USD / 1 000</code> Retrieve</td></tr>
+    <tr><td>Structured data retrieval (generación de SQL)</td><td><span class="tag-cost usage">por uso</span></td><td><code>2,00 USD / 1 000 consultas</code></td></tr>
+    <tr><td><strong>Reserved tier</strong> · Claude Opus 4.6, compromiso 1 mes</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,30 USD/h</code> por cada 1 000 TPM de entrada<br><code>1,50 USD/h</code> por cada 1 000 TPM de salida</td></tr>
+    <tr><td>Reserved tier · Claude Sonnet 4.6, compromiso 1 mes</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,18</code> / <code>0,90 USD/h</code> por 1 000 TPM</td></tr>
+    <tr><td>Reserved tier · Claude Haiku 4.5, compromiso 1 mes</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,06</code> / <code>0,30 USD/h</code> por 1 000 TPM</td></tr>
+    <tr><td>Vector store de un KB autogestionado · OpenSearch Serverless</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,24 USD / OCU-hora</code>, <strong>mínimo 2 OCU</strong> en la colección clásica</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Una <em>text unit</em> son hasta 1 000 caracteres: un texto de 5 600 caracteres
+se factura como 6. En contextual grounding cuentan la fuente, la pregunta y la respuesta
+juntas. Reserved tier con compromiso de 3 meses baja un 10 % (Opus 4.6: 0,27 / 1,35 USD/h);
+con perfil geo o in-region sube un 10 %, como todo lo demás.</p>
+
+<h3>La factura del proyecto 03</h3>
+<div class="callout win">
+  <span class="callout-title">Por qué el ROADMAP dice «~0 USD + tokens»</span>
+  <p>Nada de lo que despliega el proyecto 03 cobra por hora. La Lambda, la Function URL, la
+  tabla DynamoDB on-demand, el REST API con usage plans y el modelo habilitado en Bedrock
+  suman <strong>0,00 USD en reposo</strong>: el gateway puede quedarse desplegado meses.
+  Los números concretos, con Claude Sonnet 5 por el endpoint global:</p>
+  <ul>
+    <li>Una respuesta típica —2 000 tokens de entrada, 500 de salida— cuesta
+    <code>2 000 × 2,00/10⁶ + 500 × 10,00/10⁶ = 0,009 USD</code>. Nueve milésimas de dólar.</li>
+    <li>Mil respuestas al mes: <strong>9 USD</strong>. Dentro del presupuesto de 30 USD/mes del
+    curso, y sin más líneas en la factura.</li>
+    <li>Con la caché de DynamoDB acertando el 50 %, esas mil respuestas bajan a
+    <strong>4,50 USD</strong> — y las lecturas de DynamoDB que las sustituyen cuestan céntimos.
+    Ese es el argumento entero de la caché, en dos números.</li>
+    <li>Con Opus 5 en lugar de Sonnet 5, la misma factura se multiplica por 2,5. Con perfil geo
+    en lugar de global, por 1,1 <em>encima</em> de eso.</li>
+  </ul>
+</div>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <ol>
+    <li><strong>Reserved tier / provisioned throughput.</strong> Es la trampa seria. Con Opus
+    4.6, reservar el bloque más pequeño que publica la tabla —1 000 TPM de entrada y 1 000 de
+    salida— cuesta <code>0,30 + 1,50 = 1,80 USD/h</code>, es decir <strong>1 314 USD al
+    mes</strong>, se use o no se use, durante el mes o los tres meses del compromiso. Y esos
+    1 000 TPM son ridículos: un solo prompt largo los consume. Para los modelos propios de
+    Amazon, donde AWS sí publica el precio del provisioned throughput clásico, un
+    <em>model unit</em> de Nova Pro son <code>60,50 USD/h</code> sin compromiso y
+    <code>55,00 USD/h</code> con uno de un mes — <strong>40 150 USD al mes</strong> por unidad.
+    Para los modelos de Anthropic el precio del provisioned throughput ni siquiera es público:
+    «reach out to your account team», que es la forma educada de decir que no es para ti.
+    <strong>En este curso no se toca jamás.</strong> Se justifica cuando tienes tráfico
+    sostenido y medido durante meses; nunca «por si acaso», y nunca antes de haber visto un
+    <code>ThrottlingException</code> real.</li>
+    <li><strong>El vector store de un Knowledge Base autogestionado.</strong> El KB no cobra por
+    hora: el almacén sí. Una colección clásica de OpenSearch Serverless factura un mínimo de
+    2 OCU a 0,24 USD/OCU-hora = <code>0,48 USD/h</code> ≈ <strong>350 USD al mes con cero
+    consultas</strong>. Es el clásico «probé RAG un fin de semana» que aparece en la factura de
+    dos meses después. Salidas: la <strong>Knowledge Base gestionada</strong> (AWS pone el
+    almacén y factura por GB y por llamada, sin suelo horario), las colecciones
+    <em>NextGen</em> de OpenSearch Serverless —que escalan a cero tras 10 minutos de
+    inactividad— o <strong>S3 Vectors</strong>, pensado justo para cargas de consulta poco
+    frecuente.</li>
+    <li><strong>El +10 % silencioso.</strong> Copiar <code>us.anthropic.…</code> de un tutorial
+    en vez de <code>global.anthropic.…</code> encarece cada token un 10 % sin ningún aviso, sin
+    ningún cambio visible en el comportamiento y sin ninguna línea separada en la factura.</li>
+    <li><strong>Los tokens de salida son el 80 % del gasto de un chat.</strong> Cuestan 5× la
+    entrada. Antes de optimizar prompts, mira <code>max_tokens</code>.</li>
+  </ol>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Tokens de entrada por minuto (Claude en Bedrock)</td><td><code>2 000 000 TPM</code> por defecto</td><td><strong>Sí</strong> — hasta 4 M sin aprobación adicional de Anthropic</td></tr>
+    <tr><td>Peticiones por minuto (RPM)</td><td>Por modelo y región; se consultan en <a href="https://console.aws.amazon.com/servicequotas/home/services/bedrock/quotas">Service Quotas</a>, no están en la doc</td><td>Sí, por ticket a AWS</td></tr>
+    <tr><td>Ventana de contexto de Claude Opus 5</td><td><code>1 M tokens</code></td><td>No</td></tr>
+    <tr><td>Salida máxima de Claude Opus 5</td><td><code>128 K tokens</code></td><td>No</td></tr>
+    <tr><td>Prompt caching: mínimo por checkpoint</td><td><code>512 tokens</code></td><td>No — por debajo, <strong>no cachea y no avisa</strong></td></tr>
+    <tr><td>Prompt caching: checkpoints por petición</td><td><code>4</code></td><td>No</td></tr>
+    <tr><td>Prompt caching: TTL</td><td><code>5 min</code> o <code>1 h</code></td><td>No</td></tr>
+    <tr><td>Batch: tamaño de fichero de entrada</td><td><code>1 GB</code> (Claude Opus 5)</td><td>Sí</td></tr>
+    <tr><td>Guardrails por cuenta</td><td><code>100</code></td><td>Sí</td></tr>
+    <tr><td>Temas por guardrail</td><td><code>30</code>, con 5 frases de ejemplo cada uno</td><td>Sí</td></tr>
+    <tr><td>Knowledge bases por cuenta</td><td><code>100</code> autogestionadas / <code>10 000</code> gestionadas</td><td>Sí</td></tr>
+    <tr><td><code>Retrieve</code> por segundo</td><td><code>20</code></td><td>Sí</td></tr>
+    <tr><td>Propagación del alta de un modelo</td><td>hasta <code>15 min</code> la suscripción automática; <code>2 min</code> tras conceder permisos</td><td>No — solo esperar</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Las cuotas de TPM/RPM de inferencia on-demand <strong>no están publicadas por
+modelo en la documentación</strong>: AWS remite a la consola de Service Quotas, donde aparecen
+como «Model invocation requests per minute for &lt;modelo&gt;». Es honesto decirlo así en vez de
+copiar un número de un blog. Fuentes: <a href="https://docs.aws.amazon.com/general/latest/gr/bedrock.html">Bedrock
+endpoints and quotas</a> y <a href="https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock">Claude
+in Amazon Bedrock § Quotas</a>, consultadas el 2026-08-30.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>El que llama ya vive en AWS y tiene un rol: la credencial deja de existir como problema.</li>
+    <li>Quieres una sola factura, un solo presupuesto y una sola alarma.</li>
+    <li>Necesitas Guardrails, RAG gestionado o auditoría de prompts en S3.</li>
+    <li>Tienes requisitos de residencia de datos: los perfiles geo los resuelven en un prefijo.</li>
+    <li>Vas a comparar modelos de proveedores distintos con el mismo código (Converse).</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Necesitas una función que Anthropic acaba de sacar: en Bedrock llega más tarde.</li>
+    <li>Tu cliente no está en AWS: entonces IAM es fricción, no ventaja.</li>
+    <li>Dependes de structured outputs, Files API, web search o code execution del servidor.</li>
+    <li>Quieres Message Batches, Managed Agents o el <code>fallbacks</code> del servidor.</li>
+    <li>Te frena la burocracia de model access para un prototipo de una tarde.</li>
+  </ul></div>
+</div>
+
+<h3>Bedrock frente a llamar a la API de Anthropic directamente</h3>
+<p>Es <em>el</em> criterio de diseño del proyecto 03, así que con números y no con opiniones:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Dimensión</th><th>Bedrock</th><th>API de Anthropic</th><th>Quién gana</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Precio por token</strong></td>
+      <td>Opus 5: <code>5,00 / 25,00</code> global · <code>5,50 / 27,50</code> geo</td>
+      <td>Opus 5: <code>5,00 / 25,00</code></td>
+      <td><strong>Empate</strong> por el endpoint global. Bedrock pierde un 10 % si eliges geo</td></tr>
+    <tr><td><strong>Prompt caching</strong></td>
+      <td>1,25× / 2× escritura, <strong>0,1×</strong> lectura</td>
+      <td>Idéntico</td><td>Empate</td></tr>
+    <tr><td><strong>Batch</strong></td>
+      <td>−50 %, vía job de Bedrock</td><td>−50 %, vía Message Batches</td>
+      <td>Empate en precio; la API tiene el endpoint <code>bedrock-mantle</code> en contra
+      (allí no hay batch)</td></tr>
+    <tr><td><strong>Credenciales</strong></td>
+      <td>Rol IAM. <strong>Cero secretos.</strong></td>
+      <td>Una API key que hay que guardar, rotar y no filtrar</td>
+      <td><strong>Bedrock, y no está cerca.</strong> Es el motivo del proyecto 03</td></tr>
+    <tr><td><strong>Funciones nuevas</strong></td>
+      <td>Llegan más tarde. Sin structured outputs, sin Files API, sin server-side tools, sin
+      Managed Agents</td>
+      <td>Todo primero</td><td><strong>Anthropic</strong></td></tr>
+    <tr><td><strong>Facturación</strong></td>
+      <td>En la factura de AWS, dentro de tu Budget</td>
+      <td>Factura y tarjeta aparte</td><td><strong>Bedrock</strong></td></tr>
+    <tr><td><strong>Residencia de datos</strong></td>
+      <td>Perfiles US / EU / AU / JP con un prefijo</td>
+      <td>Global por defecto; <code>inference_geo</code> con multiplicador 1,1×</td>
+      <td>Empate técnico; Bedrock lo integra con SCPs y CloudTrail</td></tr>
+    <tr><td><strong>Latencia</strong></td>
+      <td>Enrutado dinámico; salto a la región del modelo</td>
+      <td>Directa</td>
+      <td>Depende de dónde estés. <strong>Mídelo, no lo supongas</strong></td></tr>
+    <tr><td><strong>Lock-in</strong></td>
+      <td>Cambiar de proveedor de nube implica reescribir la autenticación</td>
+      <td>Cambiar de nube no toca nada</td><td><strong>Anthropic</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout why">
+  <span class="callout-title">El veredicto para el proyecto 03</span>
+  <p>Al mismo precio por token, la pregunta se reduce a una sola: <strong>¿dónde vive el que
+  llama?</strong> Si es una Lambda tuya en AWS, Bedrock gana porque elimina el secreto —y un
+  secreto que no existe no se filtra, no se rota y no aparece en un <code>git log</code>—.
+  Si el que llama es una app móvil, un script de tu portátil o un backend en otra nube, IAM se
+  convierte en burocracia y la API directa es más honesta. Y un matiz de 2026 que rompe la
+  falsa dicotomía: existe una tercera opción, <strong>Claude Platform on AWS</strong>, operada
+  por Anthropic con facturación por AWS Marketplace y paridad de funciones casi el mismo día —
+  factura de AWS <em>y</em> funciones al día, a cambio de no tener Guardrails ni Knowledge
+  Bases.</p>
+</div>
+
+<h3>Con qué se confunde</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>SageMaker</strong></td><td>SageMaker despliega <em>tu</em> modelo en
+      <em>tus</em> instancias, y cobra por hora de instancia. Bedrock es un endpoint sin
+      infraestructura tuya.</td><td>Entrenas o sirves un modelo propio y quieres controlar la
+      máquina.</td></tr>
+    <tr><td><strong>Bedrock Agents</strong></td><td>Agents es un bucle de agente <em>encima</em>
+      de Bedrock. No sustituye a la inferencia: la consume.</td><td>Quieres que el modelo
+      planifique y llame a herramientas sin que tú escribas el bucle.</td></tr>
+    <tr><td><strong>Amazon Q</strong></td><td>Q es una aplicación terminada (asistente de
+      negocio o de desarrollo). Bedrock es la pieza con la que construyes la tuya.</td>
+      <td>Quieres el producto, no el ladrillo.</td></tr>
+    <tr><td><strong>Claude Platform on AWS</strong></td><td>Operada por Anthropic, facturada por
+      AWS Marketplace en <em>Claude Consumption Units</em>, con paridad de funciones casi
+      inmediata. No tiene Guardrails ni Knowledge Bases.</td>
+      <td>Quieres la factura de AWS pero necesitas las funciones nuevas.</td></tr>
+    <tr><td><strong>Un LLM open-source en Lambda</strong></td><td>Bedrock cobra por token y cero
+      en reposo; un contenedor con pesos cobra por memoria y arranque en frío, y no cabe.</td>
+      <td>Nunca, en este curso: no cabe un modelo útil en 10 GB con 15 minutos de límite.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Tres patrones que vas a reconocer</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Gateway con caché y rate limiting</h3>
+    <p><strong>El proyecto 03.</strong> REST API con usage plans → API key por cliente y cuota
+    por cliente (eso <a href="./aws-apigateway.html">solo lo tiene REST API</a>). Detrás, una
+    Lambda que primero busca en <a href="./aws-dynamodb.html">DynamoDB</a> por el hash del
+    prompt; si acierta, devuelve sin gastar un token; si falla, llama a
+    <code>ConverseStream</code> y guarda con <code>ttl</code> para que el ítem caduque solo.
+    Las dos piezas atacan cosas distintas: la caché baja el <em>coste</em>, el usage plan
+    protege la <em>cuota TPM</em> de que un cliente se la coma entera.</p></div>
+  <div class="ref-card"><h3>Guardrail delante del chatbot</h3>
+    <p>Un <code>aws_bedrock_guardrail</code> con temas vetados y filtro de PII, referenciado en
+    la llamada a Converse. El prompt se evalúa antes de llegar al modelo y la respuesta antes de
+    salir. A 0,15 USD por 1 000 unidades de texto es más barato que el incidente, y sobre todo
+    es una <em>política versionada en Terraform</em> en vez de una lista de
+    <code>if</code>s enterrada en el código.</p></div>
+  <div class="ref-card"><h3>RAG con Knowledge Base</h3>
+    <p>Un bucket S3 como data source, una Knowledge Base gestionada encima y
+    <code>RetrieveAndGenerate</code> desde la Lambda. La versión gestionada evita el vector
+    store por horas; la autogestionada te da control del índice a cambio de un suelo de
+    ~350 USD/mes si eliges OpenSearch Serverless clásico. <strong>Empieza por la
+    gestionada.</strong></p></div>
+</div>
+
+<h2>En Terraform — y dónde se acaba el IaC</h2>
+<p>Esta es la sección que el proyecto 03 usa para hablar de <strong>los límites del
+IaC</strong>, así que conviene la frontera exacta. Bedrock tiene muchos recursos, pero
+<strong>la mitad interesante del servicio no es infraestructura</strong>:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Lo que <em>sí</em> es Terraform</th><th>Lo que <em>no</em> lo es</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>
+        <ul>
+          <li>El permiso: la policy IAM que deja invocar</li>
+          <li>El acuerdo de acceso a cada modelo</li>
+          <li>El formulario FTU de Anthropic</li>
+          <li>Guardrails y sus versiones</li>
+          <li>Application inference profiles (etiquetado de coste)</li>
+          <li>El logging de invocaciones</li>
+          <li>Knowledge bases, data sources, agents, flows, prompts</li>
+          <li>Provisioned throughput (que no vas a crear)</li>
+        </ul>
+      </td>
+      <td>
+        <ul>
+          <li><strong>La invocación</strong> (<code>Converse</code>, <code>InvokeModel</code>):
+          es código de la Lambda</li>
+          <li><strong>El prompt</strong>: es un artefacto de producto, no de infraestructura</li>
+          <li><strong>El modelo elegido</strong>: casi siempre una variable de entorno, para
+          poder cambiarlo sin un <code>apply</code></li>
+          <li><strong>Los perfiles del sistema</strong> (<code>global.</code>, <code>us.</code>):
+          ya existen, no se crean ni se destruyen</li>
+          <li><strong>Las subidas de cuota</strong>: un ticket, no un recurso</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p>La lección general: Terraform gestiona <em>capacidades y permisos</em>, no
+<em>comportamiento</em>. Un <code>plan</code> te dice quién puede llamar a Claude; jamás te dirá
+qué le va a pedir.</p>
+
+<h3>Los recursos del provider</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Recurso</th><th>Para qué</th><th>Trampa</th></tr></thead>
+  <tbody>
+    <tr><td><code>aws_bedrock_use_case_for_model_access</code></td>
+      <td>El formulario FTU de Anthropic, como <code>form_data</code> en JSON</td>
+      <td><strong>Recurso raro</strong>: si ya existe, lo «adopta» en vez de crearlo; no se
+      puede actualizar (cualquier cambio es un error); y <code>destroy</code> solo lo saca del
+      state — el borrado real no existe.</td></tr>
+    <tr><td><code>aws_bedrock_foundation_model_agreement</code></td>
+      <td>La suscripción de Marketplace a un modelo concreto</td>
+      <td>El <code>offer_token</code> lo da un data source y cambia: sin
+      <code>ignore_changes</code> tienes diff perpetuo.</td></tr>
+    <tr><td><code>aws_bedrock_guardrail</code> + <code>aws_bedrock_guardrail_version</code></td>
+      <td>La política de filtrado y su versión inmutable</td>
+      <td>El guardrail «vivo» es un borrador: lo que se invoca es una <em>versión</em>. Editar
+      el guardrail no cambia lo que ve producción hasta que publicas.</td></tr>
+    <tr><td><code>aws_bedrock_inference_profile</code></td>
+      <td>Perfil de aplicación con <code>tags</code>, para separar coste por equipo o proyecto</td>
+      <td>Copia un perfil existente con <code>model_source.copy_from</code>. No sirve para crear
+      <code>global.</code> ni <code>us.</code>: esos son <code>SYSTEM_DEFINED</code>.</td></tr>
+    <tr><td><code>aws_bedrock_model_invocation_logging_configuration</code></td>
+      <td>Volcar prompts y respuestas a S3 o CloudWatch</td>
+      <td><strong>Único por región.</strong> Dos configuraciones en dos states se machacan
+      mutuamente. Y el bucket necesita su bucket policy para
+      <code>bedrock.amazonaws.com</code> <em>antes</em> (<code>depends_on</code>).</td></tr>
+    <tr><td><code>aws_bedrock_provisioned_model_throughput</code></td>
+      <td>Reservar model units</td>
+      <td><code>commitment_duration</code> vale <code>OneMonth</code> o <code>SixMonths</code>.
+      Un <code>apply</code> distraído aquí es una factura de cuatro cifras que el
+      <code>destroy</code> <strong>no</strong> te devuelve. Además, los inference profiles no
+      soportan provisioned throughput.</td></tr>
+    <tr><td><code>aws_bedrockagent_knowledge_base</code>, <code>_data_source</code>,
+      <code>_agent</code>, <code>_agent_alias</code>, <code>_flow</code>, <code>_prompt</code></td>
+      <td>RAG, agentes y orquestación</td>
+      <td>Ojo al <code>subcategory</code>: son «Bedrock Agents», prefijo
+      <code>bedrockagent_</code> sin guion bajo intermedio.</td></tr>
+    <tr><td><code>aws_bedrockagentcore_*</code> (runtime, gateway, memory, browser,
+      code_interpreter, policy…)</td>
+      <td>AgentCore, la plataforma de agentes en producción</td>
+      <td>Familia grande y nueva. No hace falta para nada de este curso.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Lo que de verdad escribes en el proyecto 03</h3>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el permiso, que es casi todo</span></div>
+<pre><code>locals {
+  # El perfil global: mismo modelo, 10 % más barato que us./eu.
+  model_id = "global.anthropic.claude-sonnet-5"
+}
+
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+data "aws_iam_policy_document" "invoke_claude" {
+  # 1) el perfil de inferencia, en tu cuenta y tu región
+  statement {
+    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream",
+                 "bedrock:Converse", "bedrock:ConverseStream"]
+    resources = [
+      "arn:aws:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:inference-profile/${local.model_id}"
+    ]
+  }
+
+  # 2) y ADEMAS el foundation model detras del perfil.
+  #    Con un perfil global, el ARN sin region es obligatorio.
+  statement {
+    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream",
+                 "bedrock:Converse", "bedrock:ConverseStream"]
+    resources = [
+      "arn:aws:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-sonnet-5",
+      "arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5",
+    ]
+  }
+}
+
+resource "aws_lambda_function" "gateway" {
+  # ...
+  environment {
+    variables = {
+      # el modelo va en variable de entorno: cambiarlo no es un apply
+      BEDROCK_MODEL_ID = local.model_id
+      CACHE_TABLE      = aws_dynamodb_table.cache.name
+    }
+  }
+}
+
+resource "aws_lambda_function_url" "gateway" {
+  function_name      = aws_lambda_function.gateway.function_name
+  authorization_type = "AWS_IAM"
+  invoke_mode        = "RESPONSE_STREAM"   # sin esto no hay streaming
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong>Autorizar el perfil no autoriza el modelo.</strong> La documentación es
+    explícita: «When you specify an inference profile in the <code>Resource</code> field…, you
+    must also specify the foundation model in each Region associated with it». Con un perfil
+    <code>global.</code>, ese ARN es el <em>sin región</em>
+    (<code>arn:aws:bedrock:::foundation-model/…</code>). Faltando uno de los dos:
+    <code>AccessDeniedException</code>, y el mensaje no dice cuál falta.</li>
+    <li><strong><code>bedrock-mantle</code> es otro service prefix.</strong> Si usas el endpoint
+    nuevo, la acción no es <code>bedrock:InvokeModel</code> sino
+    <code>bedrock-mantle:CreateInference</code>. Una policy correcta para uno no sirve para el
+    otro.</li>
+    <li><strong>El <code>modelId</code> de los tutoriales viejos no vale.</strong> Los IDs con
+    fecha y versión (<code>anthropic.claude-3-5-sonnet-20241022-v2:0</code>) son de la
+    generación anterior; los actuales son limpios
+    (<code>anthropic.claude-sonnet-5</code>) y casi siempre necesitan prefijo de perfil.</li>
+    <li><strong>Sin <code>invoke_mode = "RESPONSE_STREAM"</code> no hay streaming</strong>, por
+    mucho que llames a <code>ConverseStream</code>: la Lambda bufferiza y entrega al final.</li>
+    <li><strong>El <code>AccessDeniedException</code> del primer día casi nunca es la
+    policy.</strong> Es model access: el formulario FTU sin enviar, o los 15 minutos de la
+    suscripción automática. Compruébalo con
+    <code>aws bedrock get-foundation-model-availability --model-id …</code> antes de tocar IAM.</li>
+    <li><strong><code>bedrock:*</code> en la policy es tentador y está mal.</strong> Incluye
+    crear provisioned throughput. Ver la <a href="./aws-iam.html">ficha de IAM</a>.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · coste</p>
+  <p class="quiz-q">Tu gateway del proyecto 03 lleva un mes desplegado y no lo ha llamado nadie:
+  Lambda con Function URL, tabla DynamoDB on-demand y Claude Sonnet 5 habilitado en Bedrock.
+  ¿Qué parte de la factura de Bedrock cobra por hora?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Bedrock on-demand no tiene ningún componente horario: sin invocaciones son 0,00 USD. Lo que sí cobra por hora son reserved tier, provisioned throughput y el vector store de un Knowledge Base autogestionado — y ninguno de los tres está en este proyecto.">Ninguna: Bedrock solo cobra los tokens que consumes</button></li>
+    <li><button data-correct="false" data-why="Habilitar un modelo es una suscripción de Marketplace sin coste recurrente: no hay cuota mensual por tenerlo disponible. Solo pagas cuando invocas.">El endpoint habilitado cobra una cuota mensual fija</button></li>
+    <li><button data-correct="false" data-why="Los inference profiles del sistema son alias de enrutado, no capacidad reservada: no se aprovisionan ni cobran por hora. Lo que sí reserva capacidad por hora es el reserved tier, que hay que contratar aparte.">El perfil de inferencia cobra por hora activa</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · elegir variante</p>
+  <p class="quiz-q">Tu Lambda en <code>us-east-1</code> va a llamar a Claude Opus 5 y nadie te ha
+  pedido nada sobre residencia de datos. ¿Qué pones en el <code>modelId</code>?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El perfil global enruta a cualquier región comercial y es el precio de referencia: 5,00/25,00 USD por millón frente a 5,50/27,50 del geo. Sin requisito de residencia, ese 10 % no compra nada.">El perfil global: mismo modelo, diez por ciento menos</button></li>
+    <li><button data-correct="false" data-why="Es lo que copia todo el mundo de los tutoriales viejos y falla: Claude Opus 5 no soporta invocación in-region en us-east-1 sobre bedrock-runtime. Devuelve error de validación, no una respuesta más cara.">El identificador base del modelo, sin prefijo de perfil</button></li>
+    <li><button data-correct="false" data-why="Funciona, pero cuesta exactamente un 10 % más por cada token de entrada y de salida. Ese sobreprecio compra residencia de datos dentro de EE. UU. y Canadá — algo que aquí nadie ha pedido.">El perfil de geografía estadounidense, más caro pero regional</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · coste</p>
+  <p class="quiz-q">Quieres añadir RAG sobre 200 documentos internos y el presupuesto entero del
+  curso son 30 USD al mes. ¿Qué montas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La Knowledge Base gestionada cobra 5,00 USD por GB de datos crudos al mes y 1,00 USD por cada mil llamadas a Retrieve, con parsing, embeddings y reranking incluidos. Con 200 documentos son céntimos, y no hay ningún componente horario.">Knowledge Base gestionada: almacenamiento por GB, recuperación por llamada</button></li>
+    <li><button data-correct="false" data-why="Una colección clásica de OpenSearch Serverless factura un mínimo de 2 OCU a 0,24 USD la OCU-hora: 0,48 USD/h, unos 350 USD al mes con cero consultas. Se come el presupuesto once veces antes de la primera pregunta.">Knowledge Base autogestionada con OpenSearch Serverless, dos OCU mínimas</button></li>
+    <li><button data-correct="false" data-why="El provisioned throughput reserva capacidad por hora con compromiso de meses y es el error más caro del servicio; además no aplica a la ingesta de un Knowledge Base. Reservar capacidad nunca es el primer paso: es el último, y solo con tráfico medido.">Provisioned throughput reservado para bajar el precio del embedding</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el criterio</p>
+  <p class="quiz-q">Al mismo precio por token, tu Lambda ya corre en AWS y la regla del curso es
+  «cero secretos en el repo». ¿Bedrock o la API de Anthropic directa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Con Bedrock la petición se firma con el rol de ejecución de la Lambda: no hay clave que guardar, rotar ni filtrar. Al empatar el precio del endpoint global con el de Anthropic, la credencial es lo que decide — y un secreto que no existe no se puede perder.">Bedrock: el rol de la Lambda es credencial</button></li>
+    <li><button data-correct="false" data-why="Es una solución correcta y frecuente, pero sigue habiendo un secreto que crear, rotar y auditar, más una llamada a Secrets Manager en cada arranque en frío. Cuando el llamante ya vive en AWS, eso es trabajo que Bedrock te ahorra entero.">Anthropic directa: la clave vive en Secrets Manager</button></li>
+    <li><button data-correct="false" data-why="No es simétrico: Bedrock autentica con SigV4 y el rol IAM, sin clave alguna. Existen Bedrock API keys de portador para desarrollo local, pero la propia documentación las marca como la opción menos preferida.">Cualquiera: las dos exigen guardar una clave propia</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-lambda.html">Ficha: AWS Lambda</a>
+    <a href="./aws-dynamodb.html">Ficha: Amazon DynamoDB</a>
+    <a href="./aws-apigateway.html">Ficha: Amazon API Gateway</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html">Bedrock
+    User Guide</a> (empieza por <em>Model access</em> y <em>Cross-Region inference</em>), la <a
+    href="https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html">ficha
+    de modelo de Claude Opus 5</a> con IDs, regiones y features soportadas, la <a
+    href="https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock">guía de
+    Anthropic sobre Claude en Bedrock</a> y la <a
+    href="https://aws.amazon.com/bedrock/pricing/">página de precios</a>. Los precios de esta
+    ficha se verificaron el <strong>2026-08-30</strong>; en Bedrock caducan rápido.
+    Pregúntame lo que quieras en la sesión — sobre todo si la tabla de modelos ya no cuadra.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

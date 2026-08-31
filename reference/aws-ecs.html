@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon ECS</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon ECS</h1>
+  <p class="deck">El orquestador de contenedores de AWS: tú declaras «quiero <em>N</em> copias
+  de esta imagen corriendo, detrás de este balanceador, con estos permisos», y ECS se encarga
+  de arrancarlas, reponerlas cuando mueren y reemplazarlas cuando cambias la versión. No es un
+  sitio donde <em>ejecutar</em> un contenedor: es un sitio donde <em>declarar</em> que un
+  contenedor debe estar vivo.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Cómputo / orquestación de contenedores</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost hour">por hora</span> — con Fargate, mientras el task corre</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><strong>El cluster sí</strong> (0,00 USD). <strong>Un service con <code>desired_count &gt; 0</code> no</strong>: el task más pequeño son 0,0123 USD/h ≈ 9 USD/mes</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_ecs_service</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/04-vpc-three-tier">proyecto 04</a> (la capa de aplicación)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un <strong>orquestador de contenedores gestionado</strong>. Le das una imagen de contenedor
+y una declaración de intención — cuánta CPU, cuánta memoria, en qué subredes, con qué permisos,
+detrás de qué balanceador, cuántas copias — y ECS mantiene esa declaración cierta: arranca las
+copias que faltan, mata las que sobran, sustituye las que fallan el health check y hace el
+relevo cuando publicas una versión nueva.</p>
+<p>Lo que resuelve, dicho sin marketing: <strong>un contenedor sabe arrancar, pero no sabe
+mantenerse vivo</strong>. Un <code>docker run</code> en una EC2 muere con la EC2, no se reparte
+entre zonas de disponibilidad, no se registra solo en un balanceador y no sabe reemplazarse a
+sí mismo sin cortar el tráfico. Todo eso — el bucle de reconciliación — es lo que compras.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Un <strong>termostato</strong>, no un interruptor. Al interruptor le dices «enciende»; al
+  termostato le dices «quiero 21 grados» y él enciende, apaga y vuelve a encender para siempre,
+  sin que tú vuelvas a intervenir. <code>desired_count = 2</code> es la temperatura objetivo:
+  si un task se cae de madrugada, ECS levanta otro y tú te enteras por el gráfico, no por la
+  alarma.</p>
+  <p><strong>Dónde se rompe la analogía:</strong> un termostato mide la temperatura de verdad.
+  ECS solo mide <em>lo que le dijiste que mide</em>. Si el health check del balanceador apunta
+  a una ruta que siempre devuelve 200 aunque la base de datos esté caída, ECS verá dos tasks
+  «sanos» encima de una aplicación rota, y no moverá un dedo. El termostato es tan bueno como
+  su sensor.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Un servicio HTTP que no cabe en Lambda</h3><p>Tu caso en el
+  proyecto 04: una app que mantiene un pool de conexiones a RDS, arranca en segundos y responde
+  peticiones todo el día. Con Lambda pagarías el arranque en frío y pelearías con el pool; con
+  ECS el proceso vive y el pool también.</p></div>
+  <div class="ref-card"><h3>Sacar una app existente a la nube sin reescribirla</h3><p>Tienes un
+  <code>Dockerfile</code> que ya funciona. ECS no te pide dividir en handlers, ni un runtime
+  concreto, ni límites de tamaño de artefacto: si arranca en tu portátil, arranca aquí.</p></div>
+  <div class="ref-card"><h3>Trabajos largos por lotes</h3><p>Una migración de tres horas, un
+  render, un ETL nocturno. <code>RunTask</code> arranca un task suelto, corre lo que tenga que
+  correr y muere. Lambda te habría cortado a los 15 minutos.</p></div>
+  <div class="ref-card"><h3>Consumidores de cola que escalan con la cola</h3><p>Un worker que
+  lee de SQS, con autoscaling atado a la profundidad de la cola. Cuando hay 10 000 mensajes hay
+  20 tasks; cuando hay 0, hay 1 (o 0, si lo escalas a cero).</p></div>
+  <div class="ref-card"><h3>Kubernetes sin Kubernetes</h3><p>Quieres contenedores gestionados,
+  redes por task y despliegues sin corte, pero no quieres aprender <code>kubectl</code>, ni
+  mantener un control plane, ni pagarlo. ECS es esa apuesta: menos capacidades, mucha menos
+  superficie que aprender.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>ECS es <strong>una sola API de orquestación con varios sitios donde poner los
+contenedores</strong>. Esa es la distinción que hay que tener clara desde el principio: el
+cluster, la task definition y el service se escriben casi igual en todos los casos; lo que
+cambia es quién pone la máquina debajo, y quién la parchea.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Launch type</th><th>Quién pone la máquina</th><th>Qué pagas</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Fargate</strong> (<code>FARGATE</code>)</td>
+      <td>AWS. No hay instancia visible: cada task es su propia micro-VM.</td>
+      <td>vCPU-segundo + GB-segundo del task, mientras corre</td>
+      <td><strong>El de este curso.</strong> Cuando no quieres administrar servidores y tu
+      carga cabe en 32 vCPU por task.</td></tr>
+    <tr><td><strong>EC2</strong> (<code>EC2</code>)</td>
+      <td>Tú. Un Auto Scaling Group de instancias con el agente de ECS instalado.</td>
+      <td>Las EC2 (+ EBS + IP pública). ECS no cobra nada encima.</td>
+      <td>Cuando necesitas GPU, instancias reservadas o Savings Plans, o empaquetar muchos
+      contenedores pequeños en una máquina grande.</td></tr>
+    <tr><td><strong>Managed Instances</strong> (<code>MANAGED_INSTANCES</code>)</td>
+      <td>AWS gestiona las EC2 (parcheo, reemplazo), tú eliges el tipo de instancia. Solo
+      Bottlerocket, sin AMIs propias y sin SSH.</td>
+      <td>El precio de la EC2 <strong>más un fee de gestión por hora</strong> que depende del
+      tipo</td>
+      <td>Quieres elegir la familia de instancia (GPU, red mejorada) pero no mantener el ASG ni
+      el ciclo de parches. Lanzado el <strong>30 de septiembre de 2025</strong>.</td></tr>
+    <tr><td><strong>ECS Anywhere</strong> (<code>EXTERNAL</code>)</td>
+      <td>Tú, en tu propio datacenter. La máquina se registra en el cluster de AWS.</td>
+      <td>0,01025 USD por instancia registrada y hora</td>
+      <td>Cargas que por normativa o latencia tienen que quedarse en tus servidores, pero que
+      quieres declarar con la misma API.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Fargate Spot: el mismo Fargate, con la luz que se puede ir</h3>
+<p>Fargate Spot no es un launch type: es un <strong>capacity provider</strong>. Corre
+exactamente el mismo task, en la misma infraestructura, con
+<a href="https://aws.amazon.com/fargate/pricing/">hasta un 70&nbsp;% de descuento</a> — a cambio
+de que AWS pueda reclamar la capacidad. Cuando lo hace manda un <strong>aviso de dos
+minutos</strong>: un evento de cambio de estado a EventBridge <em>y</em> un
+<code>SIGTERM</code> al contenedor. Después llega el <code>SIGKILL</code>, pasado el
+<code>stopTimeout</code> — que en Fargate vale <strong>30 segundos por defecto y 120 como
+máximo</strong>. Es decir: <strong>si tu proceso ignora <code>SIGTERM</code>, Fargate Spot te
+cortará peticiones a medias</strong>, y el margen real que puedes pedir son dos minutos, no
+más. La tarea interrumpida se marca con <code>stopCode: "SpotInterruption"</code>, y Fargate
+<strong>no</strong> la relanza automáticamente en On-Demand.</p>
+<p>Solo existe para tasks de ECS — los pods de EKS sobre Fargate no lo tienen. El uso sensato
+es una <strong>mezcla</strong>: una base garantizada en Fargate On-Demand y el pico en Spot.
+Eso se escribe con dos entradas en <code>capacity_provider_strategy</code>:</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">base garantizada + pico barato</span></div>
+<pre><code>capacity_provider_strategy {
+  capacity_provider = "FARGATE"       # la base: nunca se interrumpe
+  base              = 2               # 2 tasks siempre On-Demand
+  weight            = 1
+}
+capacity_provider_strategy {
+  capacity_provider = "FARGATE_SPOT"  # todo lo que pase de la base
+  weight            = 4               # 4 de cada 5 tasks extra, en Spot
+}</code></pre>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Empieza siempre en Fargate.</strong> Bájate a EC2 solo cuando tengas un motivo con
+  número delante: necesito GPU, o mi factura de cómputo pasa de X y las reservas la bajan un
+  40&nbsp;%, o meto treinta contenedores de 128 MB en una <code>m7g.large</code> y en Fargate
+  pagaría treinta mínimos. Ninguna de esas tres es tu caso en el proyecto 04.</p>
+  <p>Y para <strong>Spot</strong>: sí en workers de cola y batch (reintentable, sin usuario
+  esperando), no en el servicio que sirve al ALB — salvo como capa por encima de una base
+  On-Demand.</p>
+</div>
+
+<h2>El modelo de objetos: cuatro piezas, dos obligatorias</h2>
+<p>Todo ECS son cuatro nombres. Distinguir qué hace falta de verdad y qué es opcional es la
+mitad del trabajo:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Pieza</th><th>Qué es</th><th>¿Obligatoria?</th></tr></thead>
+  <tbody>
+    <tr><td><code>aws_ecs_cluster</code></td>
+      <td>Un <strong>namespace lógico</strong>, poco más. Agrupa tasks y services, y es donde
+      cuelgan los capacity providers y la configuración de Container Insights. Con Fargate no
+      contiene ninguna máquina.</td>
+      <td><strong>Sí</strong>, pero es casi vacío: <code>name</code> y ya. Cuesta 0,00 USD.</td></tr>
+    <tr><td><code>aws_ecs_task_definition</code></td>
+      <td>La <strong>receta</strong>: qué imagen, qué CPU y memoria, qué variables de entorno,
+      qué puertos, qué rol, dónde van los logs. Es un documento <strong>inmutable</strong>: cada
+      cambio publica una <em>revisión</em> nueva (<code>mi-app:7</code>) y la anterior sigue ahí.</td>
+      <td><strong>Sí.</strong> Sin receta no hay nada que arrancar.</td></tr>
+    <tr><td><em>task</em></td>
+      <td>Una <strong>ejecución concreta</strong> de una revisión. No es un recurso de
+      Terraform: nace y muere. Puede lanzarse suelta con <code>RunTask</code> (un batch) o
+      gestionarla un service.</td>
+      <td>Es el resultado, no algo que declares.</td></tr>
+    <tr><td><code>aws_ecs_service</code></td>
+      <td>El <strong>termostato</strong>: mantiene <em>N</em> tasks de una revisión vivos, los
+      registra en el balanceador y hace los despliegues.</td>
+      <td><strong>No.</strong> Un job por lotes no necesita service. Un servidor HTTP, sí.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>La cadena, entonces: <strong>cluster → task definition (revisiones inmutables) → service →
+tasks</strong>. Y una consecuencia práctica de la inmutabilidad que sorprende: <em>desplegar
+una versión nueva de tu app</em> significa registrar una revisión nueva y apuntar el service a
+ella. No se «edita» la definición del task en marcha, igual que no se edita una imagen de
+Docker ya publicada.</p>
+
+<h2>Task role vs execution role: las mismas tres preguntas, otro principal</h2>
+<p>Aquí no hay material nuevo. Es <a href="./aws-iam.html">la pregunta de tres partes</a> de
+siempre, aplicada a un servicio distinto:</p>
+<ol>
+  <li><strong>¿Con qué identidad actúa?</strong> → un rol, siempre.</li>
+  <li><strong>¿Quién puede usar esa identidad?</strong> → la política de confianza. Para Lambda
+  el principal era <code>lambda.amazonaws.com</code>; aquí es
+  <code>ecs-tasks.amazonaws.com</code>. <strong>Cambia el principal y el resto es idéntico.</strong></li>
+  <li><strong>¿Sobre qué actúa, y quién crea esos recursos?</strong> → la política de identidad,
+  más los recursos destino que declaras tú.</li>
+</ol>
+<p>Lo único genuinamente nuevo de ECS es que <strong>hay dos roles, no uno</strong>, y ambos
+confían en el mismo principal. Con la analogía del uniforme: son <em>dos uniformes distintos
+que se pone gente distinta en momentos distintos</em>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th><code>execution_role_arn</code><br>(execution role)</th><th><code>task_role_arn</code><br>(task role)</th></tr></thead>
+  <tbody>
+    <tr><td><strong>¿Quién se lo pone?</strong></td>
+      <td>El <strong>agente de ECS / Fargate</strong>, antes de que tu contenedor exista</td>
+      <td><strong>Tu código</strong>, ya dentro del contenedor</td></tr>
+    <tr><td><strong>¿Para qué?</strong></td>
+      <td>Hacer <code>pull</code> de la imagen desde ECR, crear el log stream en CloudWatch,
+      resolver los <code>secrets</code> de Secrets Manager / Parameter Store</td>
+      <td>Todo lo que tu aplicación llame: leer de S3, escribir en DynamoDB, publicar en SQS…</td></tr>
+    <tr><td><strong>¿Cuándo falta?</strong></td>
+      <td>El task <strong>ni siquiera arranca</strong>: <code>CannotPullContainerError</code> o
+      <code>ResourceInitializationError</code>, sin un solo log de tu app</td>
+      <td>El task arranca y funciona, y luego tu SDK devuelve
+      <code>AccessDenied</code> en la primera llamada</td></tr>
+    <tr><td><strong>¿Obligatorio?</strong></td>
+      <td>«Depende de lo que haga tu task» — en la práctica sí en Fargate: hace falta para ECR
+      privado y para <code>awslogs</code></td>
+      <td><strong>No.</strong> Si tu app no llama a ninguna API de AWS, no lo pongas</td></tr>
+    <tr><td><strong>Principal de confianza</strong></td>
+      <td colspan="2" style="text-align:center"><code>ecs-tasks.amazonaws.com</code> — <strong>el mismo en los dos</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">La confusión clásica de ECS, y cómo salir de ella en diez segundos</span>
+  <p>Los dos roles se llaman parecido, aceptan el mismo principal y viven a dos líneas de
+  distancia en la misma task definition. Todo el mundo pone los permisos en el que no toca al
+  menos una vez. La regla que lo resuelve:</p>
+  <p><strong>Si el permiso hace falta <em>para que el contenedor exista</em>, va en el execution
+  role. Si hace falta <em>porque tu código lo pide</em>, va en el task role.</strong></p>
+  <p>El pull de ECR es lo primero: ocurre antes de que haya proceso. Va en el
+  <em>execution</em> role — y es exactamente por eso por lo que meter
+  <code>ecr:GetDownloadUrlForLayer</code> en el task role no arregla nada. El síntoma que lo
+  delata: <strong>el task muere en <code>PENDING</code> y no hay ni una línea de log tuya</strong>
+  → mira el execution role. Si hay logs y luego un <code>AccessDenied</code> → mira el task
+  role.</p>
+</div>
+<h3>La política gestionada del execution role, y lo que NO trae</h3>
+<p>AWS publica <code>AmazonECSTaskExecutionRolePolicy</code> para ahorrarte escribirla. Concede
+<strong>exactamente seis acciones</strong>, todas sobre <code>Resource: "*"</code>, y no ha
+cambiado desde 2017:</p>
+<div class="code">
+  <div class="code-label"><span>política gestionada</span><span class="tag">arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy</span></div>
+<pre><code>ecr:GetAuthorizationToken          # login en el registry
+ecr:BatchCheckLayerAvailability    # ¿que capas faltan?
+ecr:GetDownloadUrlForLayer         # descargar cada capa
+ecr:BatchGetImage                  # el manifiesto
+logs:CreateLogStream               # abrir el stream del task
+logs:PutLogEvents                  # escribir stdout/stderr</code></pre>
+</div>
+<p><strong>Lo que no trae, y sorprende a todo el mundo:</strong></p>
+<ul>
+  <li><strong>Nada de secretos.</strong> <code>secretsmanager:GetSecretValue</code>,
+  <code>ssm:GetParameters</code> y <code>kms:Decrypt</code> hay que añadirlos <em>a mano</em> en
+  una política inline. Si usas el bloque <code>secrets</code> creyendo que la política
+  gestionada basta, el task muere al arrancar con un <code>ResourceInitializationError</code>.</li>
+  <li><strong>Nada de <code>logs:CreateLogGroup</code>.</strong> Solo
+  <code>CreateLogStream</code> y <code>PutLogEvents</code> — es decir, la política asume que el
+  log group <em>ya existe</em>. Que es justo lo que hace Terraform por ti, y por qué no suele
+  doler aquí.</li>
+</ul>
+<p class="small">Fuente: <a
+href="https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonECSTaskExecutionRolePolicy.html">AmazonECSTaskExecutionRolePolicy</a>
+y <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html">Amazon
+ECS task execution IAM role</a>, consultadas el 2026-08-30.</p>
+<p>El caso raro que confirma la regla: <a
+href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html">ECS Exec</a>
+necesita los cuatro permisos <code>ssmmessages:CreateControlChannel</code>,
+<code>CreateDataChannel</code>, <code>OpenControlChannel</code> y <code>OpenDataChannel</code>
+en el <strong>task role</strong>, no en el de ejecución — porque el agente de SSM corre
+<em>dentro</em> de tu contenedor, junto a tu proceso. Fuente: <a
+href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html">Amazon
+ECS task IAM role</a>.</p>
+
+<h2>Cómo funciona por dentro</h2>
+
+<h3>Networking: <code>awsvpc</code>, una ENI por task</h3>
+<p>En Fargate el modo de red no se elige: <strong>siempre es <code>awsvpc</code></strong>. Y
+<code>awsvpc</code> significa una cosa muy concreta que cambia cómo piensas la red:</p>
+<ul>
+  <li><strong>Cada task recibe su propia interfaz de red (ENI)</strong> con su propia IP privada
+  dentro de tu VPC. No es «un puerto en una máquina compartida»: es un miembro más de la subred.</li>
+  <li><strong>Los security groups se aplican por task</strong>, no por instancia. Puedes darle
+  al task de la app un SG que solo permita entrada desde el SG del ALB, y a RDS uno que solo
+  permita entrada desde el SG de la app. Esa cadena de tres SGs <em>es</em> la arquitectura del
+  proyecto 04.</li>
+  <li><strong>Los puertos no chocan</strong>: dos tasks pueden escuchar en el 8080 porque cada
+  uno tiene su IP.</li>
+  <li><strong>Consumes IPs de la subred</strong>. Cien tasks son cien IPs. Una <code>/24</code>
+  se queda corta antes de lo que crees, y ECS no te avisa hasta que un despliegue falla por
+  falta de direcciones.</li>
+</ul>
+
+<h3>La integración con el ALB, que cambia según el launch type</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Fargate (<code>awsvpc</code>)</th><th>EC2 con <code>bridge</code></th></tr></thead>
+  <tbody>
+    <tr><td><code>target_type</code> del target group</td><td><code>"ip"</code></td><td><code>"instance"</code></td></tr>
+    <tr><td>Qué se registra</td><td>La IP privada de la ENI del task</td><td>La instancia + un puerto</td></tr>
+    <tr><td>Puertos</td><td>El del contenedor, siempre el mismo</td><td><strong>Dynamic port mapping</strong>: pones <code>hostPort: 0</code> y ECS elige un puerto efímero libre, que es el que registra</td></tr>
+    <tr><td>Por qué existe</td><td>No hay host que compartir</td><td>Permite varias copias del mismo contenedor en la misma instancia sin colisión de puertos</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Con Fargate, el <code>target_type = "ip"</code> no es una preferencia: es el único que
+funciona. Registrar la instancia no tiene sentido cuando no hay instancia.</p>
+
+<h3>El scheduler: qué pasa cuando cambias la revisión</h3>
+<p>Un despliegue en ECS es un <strong>rolling update</strong> gobernado por dos porcentajes
+sobre <code>desired_count</code>:</p>
+<ul>
+  <li><code>deployment_minimum_healthy_percent</code> — cuántos tasks tienen que seguir sanos
+  <em>durante</em> el relevo. Es el suelo: marca cuántos puede matar ECS antes de tener los
+  nuevos listos. <strong>Por defecto 100&nbsp;%</strong> en un service <code>REPLICA</code>.</li>
+  <li><code>deployment_maximum_percent</code> — hasta cuántos puede haber a la vez. Es el techo:
+  marca cuánta capacidad extra (y coste extra) toleras mientras conviven las dos versiones.
+  <strong>Por defecto 200&nbsp;%.</strong></li>
+</ul>
+<p class="small">Defaults según <a
+href="https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeploymentConfiguration.html"><code>DeploymentConfiguration</code></a>,
+consultada el 2026-08-30.</p>
+<p>Con <code>desired_count = 2</code>, 100&nbsp;% y 200&nbsp;%: ECS levanta 2 tasks nuevos
+(llegando a 4), espera a que pasen el health check, y solo entonces mata los 2 viejos. Cero
+corte, coste doble durante unos minutos. Con 50&nbsp;% y 100&nbsp;%: mata uno, levanta uno, sin
+capacidad extra — más barato, con la mitad de la capacidad durante el relevo.</p>
+<p>El <strong>deployment circuit breaker</strong> es la red de seguridad: si los tasks nuevos
+fallan repetidamente al arrancar o al pasar el health check, ECS <strong>para el despliegue</strong>
+en lugar de reintentar eternamente, y con <code>rollback = true</code> vuelve solo a la última
+revisión que sí funcionó. Sin él, un contenedor que no arranca deja el service en un bucle de
+arrancar-y-morir que solo se nota mirando.</p>
+<p><strong>Y el rollback es opt-in, no automático:</strong> en la API,
+<code>enable</code> y <code>rollback</code> son dos booleanos independientes y ambos
+obligatorios. Activar el circuit breaker sin <code>rollback = true</code> te deja el despliegue
+parado <em>y</em> roto — que es mejor que el bucle infinito, pero no es lo que querías. Ponlos
+los dos.</p>
+
+<h3>Blue/green: lo viejo y lo nuevo</h3>
+<p><strong>Aviso, porque internet cuenta lo viejo:</strong> casi todo el material que
+encontrarás dice que blue/green en ECS «requiere AWS CodeDeploy» y
+<code>deployment_controller { type = "CODE_DEPLOY" }</code>. <strong>Eso dejó de ser cierto el 17
+de julio de 2025</strong>, cuando ECS incorporó los despliegues <a
+href="https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-ecs-built-in-blue-green-deployments/">blue/green
+nativos</a>, sin CodeDeploy de por medio; <a
+href="https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-ecs-built-in-linear-canary-deployments/">linear
+y canary llegaron después</a>, el 30 de octubre de 2025. El controlador
+<code>CODE_DEPLOY</code> sigue existiendo en la API, pero ya es la forma vieja.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Estrategia</th><th>Qué hace</th><th>Cómo se escribe hoy</th></tr></thead>
+  <tbody>
+    <tr><td><code>ROLLING</code></td><td>El relevo gradual de arriba. El de por defecto.</td>
+      <td><code>deployment_configuration { strategy = "ROLLING" }</code>, o simplemente no poner nada</td></tr>
+    <tr><td><code>BLUE_GREEN</code></td><td>Levanta la flota nueva entera <em>al lado</em> de la
+      vieja, la valida, mueve el tráfico de golpe y deja la vieja «horneando» un rato por si hay
+      que volver</td>
+      <td><code>strategy = "BLUE_GREEN"</code> + <code>bake_time_in_minutes</code></td></tr>
+    <tr><td><code>CANARY</code></td><td>Manda un porcentaje pequeño del tráfico a la versión
+      nueva, espera, y si no explota manda el resto</td>
+      <td><code>strategy = "CANARY"</code> + <code>canary_configuration { canary_percent = 10 }</code></td></tr>
+    <tr><td><code>LINEAR</code></td><td>Mueve el tráfico en escalones iguales, con una pausa
+      entre cada uno</td>
+      <td><code>strategy = "LINEAR"</code> + <code>linear_configuration { step_percent = 20 }</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Las tres últimas admiten <strong>lifecycle hooks</strong>: Lambdas que ECS invoca en puntos
+concretos del despliegue (<code>PRE_SCALE_UP</code>, <code>TEST_TRAFFIC_SHIFT</code>,
+<code>POST_PRODUCTION_TRAFFIC_SHIFT</code>…) y que pueden <strong>bloquear el despliegue</strong>
+si su validación falla. Es donde metes los smoke tests. Y el <em>bake time</em> es la ventana en
+que las dos versiones conviven <strong>después</strong> de mover el tráfico: si en esos minutos
+detectas una regresión, vuelves atrás sin corte porque la vieja sigue en pie.</p>
+<p class="small">Ojo con una incompatibilidad concreta: la métrica de autoscaling
+<code>ALBRequestCountPerTarget</code> <a
+href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-autoscaling-targettracking.html">no
+funciona con el tipo de despliegue blue/green</a>.</p>
+
+<h3>Cómo se hablan los servicios entre sí</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Mecanismo</th><th>Qué es</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong><a href="./aws-elb.html">ALB / NLB</a></strong></td>
+      <td>Un balanceador de verdad delante. Salto de red real, health checks, TLS.</td>
+      <td>Tráfico que entra desde fuera. <strong>Tu caso en el proyecto 04.</strong></td></tr>
+    <tr><td><strong>Service Connect</strong></td>
+      <td>ECS inyecta un proxy sidecar en cada task y te da nombres cortos
+      (<code>http://api</code>) con reintentos y métricas por llamada, sin balanceador ni DNS
+      que gestionar.</td>
+      <td>Varios servicios que se llaman entre ellos dentro del cluster. Lo moderno, y
+      <strong>sin coste adicional</strong> (ni de Service Connect ni del Cloud Map que usa por
+      dentro): pagas solo la CPU y memoria del task, que el proxy comparte.</td></tr>
+    <tr><td><strong>Service discovery</strong> (Cloud Map)</td>
+      <td>Solo DNS: ECS registra la IP de cada task en un namespace privado de Route 53 y tú
+      resuelves el nombre. Sin proxy, sin reintentos, sin métricas.</td>
+      <td>Lo anterior a Service Connect. Sigue valiendo para casos simples — pero aquí
+      <strong>sí pagas</strong> Route 53 y las llamadas a la API de Cloud Map, y hay un tope de
+      1 000 tasks por service.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Regla corta: <strong>de fuera hacia dentro, ALB. De dentro hacia dentro, Service
+Connect.</strong> Y si solo hay un servicio, ninguno de los dos: no hay nadie con quien
+hablar.</p>
+
+<h3>Logs, secretos, autoscaling y cómo entrar a mirar</h3>
+<ul>
+  <li><strong>Logs</strong>: el <code>logConfiguration</code> de cada contenedor con
+  <code>logDriver: "awslogs"</code> manda <code>stdout</code> y <code>stderr</code> a
+  <a href="./aws-cloudwatch.html">CloudWatch Logs</a>. Tres opciones obligatorias:
+  <code>awslogs-group</code>, <code>awslogs-region</code> y <code>awslogs-stream-prefix</code>.
+  <strong>Quien escribe es el execution role</strong>, no tu app. Y el log group hay que
+  crearlo (en Terraform, con <code>aws_cloudwatch_log_group</code>): si no existe y no activaste
+  <code>awslogs-create-group</code>, el task muere al arrancar.</li>
+  <li><strong>Secretos</strong>: en vez de <code>environment</code> (que deja la contraseña de
+  RDS escrita en texto plano en la task definition, visible para cualquiera con
+  <code>ecs:DescribeTaskDefinition</code>), se usa el bloque <code>secrets</code> con
+  <code>valueFrom</code> apuntando al ARN de un secreto de Secrets Manager o de un parámetro
+  <code>SecureString</code> de SSM Parameter Store. ECS lo resuelve al arrancar y lo inyecta
+  como variable de entorno. <strong>El permiso de lectura va en el execution role</strong> —
+  otra vez, porque ocurre antes de que tu código exista, y <strong>no viene en la política
+  gestionada</strong>: hay que añadirlo inline. Detalle que muerde: cambiar el valor del secreto
+  no lo propaga a los tasks vivos; hace falta un despliegue nuevo. Fichas:
+  <a href="./aws-secretsmanager.html">Secrets Manager</a> y
+  <a href="./aws-ssm.html">Parameter Store</a>.</li>
+  <li><strong>Autoscaling</strong>: no es de ECS, es de <strong>Application Auto Scaling</strong>
+  — el mismo servicio que escala DynamoDB. Registras el <code>desired_count</code> del service
+  como <em>scalable target</em> y le pones una política de <em>target tracking</em> con una de
+  las tres métricas predefinidas: <code>ECSServiceAverageCPUUtilization</code>,
+  <code>ECSServiceAverageMemoryUtilization</code> o <code>ALBRequestCountPerTarget</code>. Lo
+  que se paga son los tasks que decide levantar y las métricas de CloudWatch; la documentación
+  de ECS no afirma en ninguna parte que el propio autoscaling se facture. Detalle operativo que
+  ahorra sustos: <strong>durante un despliegue, Application Auto Scaling desactiva el
+  scale-in</strong> (el scale-out sigue) para no quitarte capacidad en mitad del relevo.</li>
+  <li><strong>ECS Exec</strong>, para entrar a un contenedor en marcha sin bastión ni SSH:
+  <code>enable_execute_command = true</code> en el service, la task definition con los cuatro
+  permisos <code>ssmmessages:*</code> en el <strong>task role</strong>, el
+  <em>Session Manager plugin</em> en tu máquina, y platform version <code>1.4.0</code> o
+  superior en Fargate Linux. <strong>No se puede activar sobre un task ya corriendo</strong>:
+  hay que redesplegar. Y si tu subred privada no tiene NAT, necesitas además el VPC endpoint de
+  <code>ssmmessages</code>. Avisos: el comando corre como <code>root</code>, no funciona con
+  <code>readonlyRootFilesystem</code>, y la sesión caduca a los 20 minutos de inactividad
+  (no configurable).</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en la región <code>us-east-1</code>
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/us-east-1/index.json">Price
+List API</a> (oferta <code>AmazonECS</code>) y la <a href="https://aws.amazon.com/fargate/pricing/">página
+de precios de Fargate</a>. Cámbialos si han pasado meses.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Cluster de ECS, vacío o no</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Task definitions y sus revisiones</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — incluidas las 999 999 viejas</td></tr>
+    <tr><td>El orquestador sobre EC2</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — pagas las EC2, EBS e IPv4, no ECS</td></tr>
+    <tr><td><strong>Fargate vCPU</strong>, Linux/x86</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,04048 USD</code> por vCPU-hora</td></tr>
+    <tr><td><strong>Fargate memoria</strong>, Linux/x86</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,004445 USD</code> por GB-hora</td></tr>
+    <tr><td><strong>Fargate vCPU</strong>, Linux/<code>arm64</code></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,03238 USD</code> por vCPU-hora <strong>(−20 %)</strong></td></tr>
+    <tr><td><strong>Fargate memoria</strong>, Linux/<code>arm64</code></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,003556 USD</code> por GB-hora <strong>(−20 %)</strong></td></tr>
+    <tr><td>Fargate vCPU, Windows</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,046552 USD</code> + <code>0,046 USD/h</code> de licencia del SO</td></tr>
+    <tr><td>Almacenamiento efímero de Fargate</td><td><span class="tag-cost hour">por hora</span></td><td><strong>20 GB gratis por task</strong>; a partir de ahí <code>0,000111 USD</code> por GB-hora</td></tr>
+    <tr><td>Fargate Spot</td><td><span class="tag-cost hour">por hora</span></td><td>Hasta <strong>−70 %</strong> sobre lo anterior, con interrupciones</td></tr>
+    <tr><td>ECS Managed Instances (fee de gestión)</td><td><span class="tag-cost hour">por hora</span></td><td>Según el tipo: <code>t3.medium</code> 0,004992 · <code>m7g.large</code> 0,009792 · <code>c7g.xlarge</code> 0,0174 USD/h, <strong>encima</strong> del precio de la EC2</td></tr>
+    <tr><td>ECS Anywhere</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,01025 USD</code> por instancia registrada y hora</td></tr>
+    <tr><td>Application Auto Scaling</td><td><span class="tag-cost usage">por uso</span></td><td>Sin línea propia en el precio de ECS: lo que pagas son los tasks que levanta y las métricas de CloudWatch</td></tr>
+    <tr><td>Service Connect</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — incluido el Cloud Map que usa por dentro; el proxy comparte la CPU/memoria del task</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>La ventana de facturación, que es más ancha de lo que parece</h3>
+<p>Fargate cobra <strong>por segundo, con un mínimo de un minuto</strong>, y el cronómetro corre
+<strong>«desde que empiezas a descargar la imagen del contenedor (el <em>docker pull</em>) hasta
+que el task termina»</strong>. Dos consecuencias que se pagan:</p>
+<ul>
+  <li><strong>La descarga de la imagen se factura.</strong> Una imagen de 2 GB que tarda 40
+  segundos en bajar son 40 segundos de vCPU y memoria pagados antes de que tu proceso exista.
+  Multiplícalo por cada despliegue y cada evento de autoscaling. Adelgazar la imagen no es solo
+  higiene: es dinero.</li>
+  <li><strong>Un task que arranca y muere en dos segundos cuesta un minuto.</strong> Con un
+  contenedor roto en bucle de reinicio, esos mínimos se suman. Es exactamente lo que evita el
+  circuit breaker.</li>
+</ul>
+
+<div class="callout cost">
+  <span class="callout-title">Tu factura del proyecto 04, con los números puestos</span>
+  <p>El task más pequeño que permite Fargate son <strong>0,25 vCPU y 0,5 GB</strong>:</p>
+  <div class="code">
+    <div class="code-label"><span>cuenta</span><span class="tag">us-east-1, Linux/x86</span></div>
+<pre><code>vCPU     0,25 × 0,04048  USD/vCPU-h = 0,010120 USD/h
+memoria  0,50 × 0,004445 USD/GB-h   = 0,002223 USD/h
+                                    ─────────────────
+                              total ≈ 0,01234 USD/h
+
+  1 task, 24×7 →  0,01234 × 730 h ≈   9,01 USD/mes
+  2 tasks (una por AZ)            ≈  18,02 USD/mes
+  en arm64, 1 task                ≈   7,21 USD/mes  (−20 %)</code></pre>
+  </div>
+  <p><strong>Esto es de cronómetro, no de uso.</strong> Es la diferencia de fondo con todo lo
+  que llevas visto: Lambda, DynamoDB on-demand, SQS y EventBridge cuestan 0,00 USD cuando nadie
+  los usa. Un ECS service con <code>desired_count = 2</code> <strong>nunca está en reposo</strong>:
+  cobra igual a las cuatro de la mañana de un domingo con cero peticiones. Si dejas el proyecto
+  04 desplegado un mes por descuido, son ~18 USD de tasks — más el ALB y el RDS, que también
+  son de hora.</p>
+  <p>La forma de dejarlo puesto sin pagar: <code>desired_count = 0</code>. El cluster, la task
+  definition y el service siguen ahí, con toda la configuración, y la factura de Fargate se va
+  a cero. El único servicio del curso donde «apagar» es un número, no un
+  <code>destroy</code>.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/general/latest/gr/ecs-service.html">Amazon
+ECS endpoints and quotas</a>, consultada el 2026-08-30. Valores por defecto de
+<code>us-east-1</code>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td><strong>vCPU concurrentes en Fargate On-Demand</strong></td><td><strong>6</strong></td>
+      <td><strong>Sí</strong> — y es el que te va a doler primero. Seis vCPU son 24 tasks de 0,25, o
+      6 de 1 vCPU. Cuentas nuevas empiezan más bajo y AWS lo sube solo con el uso.</td></tr>
+    <tr><td>vCPU concurrentes en Fargate Spot</td><td>6</td><td>Sí — cuota <em>aparte</em> de la anterior</td></tr>
+    <tr><td>Contenedores por task definition</td><td>10</td><td><strong>No</strong></td></tr>
+    <tr><td>Tamaño de la task definition</td><td>64 KiB</td><td><strong>No</strong> — se choca con listas largas de <code>environment</code></td></tr>
+    <tr><td>Target groups por service</td><td>5</td><td><strong>No</strong></td></tr>
+    <tr><td>Security groups por <code>awsvpcConfiguration</code></td><td>5</td><td><strong>No</strong></td></tr>
+    <tr><td>Subredes por <code>awsvpcConfiguration</code></td><td>16</td><td><strong>No</strong></td></tr>
+    <tr><td>Tasks por service (<code>desired_count</code>)</td><td>5 000</td><td><strong>No</strong></td></tr>
+    <tr><td>Services por cluster</td><td>5 000</td><td><strong>No</strong></td></tr>
+    <tr><td>Services por namespace (Service Connect)</td><td>300</td><td><strong>No</strong></td></tr>
+    <tr><td>Clusters por cuenta</td><td>10 000</td><td>Sí</td></tr>
+    <tr><td>Revisiones por familia de task definition</td><td>1 000 000</td><td><strong>No</strong> — y borrarlas no descuenta del límite</td></tr>
+    <tr><td>Ritmo de tasks lanzados por un service en Fargate</td><td>500/min</td><td><strong>No</strong> (125/min en regiones posteriores a mayo de 2025)</td></tr>
+    <tr><td>CPU/memoria por task en Fargate</td><td>De 0,25 vCPU / 0,5 GB hasta <strong>16 vCPU / 120 GB</strong> (o 32 vCPU con 60, 120 o 244 GB)</td><td><strong>No</strong> — y las combinaciones son una lista cerrada, no cualquier par</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Las combinaciones válidas de CPU y memoria en Fargate son
+<a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html">una
+tabla cerrada</a>, no un rango continuo. Las tres primeras filas, que son las que usarás:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>CPU</th><th>Memorias permitidas</th></tr></thead>
+  <tbody>
+    <tr><td><code>256</code> (0,25 vCPU)</td><td>512 MiB, 1 GB, 2 GB</td></tr>
+    <tr><td><code>512</code> (0,5 vCPU)</td><td>1, 2, 3, 4 GB</td></tr>
+    <tr><td><code>1024</code> (1 vCPU)</td><td>2, 3, 4, 5, 6, 7, 8 GB</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Pedir 0,25 vCPU con 3 GB no es «caro»: es un error de validación en el
+<code>apply</code>.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Tienes un proceso de larga duración: un servidor HTTP, un worker, un daemon.</li>
+    <li>Ya tienes un <code>Dockerfile</code> que funciona y no quieres reescribir nada.</li>
+    <li>Necesitas más de 15 minutos, o más memoria/CPU de la que da Lambda.</li>
+    <li>Quieres control fino de red por proceso: una ENI y unos security groups por task.</li>
+    <li>Tu carga tiene un suelo constante de tráfico, no picos aislados.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Tu carga son eventos esporádicos: pagarás horas de reposo por segundos de trabajo.</li>
+    <li>Quieres factura cero cuando no hay tráfico y no te apetece gestionar el escalado a cero.</li>
+    <li>Ya tienes equipo, Helm charts y operadores de Kubernetes: te vas a pelear con las
+    diferencias sin ganar nada.</li>
+    <li>Solo quieres publicar un contenedor con una URL y nada más.</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><a href="./aws-lambda.html"><strong>AWS Lambda</strong></a></td>
+      <td>Lambda cobra por invocación y se apaga a cero; ECS cobra por tiempo de reloj mientras
+      el task vive. Lambda corta a los 15 minutos y no mantiene estado entre invocaciones (ni
+      pools de conexiones fiables).</td>
+      <td>El trabajo es corto, disparado por eventos, y el tráfico es irregular. <strong>El
+      acortador de este curso (proyectos 01–03) no necesita ECS ni de lejos</strong>: son
+      milisegundos por petición y cero tráfico de madrugada. Meterlo en ECS sería cambiar
+      ~0 USD/mes por ~9 USD/mes por task para hacer lo mismo peor.</td></tr>
+    <tr><td><strong>Amazon EKS</strong></td>
+      <td>Misma idea, ecosistema distinto: EKS es Kubernetes de verdad, con su control plane
+      (que se paga por hora), su API y su universo de operadores y charts. ECS es propietario,
+      más simple y con menos que aprender.</td>
+      <td>El equipo ya sabe Kubernetes, necesitas portabilidad entre nubes, o dependes de
+      operadores que solo existen en el ecosistema k8s. Es <a
+      href="../projects/06-eks-platform">el proyecto 06</a>.</td></tr>
+    <tr><td><strong>AWS App Runner</strong></td>
+      <td>Una capa por encima: le das la imagen y te devuelve una URL HTTPS con TLS, autoscaling
+      y despliegues incluidos. No eliges VPC, ni ALB, ni security groups.</td>
+      <td>Quieres un contenedor web publicado y nada más, y no te importa perder el control de
+      la red. En cuanto necesites la app en subred privada hablando con RDS aislada — el
+      proyecto 04 — te quedas corto.</td></tr>
+    <tr><td><strong>EC2 con <code>docker run</code></strong></td>
+      <td>Sin orquestador no hay bucle de reconciliación: nadie repone el contenedor muerto,
+      nadie lo registra en el balanceador, nadie hace el relevo sin corte.</td>
+      <td>Nunca para algo que deba estar disponible. Para un experimento de una tarde, vale.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<p>El esqueleto mínimo de un servicio detrás de un ALB en Fargate. Tres recursos de ECS, dos
+roles, un log group:</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">cluster + task definition + service</span></div>
+<pre><code>resource "aws_ecs_cluster" "main" {
+  name = "app"
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = "app"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"        # obligatorio en Fargate
+  cpu                      = "256"           # 0,25 vCPU
+  memory                   = "512"           # combinacion valida: ver la tabla
+
+  execution_role_arn = aws_iam_role.ecs_execution.arn  # el agente: pull + logs
+  task_role_arn      = aws_iam_role.app.arn            # TU codigo: S3, RDS...
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"        # 20 % mas barato, si tu imagen es multiarch
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode([{
+    name      = "app"
+    image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+    essential = true
+    portMappings = [{ containerPort = 8080, protocol = "tcp" }]
+
+    secrets = [{
+      name      = "DB_PASSWORD"
+      valueFrom = aws_secretsmanager_secret.db.arn   # lo lee el EXECUTION role
+    }]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.app.name
+        "awslogs-region"        = var.region
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_service" "app" {
+  name            = "app"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = 2
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = false                 # subred privada: por defecto ya es false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn   # target_type = "ip"
+    container_name   = "app"                         # tiene que coincidir con el de arriba
+    container_port   = 8080
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  enable_execute_command = true              # ECS Exec, para entrar a depurar
+
+  depends_on = [aws_lb_listener.https]       # el TG debe estar en un listener antes
+}</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong><code>launch_type</code> vale <code>"EC2"</code> por defecto.</strong> Si lo
+    omites en un cluster sin instancias, el <code>apply</code> termina «bien» y el service se
+    queda con cero tasks para siempre, esperando una máquina que no existe. Ponlo siempre
+    explícito, o usa <code>capacity_provider_strategy</code> — pero no los dos: entran en
+    conflicto.</li>
+    <li><strong><code>desired_count</code> vale <code>0</code> por defecto.</strong> Mismo
+    síntoma, causa distinta: apply verde, cero contenedores.</li>
+    <li><strong>El <code>container_name</code> del <code>load_balancer</code> debe coincidir
+    exactamente</strong> con el <code>name</code> de la container definition. Si no, el service
+    se crea y no registra nada en el target group; el ALB devuelve 503 y no hay error en
+    ninguna parte.</li>
+    <li><strong>Cada cambio de la task definition crea una revisión nueva y sustituye el
+    recurso.</strong> Es lo normal y es correcto. Lo que no es normal: apuntar
+    <code>task_definition</code> a <code>family:revision</code> fija y luego desplegar desde
+    CI/CD — tendrás <em>diff perpetuo</em>, porque Terraform querrá devolver el service a la
+    revisión que él conoce. Si el despliegue lo hace la pipeline, añade
+    <code>lifecycle { ignore_changes = [task_definition, desired_count] }</code>.</li>
+    <li><strong>El <code>destroy</code> de un service se atasca</strong> si tiene tasks
+    corriendo: hay que escalarlo a 0 primero, o poner <code>force_delete = true</code>.</li>
+    <li><strong>El log group no se crea solo.</strong> Declara el
+    <code>aws_cloudwatch_log_group</code> y su <code>retention_in_days</code> — sin retención,
+    los logs se guardan para siempre y esa sí es una factura que crece sola.</li>
+    <li><strong>En subred privada sin NAT ni VPC endpoints, el pull falla.</strong> El task
+    muere en <code>PENDING</code> con <code>CannotPullContainerError</code> y no verás un solo
+    log de tu app, porque tu app nunca llegó a existir. Ver la
+    <a href="./aws-ecr.html#red">ficha de ECR</a> y <a href="./aws-vpc.html">la de VPC</a>.</li>
+    <li><strong><code>wait_for_steady_state = true</code> convierte un despliegue roto en un
+    <code>apply</code> rojo</strong> en vez de en un apply verde con la versión vieja sirviendo.
+    Cuesta minutos de espera y vale la pena en pipelines.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · los dos roles</p>
+  <p class="quiz-q">Despliegas el servicio del proyecto 04 y el task nunca sale de
+  <code>PENDING</code>: <code>CannotPullContainerError</code>, y en CloudWatch no hay ni una
+  línea de tu aplicación. ¿Dónde miras primero?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El pull de la imagen ocurre antes de que exista tu proceso, y lo hace el agente con el execution role. Que no haya ni un log tuyo es la pista: tu código nunca llegó a arrancar, así que el permiso que falta no puede ser del task role.">El execution role, que hace el pull antes de arrancar</button></li>
+    <li><button data-correct="false" data-why="El task role son las credenciales que recibe tu código ya dentro del contenedor. Si el fallo fuera suyo verías el contenedor arrancado, sus logs, y luego un AccessDenied del SDK — no un fallo de pull en PENDING.">El task role, que da permisos a tu propio código</button></li>
+    <li><button data-correct="false" data-why="El security group importa para llegar a ECR sin NAT, y puede ser la causa de fondo, pero no es donde se mira primero: el mensaje señala un permiso o una ruta del agente, y el orden de diagnóstico empieza por el rol que ejecuta esa acción.">El security group, que filtra el tráfico hacia el task</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · coste</p>
+  <p class="quiz-q">Terminas el proyecto 04 un viernes y lo dejas desplegado con
+  <code>desired_count = 2</code> (dos tasks de 0,25 vCPU y 0,5 GB) hasta el lunes. ¿Qué factura
+  Fargate por esas ~72 horas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="0,25 × 0,04048 + 0,5 × 0,004445 = 0,01234 USD/h por task; dos tasks son 0,0247 USD/h, y 72 horas dan ~1,78 USD. Fargate es de cronómetro: cobra por tiempo de reloj, haya tráfico o no.">Unos 1,78 USD: dos cronómetros corriendo el fin de semana</button></li>
+    <li><button data-correct="false" data-why="Ese es el modelo de Lambda, DynamoDB on-demand o SQS, no el de Fargate. Un task en marcha se factura por vCPU-segundo y GB-segundo desde que empieza el pull de la imagen hasta que termina, con independencia de cuántas peticiones atienda.">Nada en absoluto: sin peticiones que servir no hay consumo</button></li>
+    <li><button data-correct="false" data-why="Un task no se factura por petición ni por invocación: no existe tal dimensión en el precio de Fargate. Las únicas dimensiones son vCPU-hora, GB-hora y almacenamiento efímero por encima de los 20 GB incluidos.">Solo lo servido: se paga por cada invocación realmente atendida</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · elegir variante</p>
+  <p class="quiz-q">Un worker tuyo vacía una cola SQS por las noches. Tarda lo que tarde, y si
+  un mensaje se queda a medias vuelve a la cola y se reprocesa. ¿Qué capacity provider?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es el caso canónico de Spot: trabajo reintentable, sin usuario esperando respuesta, y hasta un 70 % menos de factura. La interrupción llega como SIGTERM y el mensaje simplemente vuelve a la cola por visibility timeout.">Fargate Spot, porque el trabajo se puede reintentar entero</button></li>
+    <li><button data-correct="false" data-why="On-Demand paga la garantía de que nadie te quita la capacidad, y esa garantía aquí no compra nada: el diseño ya tolera que un task muera a medias. Estarías pagando hasta el triple por una propiedad que no necesitas.">Fargate On-Demand, porque el trabajo no se debe interrumpir</button></li>
+    <li><button data-correct="false" data-why="Pasar a EC2 te obliga a mantener un Auto Scaling Group, sus AMIs y sus parches para una carga que corre unas horas cada noche. El ahorro llega con uso sostenido y alto, no con ráfagas nocturnas.">Instancias EC2 propias, porque el trabajo corre de noche</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el servicio equivocado</p>
+  <p class="quiz-q">Te planteas mover el acortador de URLs de los proyectos 01–03 de Lambda a
+  ECS «para que sea más profesional». Recibe unos cientos de peticiones al día. ¿Qué pasa si lo
+  haces?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El acortador tiene tráfico irregular y milisegundos de trabajo por petición: el perfil exacto de Lambda. En ECS pagarías ~9 USD al mes por task solo por tenerlo encendido, y a las cuatro de la mañana pagarías lo mismo que a mediodía.">Pagarías unos nueve dólares mensuales por hacer exactamente lo mismo</button></li>
+    <li><button data-correct="false" data-why="La latencia mejoraría algo al desaparecer el arranque en frío, pero eso no lo convierte en la elección correcta: el arranque en frío de una Lambda pequeña se mide en centenares de milisegundos y solo afecta a la primera petición tras un rato de calma.">Ganarías latencia estable y el coste se mantendría prácticamente igual</button></li>
+    <li><button data-correct="false" data-why="No hay nada que ECS haga aquí y Lambda no: el handler es el mismo código y DynamoDB es la misma tabla. La decisión no la gana el servicio con más piezas, la gana el que encaja con el perfil de carga.">Ganarías capacidades nuevas y el coste se mantendría prácticamente igual</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-ecr.html">Ficha: Amazon ECR</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./aws-cloudwatch.html">Ficha: Amazon CloudWatch</a>
+    <a href="./aws-elb.html">Ficha: ELB / ALB</a>
+    <a href="./aws-vpc.html">Ficha: Amazon VPC</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html">Amazon ECS
+    Developer Guide</a> (empieza por <em>Task definitions</em> y <em>Services</em>), las <a
+    href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html">task
+    IAM roles</a> y el <a
+    href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html">task
+    execution role</a> — léelas seguidas, es donde se aclara la confusión de los dos roles —, y
+    la <a href="https://aws.amazon.com/fargate/pricing/">página de precios de Fargate</a>.
+    Cualquier duda, pregúntame en la sesión.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

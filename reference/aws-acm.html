@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · AWS Certificate Manager</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>AWS Certificate Manager (ACM)</h1>
+  <p class="deck">Emite certificados TLS públicos <strong>gratis</strong> y los renueva
+  solo, para siempre, sin que vuelvas a tocarlos. A cambio de una condición que nadie te
+  cuenta en el tutorial: mientras el certificado no salga de AWS, ni siquiera tú puedes ver
+  su clave privada.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Seguridad / gestión de certificados</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional — y <code>us-east-1</code> obligatorio para CloudFront</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost free">gratis</span> los públicos no exportables</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí — un certificado público no cuesta nada, esté o no en uso</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_acm_certificate</code></dd></div>
+    <div><dt>Aparece en</dt><dd>proyecto 05 (frontend estático global con TLS)</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Una autoridad de certificación gestionada más un almacén. Le pides un certificado para
+<code>app.example.com</code>, demuestras que el dominio es tuyo (poniendo un registro DNS),
+y ACM lo emite firmado por la <em>Amazon Trust Services</em> que llevan preinstalada todos
+los navegadores del mundo. A partir de ahí, ACM lo <strong>renueva por su cuenta</strong>
+antes de que caduque, indefinidamente.</p>
+<p>El certificado no se descarga: se <em>asocia</em> a un servicio integrado (CloudFront,
+ALB, API Gateway, Amplify…) por su ARN, y ese servicio lo usa por dentro. La clave privada
+no sale de AWS y tú no la ves nunca. Eso es una <strong>propiedad de seguridad</strong>, no
+una limitación accidental — y es también la razón de que exista una variante de pago que sí
+la entrega.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>El pasaporte que te renuevan solo mientras sigas empadronado. No lo llevas encima: lo
+  enseña por ti el funcionario (el servicio AWS) cuando alguien pregunta. Donde se rompe la
+  analogía: si te das de baja del padrón —<strong>borras el registro CNAME de validación</strong>—
+  la renovación deja de funcionar en silencio, y no te enteras hasta que un navegador dice
+  «certificado caducado».</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>HTTPS con tu dominio en CloudFront</h3><p>Tu caso, el proyecto
+  05. Sin el certificado, la única URL posible es
+  <code>d111111abcdef8.cloudfront.net</code>. Con él, <code>app.example.com</code> con
+  candado verde y cero mantenimiento.</p></div>
+  <div class="ref-card"><h3>Terminar TLS en un ALB</h3><p>El balanceador habla HTTPS con
+  el mundo y HTTP con tus contenedores dentro de la VPC. El certificado va en la región del
+  ALB, no en <code>us-east-1</code>.</p></div>
+  <div class="ref-card"><h3>Dominio propio en API Gateway</h3><p><code>api.example.com</code>
+  en vez del <code>execute-api</code> ilegible. Regional o edge-optimized cambia la región
+  donde debe estar el certificado.</p></div>
+  <div class="ref-card"><h3>Cubrir todos los subdominios con un wildcard</h3><p>Un solo
+  certificado <code>*.example.com</code> vale para <code>app</code>, <code>api</code>,
+  <code>docs</code>… y protege un número ilimitado de subdominios de un nivel. Sigue
+  costando 0,00 USD.</p></div>
+  <div class="ref-card"><h3>Dejar de renovar certificados a mano</h3><p>El motivo real de
+  usarlo aunque no uses nada más de AWS: los incidentes de «se nos caducó el certificado»
+  desaparecen del calendario del equipo.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Cinco formas de tener un certificado «en ACM», y solo una de ellas es gratis. Confundirlas
+es la diferencia entre 0 USD y 400 USD al mes.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Quién lo firma</th><th>¿Ves la clave privada?</th><th>Renovación</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Público no exportable</strong></td>
+      <td>Amazon Trust Services (confiado por los navegadores)</td>
+      <td><strong>No</strong>, nunca</td>
+      <td>Automática si la validación fue DNS</td>
+      <td><strong><span class="tag-cost free">0,00 USD</span></strong> — «No cost»</td></tr>
+    <tr><td><strong>Público exportable</strong> <em>(nov. 2025)</em></td>
+      <td>Amazon Trust Services</td>
+      <td><strong>Sí</strong>, cifrada con una passphrase que tú pones</td>
+      <td>ACM renueva 45 días antes; <strong>desplegarlo es cosa tuya</strong></td>
+      <td><strong>7,00 USD por FQDN</strong> · <strong>79,00 USD por wildcard</strong>, en emisión <em>y</em> en cada renovación</td></tr>
+    <tr><td><strong>Emitido por ACME</strong></td>
+      <td>Amazon Trust Services, vía protocolo ACME (como Let's Encrypt)</td>
+      <td>Sí, la tiene tu cliente ACME</td>
+      <td>La gestiona tu cliente ACME, <strong>no</strong> ACM</td>
+      <td>1,00 USD por dominio/mes (primeros 1 000); 5,00 USD por wildcard/mes (primeros 500)</td></tr>
+    <tr><td><strong>Importado</strong></td>
+      <td>Otra CA (DigiCert, Let's Encrypt…)</td>
+      <td>Ya la tienes: se la das tú</td>
+      <td><strong>Ninguna</strong> — lo renuevas tú a mano</td>
+      <td><span class="tag-cost free">0,00 USD</span> (pagas a la CA que lo firme)</td></tr>
+    <tr><td><strong>Privado</strong> (AWS Private CA)</td>
+      <td>Una CA tuya, confiada solo dentro de tu organización</td>
+      <td>Sí, exportable</td>
+      <td>Automática si está en uso o se exportó</td>
+      <td><strong>400 USD/mes</strong> por CA ⚠️ + 0,75 USD/certificado</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>¿El certificado lo va a usar un servicio de AWS (CloudFront, ALB, API Gateway)?
+  <strong>Público no exportable, validación DNS</strong>. Gratis y sin mantenimiento; es el
+  99 % de los casos y el del proyecto 05. Solo baja a los otros si necesitas el fichero PEM
+  en una máquina que no es un servicio integrado — y entonces compara los 7 USD del
+  exportable con Let's Encrypt, que es gratis (ver <a href="#cuando-no">cuándo NO</a>).</p>
+</div>
+
+<h2>Cómo funciona por dentro: la validación</h2>
+<p>ACM no emite nada sin que demuestres que controlas el dominio. Hay tres métodos y las
+diferencias son operativas, no cosméticas.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Método</th><th>Qué haces</th><th>Renovación</th><th>Veredicto</th></tr></thead>
+  <tbody>
+    <tr><td><strong>DNS</strong></td>
+      <td>Creas un registro <code>CNAME</code> que ACM te dicta, y lo <strong>dejas puesto
+      para siempre</strong></td>
+      <td><strong>Totalmente automática</strong>, sin intervención humana</td>
+      <td><strong>Usa esta.</strong> Automatizable en Terraform de punta a punta</td></tr>
+    <tr><td><strong>Email</strong></td>
+      <td>ACM manda un correo a <code>admin@</code>, <code>webmaster@</code>… del dominio y
+      alguien pincha un enlace</td>
+      <td><strong>Manual cada vez</strong>: alguien tiene que leer un correo y pinchar</td>
+      <td>Solo si no tienes permiso para editar el DNS. Un humano en el camino crítico de
+      un certificado es una caducidad esperando a pasar</td></tr>
+    <tr><td><strong>HTTP</strong></td>
+      <td>Sirves un fichero en una ruta concreta del dominio</td>
+      <td>Requiere que el fichero siga ahí</td>
+      <td>Nicho. Existe, pero DNS es mejor en casi todo</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>El registro CNAME, en detalle</h3>
+<p>ACM te devuelve, por cada nombre de dominio del certificado, una tripleta
+nombre/tipo/valor:</p>
+<div class="code">
+  <div class="code-label"><span>registro de validación</span><span class="tag">CNAME</span></div>
+<pre><code>Nombre:  _a79865eb4cd1a6ab990a45779b4e0b96.example.com.
+Tipo:    CNAME
+Valor:   _424c7224e9b0146f9a8808af955727d0.acm-validations.aws.</code></pre>
+</div>
+<ul>
+  <li><strong>Un CNAME por nombre de dominio</strong> — salvo el caso especial:
+  <code>*.example.com</code> y <code>example.com</code> generan
+  <strong>exactamente el mismo par</strong>. Por eso un certificado con apex + wildcard solo
+  necesita un registro, no dos, y en Terraform el <code>for_each</code> sobre
+  <code>domain_validation_options</code> deduplica solo si agrupas por
+  <code>domain_name</code>.</li>
+  <li><strong>Tienes 72 horas</strong> desde que ACM genera el valor. Pasadas, el
+  certificado pasa a <code>Validation timed out</code> y hay que pedir uno nuevo.</li>
+  <li><strong>El CNAME debe permanecer en el DNS mientras el certificado exista.</strong>
+  ACM lo relee en cada renovación. Borrarlo es la forma documentada de <em>parar</em> la
+  renovación automática — así que borrarlo por limpieza es la forma no documentada de
+  romperla.</li>
+  <li><strong>El token vale para cualquier región.</strong> Con el CNAME puesto, puedes
+  reemitir el mismo certificado en <code>us-east-1</code>, <code>eu-west-1</code> y donde
+  quieras sin revalidar nada.</li>
+  <li>Si encadenas más de <strong>cinco</strong> CNAMEs en tu DNS, la resolución falla.</li>
+</ul>
+
+<h3>Renovación automática: las condiciones que nadie lee</h3>
+<p>«ACM renueva solo» es cierto, pero condicionado. Un certificado es
+<strong>elegible</strong> para renovación automática si:</p>
+<div class="verdict">
+  <div class="yes"><h3>Se renueva solo</h3><ul>
+    <li>Está <strong>asociado a otro servicio de AWS</strong> (CloudFront, ELB, API
+    Gateway…), <strong>o</strong></li>
+    <li>ha sido <strong>exportado</strong> desde su emisión o última renovación, <strong>y</strong></li>
+    <li>la validación fue por DNS y el <strong>CNAME sigue en su sitio</strong>.</li>
+  </ul></div>
+  <div class="no"><h3>No se renueva solo</h3><ul>
+    <li>Certificados <strong>importados</strong>: nunca.</li>
+    <li>Certificados <strong>ya caducados</strong>.</li>
+    <li>Certificados <strong>emitidos por ACME</strong>: los renueva tu cliente ACME.</li>
+    <li>Privados emitidos llamando directamente a <code>IssueCertificate</code> de Private CA.</li>
+  </ul></div>
+</div>
+<div class="callout trap">
+  <span class="callout-title">El fallo silencioso más caro</span>
+  <p>Un certificado emitido, validado y <strong>no asociado a nada</strong> es NO
+  elegible: ACM no lo renovará. Es el escenario clásico de «lo creé para el proyecto que
+  aún no he desplegado» — trece meses después caduca sin que nada avise. Al renovar,
+  <strong>el ARN no cambia</strong>, lo cual es una buena noticia para Terraform (no hay
+  <em>diff</em> perpetuo) y una mala para la observabilidad (no hay evento visible en tu
+  state). Vigila <code>renewal_eligibility</code> y <code>not_after</code>, que el provider
+  expone como atributos.</p>
+</div>
+<p class="small">Otro detalle: <strong>los certificados son regionales y no se copian</strong>.
+El mismo dominio en tres regiones son tres certificados que se renuevan por separado, cada
+uno con su ARN.</p>
+
+<h2 id="regiones">La regla de regiones</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Servicio que consume el certificado</th><th>Región del certificado</th><th>Por qué</th></tr></thead>
+  <tbody>
+    <tr><td><strong>CloudFront</strong></td>
+      <td><strong><code>us-east-1</code></strong>, sin excepción</td>
+      <td>CloudFront es un servicio <strong>global</strong>: no vive en ninguna región y su
+      plano de control está en Virginia. Desde ahí distribuye el certificado a todos los
+      edge locations que la distribución use.</td></tr>
+    <tr><td>ALB / NLB</td><td>La región del balanceador</td><td rowspan="4">Son servicios
+      <strong>regionales</strong>: consumen recursos de su propia región y ACM no replica
+      certificados entre regiones.</td></tr>
+    <tr><td>API Gateway (regional)</td><td>La región de la API</td></tr>
+    <tr><td>API Gateway (edge-optimized)</td><td><code>us-east-1</code></td></tr>
+    <tr><td>Amplify, App Runner, Cognito custom domain…</td><td>Según el servicio; lee su doc</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout tf">
+  <span class="callout-title">La consecuencia en Terraform: <code>provider</code> con <code>alias</code></span>
+  <p>Tu bucket está en <code>eu-west-1</code>; el certificado <em>tiene</em> que estar en
+  <code>us-east-1</code>. Un solo bloque <code>provider "aws"</code> no puede estar en dos
+  regiones, así que declaras un segundo con <code>alias</code> y se lo pasas explícitamente
+  a los recursos de ACM. Es un requisito de AWS que dicta la forma del código — el mismo
+  motivo por el que el proyecto 05 introduce el patrón. Ver también
+  <a href="./aws-cloudfront.html#us-east-1">la ficha de CloudFront</a>.</p>
+</div>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en la
+<a href="https://aws.amazon.com/certificate-manager/pricing/">página de precios de ACM</a> y
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSCertificateManager/current/us-east-1/index.json">Price
+List API</a>, región <code>us-east-1</code>.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Certificado público no exportable</strong></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — emisión, renovación y almacenamiento</td></tr>
+    <tr><td>Certificado importado</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> en ACM</td></tr>
+    <tr><td>Certificado público <strong>exportable</strong>, FQDN</td><td>por certificado</td><td><code>7,00 USD</code> en emisión y en cada renovación</td></tr>
+    <tr><td>Certificado público <strong>exportable</strong>, wildcard</td><td>por certificado</td><td><code>79,00 USD</code> en emisión y en cada renovación</td></tr>
+    <tr><td>Certificado por <strong>ACME</strong>, FQDN</td><td>por dominio y mes</td><td><code>1,00 USD</code> (primeros 1 000) · 0,50 (siguientes 3 000) · 0,25 (a partir de 4 000)</td></tr>
+    <tr><td>Certificado por <strong>ACME</strong>, wildcard</td><td>por dominio y mes</td><td><code>5,00 USD</code> (primeros 500) · 2,50 después</td></tr>
+    <tr><td><strong>AWS Private CA</strong> (general-purpose)</td><td><span class="tag-cost hour">por mes</span></td><td><code>400,00 USD/mes</code> por CA ⚠️</td></tr>
+    <tr><td><strong>AWS Private CA</strong> (short-lived certificate mode)</td><td><span class="tag-cost hour">por mes</span></td><td><code>50,00 USD/mes</code> por CA ⚠️</td></tr>
+    <tr><td>Certificados privados emitidos (general-purpose)</td><td>por certificado</td><td><code>0,75 USD</code> los primeros 1 000 · 0,35 hasta 10 000 · 0,001 a partir de ahí</td></tr>
+    <tr><td>Certificados privados (short-lived mode)</td><td>por certificado</td><td><code>0,058 USD</code></td></tr>
+    <tr><td>Respuestas OCSP (Private CA)</td><td>por certificado y mes</td><td><code>0,06 USD</code> + <code>0,20 USD</code> por cada 100 000 consultas</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout cost">
+  <span class="callout-title">La trampa de los 400 USD/mes</span>
+  <p><strong>AWS Private CA cobra por hora de existencia, no por uso.</strong> 400 USD al mes
+  por cada CA de propósito general, aunque no emita un solo certificado — y sigue cobrando
+  hasta que termina su periodo de restauración tras el borrado. Hay una prueba gratuita de
+  30 días que es exactamente el tipo de cosa que se olvida desactivada. <strong>Private CA
+  no aparece en este curso, ni debe.</strong> Sirve para PKI interna (mTLS entre
+  microservicios, certificados de dispositivos IoT), no para poner HTTPS en un sitio
+  público: nadie fuera de tu organización confía en tu CA.</p>
+  <p>El resto del servicio es el ideal del curso: <strong>cero en reposo y cero en
+  uso</strong>. Un certificado público no exportable no cuesta nada, se renueve mil veces o
+  ninguna. En el proyecto 05, ACM aporta exactamente <code>0,00 USD</code> a la factura.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/acm/latest/userguide/acm-limits.html">Quotas
+de ACM</a>, consultada el 2026-08-30. Los valores son <strong>por región y por cuenta</strong>.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Nombres de dominio por certificado</strong></td><td><strong>10</strong></td><td>Sí, hasta <strong>100</strong> por Service Quotas</td></tr>
+    <tr><td>Subdominios cubiertos por un wildcard</td><td><strong>Ilimitados</strong> (un solo nivel: <code>*.example.com</code> no cubre <code>a.b.example.com</code>)</td><td>—</td></tr>
+    <tr><td>Certificados ACM simultáneos</td><td>2 500</td><td>Sí, por ticket</td></tr>
+    <tr><td>Certificados ACM emitidos por año (últimos 365 días)</td><td>5 000</td><td>Sí</td></tr>
+    <tr><td>Certificados importados / importados por año</td><td>2 500 / 5 000</td><td>Sí</td></tr>
+    <tr><td>Ventana para completar la validación</td><td><strong>72 horas</strong></td><td><strong>No</strong></td></tr>
+    <tr><td>Encadenamiento de CNAMEs en la resolución</td><td>5</td><td><strong>No</strong></td></tr>
+    <tr><td>Validez del certificado</td><td><strong>198 días</strong> (reducción del sector; era 395)</td><td><strong>No</strong></td></tr>
+    <tr><td>Ventana de renovación</td><td>ACM renueva <strong>45 días</strong> antes de caducar</td><td><strong>No</strong></td></tr>
+    <tr><td>Nombres por certificado emitido vía ACME</td><td>100</td><td><strong>No</strong></td></tr>
+    <tr><td><code>RequestCertificate</code> / <code>RenewCertificate</code></td><td>5 req/s cada uno</td><td>—</td></tr>
+    <tr><td>Private CAs por cuenta</td><td>200</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Los certificados emitidos por ACME y los firmados por Private CA
+<strong>no cuentan</strong> contra la cuota de 2 500. Los caducados y revocados
+<strong>sí</strong>.</p>
+
+<h2 id="cuando-no">Cuándo NO usarlo</h2>
+<div class="callout trap">
+  <span class="callout-title">Lo que ACM no hace, por mucho que ponga «Certificate Manager»</span>
+  <p>ACM emite <strong>certificados de servidor TLS</strong>, y punto. No emite certificados
+  de <strong>firma de código</strong> (para eso, AWS Signer o una CA comercial), ni
+  <strong>S/MIME</strong> para firmar correo, ni certificados de cliente para autenticar
+  personas. Y no <strong>compra</strong> dominios ni gestiona DNS: eso es Route 53.</p>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Si necesitas…</th><th>Usa</th><th>Porque</th></tr></thead>
+  <tbody>
+    <tr><td>El PEM y la clave privada en tu propia EC2, contenedor u on-prem, gratis</td>
+      <td><strong>Let's Encrypt</strong> (o el ACME de ACM, si quieres la marca AWS)</td>
+      <td>El exportable de ACM cuesta 7 USD por FQDN <em>en cada renovación</em>, y con 198
+      días de validez eso son ~14 USD/año por dominio. Let's Encrypt es 0 USD con
+      <code>certbot</code>. Comparación honesta: pagas por integración con IAM, auditoría en
+      CloudTrail, eventos en EventBridge y un único panel para todos tus certificados. Si
+      solo quieres el PEM, no compensa</td></tr>
+    <tr><td>Un certificado ya emitido de ACM en una máquina propia</td>
+      <td>Pedir uno <strong>nuevo</strong> marcado como exportable</td>
+      <td>Un certificado público existente <strong>no se puede convertir</strong> en
+      exportable. La opción se elige en la emisión</td></tr>
+    <tr><td>PKI interna: mTLS entre servicios, IoT, VPN corporativa</td>
+      <td>AWS Private CA — con los ojos abiertos</td>
+      <td>400 USD/mes por CA, cobrados por existir. Fuera del presupuesto de este curso</td></tr>
+    <tr><td>Firmar código, contenedores o artefactos</td>
+      <td>AWS Signer</td>
+      <td>Otro tipo de certificado y otro producto</td></tr>
+    <tr><td>Un certificado EV o OV con el nombre de tu empresa en la barra</td>
+      <td>Una CA comercial, importándolo luego a ACM</td>
+      <td>ACM solo emite <strong>DV</strong> (domain validated). Importarlo es gratis, pero
+      pierdes la renovación automática</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<p>El patrón canónico son <strong>tres recursos</strong>, y el tercero es el que la gente
+olvida: <code>aws_acm_certificate</code> pide el certificado pero <strong>no espera</strong>
+a que se emita. Sin <code>aws_acm_certificate_validation</code>, CloudFront intenta usar un
+certificado en estado <code>PENDING_VALIDATION</code> y el <code>apply</code> falla.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">el trío completo, para CloudFront</span></div>
+<pre><code>provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
+# 1) pedir el certificado (no espera a nada)
+resource "aws_acm_certificate" "cdn" {
+  provider                  = aws.us_east_1
+  domain_name               = "example.com"
+  subject_alternative_names = ["*.example.com"]
+  validation_method         = "DNS"
+
+  lifecycle {
+    create_before_destroy = true   # imprescindible si ya está en uso
+  }
+}
+
+# 2) publicar los CNAME que ACM dicta
+resource "aws_route53_record" "cdn_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cdn.domain_validation_options :
+    dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true          # apex y wildcard comparten registro
+  zone_id         = aws_route53_zone.main.zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+}
+
+# 3) esperar a que ACM valide (no es un recurso real en AWS)
+resource "aws_acm_certificate_validation" "cdn" {
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.cdn.arn
+  validation_record_fqdns = [for r in aws_route53_record.cdn_validation : r.fqdn]
+}
+
+# y en la distribución, referencia SIEMPRE el ARN del validation
+resource "aws_cloudfront_distribution" "site" {
+  # …
+  viewer_certificate {
+    acm_certificate_arn = aws_acm_certificate_validation.cdn.certificate_arn
+    ssl_support_method  = "sni-only"
+  }
+}</code></pre>
+</div>
+<p>Trampas conocidas, en orden de dolor:</p>
+<ul>
+  <li><strong>Referencia <code>aws_acm_certificate_validation.x.certificate_arn</code>, no
+  <code>aws_acm_certificate.x.arn</code>.</strong> Son el mismo ARN, pero el primero
+  <em>fuerza la dependencia</em>: Terraform no tocará CloudFront hasta que el certificado
+  esté <code>ISSUED</code>. Es el truco entero del recurso.</li>
+  <li><strong><code>aws_acm_certificate_validation</code> no existe en AWS.</strong> Es un
+  esperador puro: borrarlo o cambiarlo no tiene efecto real. Su <code>id</code> es la hora
+  de emisión, y su timeout por defecto es 75 minutos.</li>
+  <li><strong><code>allow_overwrite = true</code> en el <code>route53_record</code></strong>:
+  con apex + wildcard, el <code>for_each</code> agrupa por <code>domain_name</code> y ambos
+  producen el mismo registro. Sin esa línea, el segundo choca con el primero.</li>
+  <li><strong><code>create_before_destroy = true</code> en el certificado.</strong> Si
+  cambias los SANs, Terraform tiene que reemplazarlo; sin esto, primero borra el que está
+  en uso y CloudFront se queda sin certificado a mitad del apply.</li>
+  <li><strong>Añadir un SAN <em>reemplaza</em> el certificado.</strong> No hay actualización
+  en sitio: cualquier cambio en la lista de dominios crea uno nuevo con ARN nuevo.</li>
+  <li><strong>Si borras la zona o el registro de validación después</strong>, el
+  <code>apply</code> seguirá verde y la renovación se romperá dentro de seis meses. Deja los
+  CNAME en el código, no los limpies.</li>
+  <li><strong>Para pedir uno exportable</strong>:
+  <code>options { export = "ENABLED" }</code>. El propio provider avisa de que conlleva
+  cargos. Por defecto es <code>DISABLED</code>, que es lo correcto.</li>
+</ul>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3 · elegir entre variantes</p>
+  <p class="quiz-q">Tu bucket, tu backend y tu state viven en <code>eu-west-1</code>, y
+  quieres servir <code>app.example.com</code> por HTTPS desde CloudFront. ¿Dónde pides el
+  certificado?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="La documentación de ACM es literal: para usar un certificado con CloudFront hay que pedirlo o importarlo en US East (N. Virginia). CloudFront es global y su plano de control vive ahí; desde us-east-1 reparte el certificado a todos los edge locations. Por eso el proyecto 05 declara un provider con alias.">El certificado de CloudFront va en us-east-1, siempre</button></li>
+    <li><button data-correct="false" data-why="Esa es la regla de los servicios REGIONALES: un ALB o una API Gateway regional piden el certificado en su propia región. CloudFront no está en ninguna región, así que 'la región del origen' no significa nada para él y el apply fallaría.">El certificado va en la región del origen</button></li>
+    <li><button data-correct="false" data-why="No se replica: ACM dice explícitamente que los certificados son recursos regionales, que no se pueden copiar entre regiones, y que el mismo dominio en varias regiones son varios certificados que se validan y renuevan por separado.">Un certificado ACM se replica solo entre regiones</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3 · coste</p>
+  <p class="quiz-q">Necesitas el fichero PEM y la clave privada del certificado de
+  <code>api.example.com</code> para instalarlo en un servidor propio fuera de AWS. ¿Qué
+  opción de ACM te sirve, y qué cuesta?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Los certificados públicos exportables (nov. 2025) son la única forma de que ACM te entregue la clave privada, cifrada con una passphrase que tú eliges. Cuestan 7,00 USD por FQDN en la emisión y otros 7,00 en cada renovación; con 198 días de validez, unos 14 USD al año.">Certificado exportable de ACM: 7 USD por FQDN</button></li>
+    <li><button data-correct="false" data-why="El certificado público normal es efectivamente gratis, pero NO es exportable: su clave privada no sale de AWS por diseño, y solo se puede asociar por ARN a servicios integrados. Además, uno ya emitido no se puede convertir en exportable: hay que pedir uno nuevo.">Certificado público normal de ACM: gratis y exportable</button></li>
+    <li><button data-correct="false" data-why="Private CA sí entrega la clave, pero cuesta 400 USD al mes por CA solo por existir y emite certificados que únicamente confía tu organización: un navegador cualquiera los rechazaría. Es PKI interna, no HTTPS público, y es la trampa de coste más cara de este servicio.">Certificado de una CA privada: 400 USD mensuales</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3 · el modelo</p>
+  <p class="quiz-q">El certificado está emitido y funcionando. Haces limpieza en Route 53 y
+  borras el <code>CNAME</code> raro que empieza por guion bajo. ¿Qué pasa?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="ACM relee ese CNAME en cada renovación: 'ACM automatically renews your certificate as long as the certificate is in use and your CNAME record remains in place'. Borrarlo es la forma documentada de PARAR la renovación automática, así que el certificado actual sigue sirviendo hasta que caduque y entonces falla sin previo aviso.">La renovación fallará: el CNAME debe seguir ahí</button></li>
+    <li><button data-correct="false" data-why="El CNAME no es de un solo uso: sirve para la emisión inicial, para cada renovación, e incluso para reemitir el mismo certificado en otras regiones sin revalidar. Es un token permanente de propiedad del dominio, no un código de un solo uso.">Nada: el CNAME solo sirve para la emisión</button></li>
+    <li><button data-correct="false" data-why="El email solo entra en juego si elegiste validación por EMAIL. Con validación DNS, ACM no manda a nadie a pinchar un enlace: comprueba el registro y, si no está, la renovación simplemente no ocurre. Ese es justamente el fallo silencioso.">ACM enviará un email para revalidar el dominio</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-cloudfront.html">Ficha: Amazon CloudFront</a>
+    <a href="./aws-route53.html">Ficha: Amazon Route 53</a>
+    <a href="./aws-elb.html">Ficha: Elastic Load Balancing</a>
+    <a href="./aws-fundamentos.html">Fundamentos: global, regional y zonal</a>
+    <a href="./README.md">Todas las referencias</a>
+    <a href="https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html">página de
+    validación DNS</a> (léela entera: es donde está la condición del CNAME permanente), la
+    <a href="https://docs.aws.amazon.com/acm/latest/userguide/managed-renewal.html">de
+    renovación gestionada</a> con la lista de elegibilidad, la <a
+    href="https://docs.aws.amazon.com/acm/latest/userguide/acm-exportable-certificates.html">de
+    certificados exportables</a> y los <a
+    href="https://aws.amazon.com/certificate-manager/pricing/">precios</a>. Cifras
+    verificadas el <strong>2026-08-30</strong>.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

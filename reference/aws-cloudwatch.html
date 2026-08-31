@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon CloudWatch</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon CloudWatch</h1>
+  <p class="deck">Tres almacenes distintos con una consola común: <strong>Logs</strong> guarda
+  texto, <strong>Metrics</strong> guarda series temporales de números, y
+  <strong>Alarms</strong> vigila esos números para despertarte. No es un producto: son tres
+  bases de datos con tres modelos de precio distintos, y confundirlas es la causa número uno
+  de las facturas sorpresa de AWS.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Observabilidad / monitorización</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (las métricas viven solo en su región)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> <span class="tag-cost hour">+ por mes</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Con cuidado: los logs no cobran si nadie
+      escribe, pero el <strong>almacenamiento acumulado</strong> se paga todos los meses
+      hasta que caduque, y cada alarma cuesta 0,10 USD/mes aunque nunca salte</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_cloudwatch_log_group</code>,
+      <code>aws_cloudwatch_metric_alarm</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/01-serverless-api">proyecto 01</a> y
+      todos los siguientes</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>El sistema de telemetría integrado de AWS. Recoge, almacena y consulta dos tipos de dato
+completamente distintos, y añade encima un evaluador de condiciones:</p>
+<ul>
+  <li><strong>CloudWatch Logs</strong> — un almacén de <em>texto</em>. Cada línea que tu
+  código escribe a stdout acaba aquí si algo la envía. Se consulta con búsquedas y con un
+  lenguaje de consulta (Logs Insights). Se paga sobre todo por <strong>GB ingerido</strong>.</li>
+  <li><strong>CloudWatch Metrics</strong> — un almacén de <em>números con marca de
+  tiempo</em>. Una serie por cada combinación única de namespace + nombre + dimensiones. Se
+  paga por <strong>métrica distinta y mes</strong>, no por punto.</li>
+  <li><strong>CloudWatch Alarms</strong> — un evaluador que mira una métrica (o una
+  expresión sobre varias, o desde 2026 una consulta de logs) cada N segundos y cambia de
+  estado. El estado dispara acciones: SNS, Auto Scaling, acciones sobre EC2. Se paga
+  <strong>por alarma y mes</strong>.</li>
+  <li><strong>CloudWatch Dashboards</strong> — pantallas de widgets sobre lo anterior. No
+  almacenan nada: solo consultan.</li>
+</ul>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Un avión. La <strong>caja negra</strong> graba todo lo que pasó en texto crudo (Logs);
+  los <strong>instrumentos</strong> muestran magnitudes muestreadas en el tiempo —altitud,
+  combustible— (Metrics); los <strong>pilotos rojos</strong> se encienden cuando una
+  magnitud cruza un umbral (Alarms). Dónde se rompe la analogía: en un avión todo eso viene
+  en el mismo precio. Aquí son <strong>tres líneas separadas de la factura</strong>, y la
+  caja negra —que grabar es baratísimo pero <em>guardar</em> no— es la que se lleva el
+  dinero. También se rompe en otra cosa: los pilotos rojos de un avión están apagados y no
+  cuestan nada; una alarma de CloudWatch apagada cuesta lo mismo que una encendida.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Ver qué hizo tu Lambda</h3><p>Tu caso desde la lección 05: la
+  función escribe con <code>console.log</code>, el runtime lo manda a un log group
+  <code>/aws/lambda/&lt;nombre&gt;</code>, y tú lees con <code>aws logs tail</code>. Sin
+  esto, una Lambda que falla es una caja opaca que devuelve 502.</p></div>
+  <div class="ref-card"><h3>Enterarte de que la DLQ tiene mensajes</h3><p>Una cola de
+  mensajes muertos vacía no se mira nunca. Una alarma sobre
+  <code>ApproximateNumberOfMessagesVisible &gt; 0</code> convierte «algún día lo miro» en un
+  correo a los cinco minutos. Es el patrón que prepara la lección 12.</p></div>
+  <div class="ref-card"><h3>Contar errores sin instrumentar código</h3><p>Un
+  <em>metric filter</em> lee el texto que ya escribes («ERROR») y publica una métrica
+  numérica de cuántas veces apareció. Cero cambios en la aplicación, y de ahí sale una
+  gráfica y una alarma.</p></div>
+  <div class="ref-card"><h3>Auto Scaling</h3><p>Una alarma sobre <code>CPUUtilization</code>
+  no manda un correo: llama a una política de escalado. CloudWatch es el sensor del que
+  cuelga todo el autoescalado de AWS — sin él, el grupo no sabe cuándo crecer.</p></div>
+  <div class="ref-card"><h3>Métricas de negocio, no de infraestructura</h3><p>«Links creados
+  por hora», «pedidos por región». Con EMF sale de los logs que ya escribes, sin llamar a
+  ninguna API extra y sin permisos adicionales.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Las tres patas resuelven preguntas distintas y no son intercambiables. Elegir la pata
+equivocada no da error: da una factura.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Pata</th><th>Qué guarda</th><th>La pregunta que responde</th><th>Se paga por</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Logs</strong></td>
+      <td>Líneas de texto, con timestamp, agrupadas en <em>log groups</em> y
+      <em>log streams</em></td>
+      <td>«¿Qué pasó exactamente en la petición de las 14:03?»</td>
+      <td>GB <strong>ingeridos</strong> (0,50) + GB-mes almacenados (0,03) + GB escaneados
+      al consultar (0,005)</td></tr>
+    <tr><td><strong>Metrics</strong></td>
+      <td>Series temporales de números, agregadas por periodo</td>
+      <td>«¿Cuántos errores por minuto ha habido esta semana?»</td>
+      <td>Métrica <strong>distinta</strong> y mes (0,30 las primeras 10 000). Las de los
+      servicios AWS son gratis</td></tr>
+    <tr><td><strong>Alarms</strong></td>
+      <td>Nada: solo un estado (<code>OK</code> / <code>ALARM</code> /
+      <code>INSUFFICIENT_DATA</code>)</td>
+      <td>«Avísame cuando esto se salga de rango»</td>
+      <td>Alarma-métrica y mes (0,10), esté disparada o no</td></tr>
+    <tr><td><strong>Dashboards</strong></td>
+      <td>Solo la definición JSON de los widgets</td>
+      <td>«Enséñame el estado del sistema de un vistazo»</td>
+      <td>Dashboard y mes (3,00; tres gratis). Los <em>automatic dashboards</em> son
+      gratis</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Pregúntate <strong>qué forma tiene la respuesta</strong>. Si es texto que hay que leer
+  entero → <strong>Logs</strong>. Si es un número que quieres ver evolucionar en una gráfica
+  o comparar con un umbral → <strong>Metrics</strong>. Si quieres que te despierte de noche
+  → <strong>Alarms</strong> sobre una métrica.</p>
+  <p>La regla derivada, y la que ahorra dinero: <strong>no consultes logs para contar
+  cosas</strong>. Si vas a preguntar «¿cuántos errores?» más de una vez, convierte el texto
+  en métrica <em>una vez</em> (metric filter o EMF) y consulta la métrica siempre. Escanear
+  logs cuesta por GB cada vez que preguntas; leer una métrica no cuesta por lectura.</p>
+</div>
+
+<h3>Logs, a fondo</h3>
+<p><strong>La jerarquía es de dos niveles.</strong> Un <em>log group</em> es el contenedor
+que tú declaras y sobre el que se configuran retención, cifrado, filtros y permisos. Dentro,
+los <em>log streams</em> los crea el emisor: una Lambda abre un stream por cada entorno de
+ejecución. Tú gestionas el grupo; los streams aparecen solos y no se declaran en Terraform.</p>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa de factura número uno de todo AWS</span>
+  <p>La retención por defecto de un log group es <strong>«nunca caducar»</strong>. No hay
+  aviso, no hay tope, no hay nada que lo pare. Y la ingesta cuesta
+  <strong>0,50 USD/GB</strong> — <em>diez veces</em> lo que cuesta guardarlos un mes
+  (0,03 USD/GB-mes). Un log group olvidado con un <code>console.log</code> en un bucle
+  factura por dos vías a la vez: cada GB nuevo se cobra al entrar, y todos los GB anteriores
+  se siguen cobrando cada mes para siempre.</p>
+  <p>El curso ya lo evita: en la lección 05 declaras el log group <strong>tú</strong>, con
+  <code>retention_in_days = 7</code>, antes de que Lambda lo cree sola. Ese es exactamente
+  el motivo — no es pedantería de IaC, es que la alternativa no caduca nunca.</p>
+</div>
+
+<p><strong>Retención.</strong> <code>retention_in_days</code> solo acepta valores de una
+lista cerrada: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827,
+2192, 2557, 2922, 3288, 3653 — y <strong><code>0</code>, que significa «nunca»</strong>
+(<a href="https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/cloudwatch_log_group.html.markdown">doc
+del recurso</a>). Un 45 no es «45 días»: es un error de <code>apply</code>. Omitir el
+argumento entero equivale a «nunca», no a un valor prudente.</p>
+
+<p><strong>Las dos clases de log group.</strong> Se eligen al crear y
+<strong>no se pueden cambiar después</strong>
+(<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatch_Logs_Log_Classes.html">Log
+classes</a>):</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Clase</th><th>Ingesta</th><th>Qué pierdes</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><code>STANDARD</code></td><td>0,50 USD/GB</td><td>Nada</td>
+      <td>Por defecto. Lo que necesitas si vas a alarmar, filtrar o mirar en directo.</td></tr>
+    <tr><td><code>INFREQUENT_ACCESS</code></td><td>0,25 USD/GB (mitad)</td>
+      <td><strong>Metric filters, subscription filters, Live Tail, EMF, anomaly detection,
+      field indexing</strong> y las APIs <code>GetLogEvents</code>/<code>FilterLogEvents</code>.
+      Solo queda Logs Insights (casi todos los comandos), export a S3 y cifrado.</td>
+      <td>Logs de cumplimiento o forense que archivas y solo miras cuando algo ya ha
+      pasado.</td></tr>
+    <tr><td><code>DELIVERY</code></td><td>—</td>
+      <td>Todo. Retención fija de 2 días, sin Logs Insights</td>
+      <td>Solo como tránsito para entregar logs de Lambda a S3 o Firehose.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">La documentación dice explícitamente que Standard e Infrequent Access
+<em>«differ in ingestion costs only»</em>: el almacenamiento y las consultas de Insights
+cuestan lo mismo en las dos. La mitad de precio se paga perdiendo la mitad de las
+funciones — y la que más duele es que <strong>no hay metric filters</strong>, así que no
+puedes alarmar sobre el contenido.</p>
+
+<p><strong>Metric filters</strong> (<code>aws_cloudwatch_log_metric_filter</code>) — un
+patrón que se evalúa contra cada línea que entra y publica una métrica cuando casa. Es la
+forma barata de convertir texto en número: hasta 100 por log group, sin coste por la
+evaluación, y la métrica resultante es una métrica custom normal (con su precio por
+métrica-mes). Cuidado con <code>dimensions</code>: hasta 3, y cada valor distinto crea una
+métrica nueva.</p>
+
+<p><strong>Subscription filters</strong>
+(<code>aws_cloudwatch_log_subscription_filter</code>) — la salida en tiempo casi real. Cada
+línea que casa el patrón se reenvía, comprimida en gzip y codificada en base64, a
+<strong>Kinesis Data Streams, Firehose, Lambda u OpenSearch</strong>
+(<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/SubscriptionFilters.html">doc</a>).
+Es el mecanismo con el que se exportan los logs a un tercero (Datadog, Splunk) o se
+construye un procesador propio. Máximo <strong>5 por log group</strong> —eran 2 hasta 2023,
+así que medio internet dice todavía «dos»— y no ajustable. Trampa clásica: si la Lambda de
+destino escribe en el mismo log group que la origina, has construido un bucle infinito de
+facturación.</p>
+
+<p><strong>Live Tail</strong> — el <code>tail -f</code> de la consola. Se factura
+<strong>por minuto de sesión</strong> (0,01 USD/min tras 1 800 minutos gratis al mes), no
+por GB: es de las pocas cosas de CloudWatch que cobran por tiempo. 15 sesiones concurrentes
+por cuenta, hasta 10 log groups por sesión.</p>
+
+<p><strong>Log anomaly detection</strong> — sí existe, y es de las pocas piezas de
+CloudWatch sin coste propio: entrenas un detector sobre un log group y CloudWatch marca
+patrones nuevos o volúmenes raros. Límite de 500 detectores activos por región (ajustable).
+No funciona en clase Infrequent Access.</p>
+
+<h3>Metrics, a fondo</h3>
+<p><strong>La unidad de facturación es la métrica, no el punto.</strong> Una métrica se
+identifica por <em>namespace + nombre + el conjunto exacto de dimensiones</em>. Publicar un
+millón de puntos en una métrica cuesta lo mismo que publicar diez: 0,30 USD ese mes. Pero
+publicar mil combinaciones distintas de dimensiones son <strong>mil métricas</strong>.</p>
+<div class="callout cost">
+  <span class="callout-title">Cardinalidad: el error de 7 000 USD</span>
+  <p>«Voy a añadir <code>requestId</code> como dimensión para poder filtrar.» Cada valor
+  único de una dimensión crea una métrica nueva. 50 000 peticiones al mes con
+  <code>requestId</code> de dimensión = 50 000 métricas = 10 000 × 0,30 + 40 000 × 0,10 =
+  <strong>7 000 USD ese mes</strong>. La propia documentación de EMF lo avisa con nombre y
+  apellidos: <em>«if you unintentionally create metrics based on high-cardinality dimensions
+  (such as requestId), the embedded metric format will by design create a custom metric
+  corresponding to each unique dimension combination»</em>. Las dimensiones son para
+  <em>categorías</em> (entorno, región, código de error), nunca para identificadores. Si
+  necesitas buscar por <code>requestId</code>, eso es un log, no una métrica.</p>
+</div>
+
+<p><strong>Namespaces.</strong> Contenedores aislados. Los de AWS siguen
+<code>AWS/&lt;servicio&gt;</code> (<code>AWS/Lambda</code>, <code>AWS/SQS</code>,
+<code>AWS/ApiGateway</code>) y son <strong>gratis</strong>: las métricas que publican los
+servicios de AWS por ti no cuentan como custom. Los tuyos van en un namespace propio y sí se
+pagan.</p>
+
+<p><strong>Dimensiones: hasta 30 por métrica</strong>
+(<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html">Metrics
+concepts</a>). Casi todos los tutoriales dicen 10: era el límite antiguo. Y ojo con la parte
+que sorprende: <strong>CloudWatch no agrega a través de dimensiones en métricas
+custom</strong>. Si publicas siempre con <code>Servidor=A, Región=X</code>, no puedes
+después preguntar «total por Región». Solo recuperas las combinaciones exactas que
+publicaste.</p>
+
+<p><strong>Resolución.</strong> Estándar = granularidad de 1 minuto. Alta resolución = 1
+segundo, se pide al publicar. Sale más cara indirectamente (cada <code>PutMetricData</code>
+se cobra, y publicar cada segundo son 60× llamadas) y directamente en las alarmas: una
+alarma de alta resolución cuesta 0,30 USD/mes en vez de 0,10.</p>
+
+<p><strong>Embedded Metric Format (EMF)</strong> — la alternativa que casi nadie conoce y que
+es la correcta para código serverless. En vez de llamar a <code>PutMetricData</code>,
+escribes en tus logs un JSON con una estructura concreta y CloudWatch <strong>extrae las
+métricas automáticamente</strong>
+(<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html">doc</a>).
+Por qué gana:</p>
+<ul>
+  <li><strong>Sin llamada de red.</strong> <code>PutMetricData</code> es una llamada HTTP
+  síncrona que tu Lambda paga en milisegundos de ejecución y que puede fallar. EMF es un
+  <code>console.log</code>.</li>
+  <li><strong>Sin permiso extra.</strong> Necesitas <code>logs:PutLogEvents</code>, que tu
+  rol ya tiene desde la lección 05. <strong>No</strong> necesitas
+  <code>cloudwatch:PutMetricData</code>.</li>
+  <li><strong>Métrica y contexto en el mismo sitio.</strong> La línea de log que generó la
+  métrica sigue ahí, consultable con Logs Insights, con todos los campos que no convertiste
+  en dimensiones.</li>
+  <li><strong>Coste:</strong> pagas ingesta de logs + la métrica custom, pero te ahorras las
+  peticiones de API (0,01 USD por cada 1 000 <code>PutMetricData</code>).</li>
+</ul>
+<p>Lo que cuesta: la entrega es <em>at-least-once</em>, así que puede haber valores
+duplicados ocasionales, y solo funciona en log groups de clase Standard.</p>
+
+<p><strong>Metric math.</strong> Una alarma no tiene por qué mirar una métrica cruda: puede
+mirar una expresión sobre hasta 20 (<code>metric_query</code> en Terraform). El caso
+canónico es la tasa de error — <code>m2/m1*100</code>, errores partido por peticiones —
+porque «100 errores» significa cosas opuestas con 100 o con 100 000 peticiones. Cada métrica
+que entra en la expresión se factura como alarma-métrica: una alarma de tasa de error sobre
+dos métricas cuesta 0,20 USD/mes, no 0,10.</p>
+
+<h3>Alarms, a fondo</h3>
+<p>Una alarma tiene <strong>tres estados</strong>: <code>OK</code>, <code>ALARM</code> e
+<code>INSUFFICIENT_DATA</code>, y —esto es lo que más confunde— <strong>solo actúa cuando
+<em>cambia</em> de estado</strong>, no mientras está en uno
+(<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html">doc</a>).
+Si la alarma lleva tres días en <code>ALARM</code>, no recibes tres días de correos: recibes
+uno, el del cambio. La excepción son las acciones de Auto Scaling, que se repiten cada
+minuto mientras dure el estado.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo de alarma</th><th>Qué evalúa</th><th>Precio</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Métrica</strong> (estándar)</td><td>Una métrica o una expresión de metric math</td>
+      <td>0,10 USD/métrica-mes</td><td>El 95 % de los casos.</td></tr>
+    <tr><td><strong>Métrica</strong> (alta resolución)</td><td>Igual, con periodo de 10 o 30 s</td>
+      <td>0,30 USD/métrica-mes</td><td>Solo si la métrica es de alta resolución y de verdad
+      necesitas reaccionar en segundos.</td></tr>
+    <tr><td><strong>Compuesta</strong></td><td>Una expresión booleana sobre <em>otras</em>
+      alarmas: <code>ALARM(a) AND ALARM(b)</code></td>
+      <td>0,50 USD/mes, sin importar cuántas combine</td>
+      <td>Reducir ruido: alarmas individuales sin notificación, y solo la compuesta avisa.
+      No puede hacer acciones de EC2 ni de Auto Scaling.</td></tr>
+    <tr><td><strong>Anomaly detection</strong></td><td>Una banda estadística aprendida en
+      vez de un umbral fijo</td>
+      <td>0,30 USD/mes (la banda genera dos métricas extra además de la original)</td>
+      <td>Métricas con estacionalidad donde un umbral fijo da falsos positivos de noche o en
+      fin de semana.</td></tr>
+    <tr><td><strong>Log alarm</strong> (nueva)</td><td>El resultado de una consulta de Logs
+      Insights ejecutada periódicamente</td>
+      <td>0,10 USD/alarma</td>
+      <td>Alarmar sobre un patrón de log sin montar un metric filter. Añade el coste de GB
+      escaneados en cada ejecución.</td></tr>
+    <tr><td><strong>PromQL alarm</strong> (nueva)</td><td>Una consulta PromQL sobre métricas
+      ingeridas por OTLP</td>
+      <td>0,10 USD/alarma</td>
+      <td>Stacks que ya hablan OpenTelemetry. Irrelevante para este curso.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La configuración que decide si tu alarma sirve para algo: <code>treat_missing_data</code></span>
+  <p>El caso que rompe a todo el mundo: <strong>alarmar sobre algo que casi nunca ocurre</strong>.
+  Una DLQ vacía no produce puntos de métrica —muchos servicios de AWS dejan de publicar una
+  métrica cuando no hay actividad—, así que la alarma no ve datos. Qué hace CloudWatch con
+  esos huecos lo decides tú
+  (<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html">doc</a>):</p>
+  <ul>
+    <li><code>missing</code> — <strong>el valor por defecto</strong>. Sin datos suficientes,
+    la alarma va a <code>INSUFFICIENT_DATA</code>. Ni <code>OK</code> ni <code>ALARM</code>:
+    un estado gris que no dispara nada y que la gente ignora en la consola.</li>
+    <li><code>notBreaching</code> — «sin datos = todo bien». <strong>Es lo que quieres para
+    una DLQ</strong>: que la ausencia de mensajes cuente como cola vacía y la alarma
+    descanse en <code>OK</code>.</li>
+    <li><code>breaching</code> — «sin datos = algo va mal». Lo que quieres para un heartbeat:
+    si el latido deja de llegar, es exactamente el fallo que vigilas.</li>
+    <li><code>ignore</code> — mantiene el estado anterior. Útil para métricas intermitentes
+    por diseño. Es, de hecho, el comportamiento por defecto de las alarmas sobre el namespace
+    <code>AWS/DynamoDB</code>.</li>
+  </ul>
+  <p>Regla práctica: <strong>si la métrica solo existe cuando hay problema, pon
+  <code>notBreaching</code>. Si solo desaparece cuando hay problema, pon
+  <code>breaching</code>.</strong> Dejar el defecto es cómo se consiguen alarmas que llevan
+  seis meses en gris sin que nadie se entere.</p>
+</div>
+
+<p><strong>M de N.</strong> <code>evaluation_periods</code> es la ventana (N) y
+<code>datapoints_to_alarm</code> cuántos de esos puntos deben incumplir (M). «3 de 5» tolera
+picos aislados sin dejar de detectar un problema sostenido. Si omites
+<code>datapoints_to_alarm</code>, M = N: tienen que incumplir todos.</p>
+
+<div class="callout why">
+  <span class="callout-title">Alarma de facturación de CloudWatch ≠ AWS Budgets</span>
+  <p>Se confunden constantemente y son <strong>servicios distintos</strong>. En el proyecto
+  00 montaste <a href="./aws-budgets.html">AWS Budgets</a>: un servicio aparte, con su propio
+  recurso <code>aws_budgets_budget</code>, que razona sobre <em>dinero</em> —presupuesto
+  mensual, coste previsto, desglose por servicio y por tag—, se actualiza aproximadamente
+  cada 12 horas y es gratis en presupuestos ilimitados (lo que se paga, a partir del
+  tercero, son los presupuestos <em>con acciones</em>).</p>
+  <p>Una <em>CloudWatch billing alarm</em> es otra cosa: una alarma normal sobre la métrica
+  <code>EstimatedCharges</code> del namespace <code>AWS/Billing</code>, que
+  <strong>solo se publica en <code>us-east-1</code></strong> y hay que habilitar
+  explícitamente. Cuesta 0,10 USD/mes, no sabe de previsiones ni de desgloses, y solo te dice
+  «el total estimado ha pasado de X». Para vigilar el presupuesto de 30 USD del curso, la
+  respuesta correcta sigue siendo Budgets; la alarma de CloudWatch solo tiene sentido si
+  quieres <em>reaccionar</em> automáticamente al gasto con una acción.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+<p>El modelo mental mínimo para no cometer errores:</p>
+<ul>
+  <li><strong>Todo es asíncrono y con retardo.</strong> Un <code>console.log</code> tarda
+  segundos en aparecer en el log group; una métrica de un servicio AWS puede tardar minutos.
+  Si has desplegado y no ves nada, casi siempre es paciencia — <em>casi</em>: en la lección
+  05 el silencio era el <code>:*</code> del ARN.</li>
+  <li><strong>Las métricas no se borran: caducan.</strong> No hay <code>DeleteMetric</code>.
+  Una métrica desaparece sola tras <strong>15 meses</strong> sin datos nuevos, y deja de
+  aparecer en la consola tras <strong>2 semanas</strong> sin datos aunque siga siendo
+  consultable por API. Si creaste 50 000 métricas por error, el mes siguiente ya no las
+  pagas —pero el mes del error se paga entero.</li>
+  <li><strong>Los datos de métrica se agregan con el tiempo (roll-up).</strong> Puntos con
+  periodo &lt; 60 s: 3 horas. Periodo de 60 s: 15 días. De 300 s: 63 días. De 3 600 s: 455
+  días (15 meses). Pasados 15 días tus datos por minuto <em>siguen ahí</em>, pero solo
+  recuperables a 5 minutos. Una gráfica de hace tres meses nunca podrá tener resolución de
+  minuto.</li>
+  <li><strong>La ventana de evaluación de una alarma es más ancha que N.</strong> CloudWatch
+  pide más puntos de los que necesita, por si faltan algunos. Solo si aun así le faltan
+  aplica <code>treat_missing_data</code>. Consecuencia práctica: una alarma puede
+  reevaluar los últimos puntos y volver a cambiar de estado <em>después</em> de que la
+  métrica haya dejado de fluir.</li>
+  <li><strong>Los log groups son la frontera de permisos, no los streams.</strong> Los
+  permisos de escritura se dan sobre el grupo (con <code>:*</code>, ver abajo) y la retención
+  y el cifrado son propiedades del grupo. Un stream no se configura.</li>
+  <li><strong>Nada de esto es un backup.</strong> Retención cumplida, log borrado, sin
+  papelera. Si el log es evidencia que hay que conservar años, la respuesta es exportarlo a
+  S3 —donde el GB-mes cuesta 0,023 en vez de 0,03 y hay clases de archivo mucho más
+  baratas—, no subir <code>retention_in_days</code> a 3 653.</li>
+</ul>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> contra la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/current/us-east-1/index.json">Price
+List API</a> (versión <code>20260806201840</code>) y la
+<a href="https://aws.amazon.com/cloudwatch/pricing/">página de precios</a>, región
+<code>us-east-1</code>. Cámbialos si han pasado meses.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th><th>Nota</th></tr></thead>
+  <tbody>
+    <tr><td>Métricas de servicios AWS</td><td><span class="tag-cost free">gratis</span></td>
+      <td><code>0,00 USD</code></td>
+      <td><code>AWS/Lambda</code>, <code>AWS/SQS</code>… no cuentan como custom</td></tr>
+    <tr><td>Logs — ingesta, clase Standard</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,50 USD/GB</code></td><td><strong>La línea grande.</strong> Primeros 5 GB/mes gratis</td></tr>
+    <tr><td>Logs — ingesta, clase Infrequent Access</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,25 USD/GB</code></td><td>A cambio de perder filtros, Live Tail y EMF</td></tr>
+    <tr><td>Logs — ingesta de <em>vended logs</em> (VPC, WAF, CloudFront…)</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,50 USD/GB</code> hasta 10 TB, luego 0,25 / 0,10 / 0,05</td>
+      <td>Los logs que genera AWS por ti sí escalan a la baja; los tuyos no</td></tr>
+    <tr><td>Logs — almacenamiento</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><code>0,03 USD/GB-mes</code></td>
+      <td>Comprimido. Se paga <strong>todos los meses hasta que caduque</strong>. 5 GB gratis</td></tr>
+    <tr><td>Logs Insights — consultas</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,005 USD/GB escaneado</code></td>
+      <td>Por consulta. Acotar el rango de tiempo es acotar la factura. 5 GB/mes gratis</td></tr>
+    <tr><td>Live Tail</td><td><span class="tag-cost usage">por tiempo</span></td>
+      <td><code>0,01 USD/minuto</code></td><td>1 800 minutos/mes gratis</td></tr>
+    <tr><td>Data protection (enmascarar datos sensibles)</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,12 USD/GB escaneado</code></td><td>Se suma a la ingesta, no la sustituye</td></tr>
+    <tr><td>Métricas custom</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><code>0,30</code> / <code>0,10</code> / <code>0,05</code> / <code>0,02</code> USD por métrica-mes</td>
+      <td>Tramos: primeras 10 000 / siguientes 240 000 / siguientes 750 000 / más de 1 M.
+      10 gratis</td></tr>
+    <tr><td>Peticiones de API (<code>PutMetricData</code>, etc.)</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,01 USD/1 000 peticiones</code></td>
+      <td>= 10 USD por millón. Primer millón/mes gratis. El motivo por el que EMF sale a cuenta</td></tr>
+    <tr><td><code>GetMetricData</code></td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,01 USD/1 000 métricas</code> solicitadas</td>
+      <td>Se cobra siempre, también dentro del millón gratis. Lo consumen los dashboards</td></tr>
+    <tr><td>Alarma estándar</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><code>0,10 USD/alarma-métrica-mes</code></td>
+      <td><strong>Se paga esté disparada o no.</strong> 10 gratis</td></tr>
+    <tr><td>Alarma de alta resolución (10/30 s)</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><code>0,30 USD/alarma-métrica-mes</code></td><td>Triple precio</td></tr>
+    <tr><td>Alarma compuesta</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><code>0,50 USD/mes</code></td><td>Fijo, combine 2 alarmas o 40</td></tr>
+    <tr><td>Dashboards</td><td><span class="tag-cost hour">por mes</span></td>
+      <td><code>3,00 USD/dashboard-mes</code></td>
+      <td>3 gratis. Los <em>automatic dashboards</em> de cada servicio son gratis</td></tr>
+    <tr><td>Metric streams</td><td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,003 USD/1 000 metric updates</code></td><td>Para exportar métricas fuera</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Dos avisos sobre estas cifras. (1) La cifra de Logs Insights es
+<strong>0,005 USD/GB escaneado</strong>, no 0,50: la Price List API la describe literalmente
+como <em>«$0.005 per GB log data scanned by CloudWatch Logs Insights queries»</em>, y varios
+resúmenes de terceros la confunden con la ingesta. (2) La Price List API expone además SKUs
+de almacenamiento IA y AIA (0,018 y 0,006 USD/GB-mes) que la documentación de log classes
+contradice al afirmar que las clases difieren <em>solo</em> en ingesta. Ante la duda,
+presupuesta con 0,03 y no fíes el ahorro al almacenamiento.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p><strong>La ingesta, siempre la ingesta.</strong> No el almacenamiento, no las alarmas:
+  los 0,50 USD por cada GB que <em>entra</em>. Un servicio con logs de debug activados en
+  producción puede generar 100 GB/mes sin que nadie lo note: <strong>50 USD/mes solo por
+  entrar</strong>, más 3 USD/mes de almacenamiento que se acumulan mes tras mes si la
+  retención es «nunca».</p>
+  <p><strong>Y la parte de «por mes esté o no en uso»</strong>: métricas custom, alarmas y
+  dashboards se pagan por existir. Diez alarmas + un dashboard extra + veinte métricas
+  custom = 1,00 + 3,00 + 3,00 ≈ <strong>7 USD/mes con el sistema completamente parado</strong>.
+  Para un presupuesto de 30 USD/mes eso es un cuarto del total. Los logs, en cambio, cobran
+  cero si nadie escribe.</p>
+  <p><strong>Tu factura del proyecto 01</strong>: unos megabytes de logs de Lambda al mes,
+  dentro de los 5 GB gratis; ninguna métrica custom; ninguna alarma más allá de las 10
+  gratis. <strong>0,00 USD</strong>. El riesgo no es el volumen del curso: es olvidarse un
+  log group sin retención en una cuenta que sigue viva.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuentes:
+<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/cloudwatch_limits_cwl.html">CloudWatch
+Logs quotas</a> y
+<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html">Metrics
+concepts</a>, consultadas el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Alarmas por cuenta y región</td><td><strong>Sin límite</strong></td>
+      <td>— «There is no limit to the number of alarms that you can create». Lo que limita es el precio, no la cuota</td></tr>
+    <tr><td>Dimensiones por métrica</td><td>30</td><td><strong>No</strong> — eran 10 hasta 2022; medio internet sigue diciendo 10</td></tr>
+    <tr><td>Métricas en una expresión de metric math por alarma</td><td>20</td><td>No</td></tr>
+    <tr><td>Rango de evaluación de una alarma</td><td>7 días (periodo ≥ 1 h) · 1 día (periodo menor)</td><td>No</td></tr>
+    <tr><td>Historial de una alarma</td><td>30 días</td><td>No</td></tr>
+    <tr><td>Retención de puntos de métrica</td><td>3 h (&lt;60 s) · 15 d (60 s) · 63 d (300 s) · 455 d (3 600 s)</td><td>No — y hay roll-up automático entre tramos</td></tr>
+    <tr><td>Caducidad de una métrica sin datos nuevos</td><td>15 meses</td><td>No</td></tr>
+    <tr><td>Subscription filters por log group</td><td><strong>5</strong></td><td>No — eran 2 hasta 2023</td></tr>
+    <tr><td>Metric filters por log group</td><td>100</td><td>No</td></tr>
+    <tr><td>Log groups por cuenta y región</td><td>1 000 000</td><td>Sí</td></tr>
+    <tr><td>Tamaño de un evento de log</td><td>1 024 KB</td><td>No — lo que pase se trunca</td></tr>
+    <tr><td>Lote de <code>PutLogEvents</code></td><td>1 MB</td><td>No</td></tr>
+    <tr><td><code>PutLogEvents</code> por cuenta y región</td><td>5 000/s</td><td>Sí</td></tr>
+    <tr><td><strong>Resource policies por cuenta y región</strong></td><td><strong>10</strong></td>
+      <td><strong>No</strong> — el techo silencioso cuando EventBridge, Route 53 o varios servicios quieren escribir en log groups</td></tr>
+    <tr><td>Sesiones concurrentes de Live Tail</td><td>15 (10 log groups por sesión)</td><td>Sí</td></tr>
+    <tr><td>Detectores de anomalías de logs</td><td>500</td><td>Sí</td></tr>
+    <tr><td>Consultas concurrentes de Logs Insights</td><td>100</td><td>Sí — eran 30 hasta 2026</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Estás en AWS y necesitas ver los logs de algo <em>hoy</em>: es lo que ya está
+    conectado, sin agentes ni cuentas de terceros.</li>
+    <li>Quieres alarmar sobre métricas que AWS ya publica gratis (errores de Lambda, mensajes
+    en una DLQ, 5xx de API Gateway).</li>
+    <li>Necesitas que una condición dispare una <em>acción de AWS</em>: Auto Scaling, parar
+    una instancia, publicar en SNS.</li>
+    <li>Tu volumen de logs cabe holgadamente en decenas de GB al mes.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Ingieres cientos de GB al mes y solo consultas un 1 %: a ese volumen exportar a S3 y
+    consultar con Athena sale mucho más barato.</li>
+    <li>Necesitas <em>trazas</em> distribuidas —qué llamó a qué y cuánto tardó cada
+    salto—: eso es X-Ray, no CloudWatch.</li>
+    <li>Tu equipo ya vive en Datadog o Grafana y quiere una sola pantalla para AWS y para lo
+    que hay fuera de AWS.</li>
+    <li>Quieres búsqueda de texto libre interactiva sobre terabytes: Logs Insights cobra por
+    GB escaneado en <em>cada</em> consulta.</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>AWS X-Ray</strong></td>
+      <td>X-Ray guarda <em>trazas</em>: el árbol de llamadas de una petición concreta a
+      través de varios servicios, con el tiempo de cada tramo. CloudWatch guarda líneas y
+      números agregados, y no sabe que dos líneas de dos servicios pertenecen a la misma
+      petición.</td>
+      <td>La pregunta es «¿en qué salto se van los 800 ms?» y no «¿cuántos errores hubo?».</td></tr>
+    <tr><td><strong>Datadog / Grafana / New Relic</strong></td>
+      <td>Cobran por host o por GB con retención incluida, correlacionan logs, métricas y
+      trazas en una sola pantalla, y ven también lo que no está en AWS. CloudWatch es más
+      barato al arrancar y no tiene rival en integración nativa, pero su UI es peor y no
+      sale de AWS.</td>
+      <td>Tienes varios proveedores, o el coste de ingesta de CloudWatch ya supera lo que
+      cobraría el tercero.</td></tr>
+    <tr><td><strong>S3 + Athena</strong> (vía subscription filter → Firehose)</td>
+      <td>Retención en S3: 0,023 USD/GB-mes, y bajando mucho más con clases de archivo.
+      Consulta con Athena: 5 USD/TB escaneado. A cambio pierdes tiempo real, alarmas
+      directas y Live Tail.</td>
+      <td>Los logs son archivo legal o forense: mucho volumen, consulta rara.</td></tr>
+    <tr><td><strong>OpenSearch</strong></td>
+      <td>Búsqueda de texto completo interactiva sobre índices, sin pagar por consulta —
+      pagas el clúster por hora, esté o no en uso.</td>
+      <td>Alguien busca en los logs muchas veces al día, todos los días.</td></tr>
+    <tr><td><strong>AWS Budgets</strong></td>
+      <td>Servicio aparte: razona sobre dinero, no sobre métricas técnicas. Presupuestos
+      gratis e ilimitados (solo las acciones se pagan); granularidad de ~12 h.</td>
+      <td>Lo que vigilas es la factura. Ver la <a href="./aws-budgets.html">ficha de
+      Budgets</a>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+
+<div class="callout tf">
+  <span class="callout-title">Dos herencias de nombre que te van a despistar</span>
+  <p>El prefijo <code>aws_cloudwatch_</code> cubre más de lo que parece. Los recursos de
+  <strong>EventBridge</strong> se llaman <code>aws_cloudwatch_event_rule</code> y
+  <code>aws_cloudwatch_event_target</code> porque EventBridge se llamó
+  <em>CloudWatch Events</em> hasta 2019 — no tienen nada que ver con logs ni con métricas
+  (<a href="./aws-eventbridge.html">ficha de EventBridge</a>). Y los recursos de
+  <strong>Logs</strong> llevan <code>_log_</code> en medio
+  (<code>aws_cloudwatch_log_group</code>), mientras que los de métricas y alarmas no
+  (<code>aws_cloudwatch_metric_alarm</code>). Fíjate en la palabra del medio, no en el
+  prefijo.</p>
+</div>
+
+<h3>El patrón base: un log group por función, con retención explícita</h3>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">lo que ya haces desde la lección 05</span></div>
+<pre><code>resource "aws_cloudwatch_log_group" "create_link" {
+  name              = "/aws/lambda/${local.function_name}"
+  retention_in_days = 7          # sin esto: NUNCA caduca
+  log_group_class   = "STANDARD" # el defecto; explícito porque no se puede cambiar luego
+}
+
+data "aws_iam_policy_document" "create_link_logs" {
+  statement {
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    # El :* del final NO sobra: PutLogEvents actúa sobre los STREAMS de dentro
+    resources = ["${aws_cloudwatch_log_group.create_link.arn}:*"]
+  }
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">El <code>:*</code> del ARN — la trampa central de la lección 05</span>
+  <p>El ARN de un log group, tal y como lo devuelve la API, termina en <code>:*</code>
+  («todos los streams de dentro»). <strong>El provider de Terraform lo quita a
+  propósito</strong> y lo documenta: <em>«Any <code>:*</code> suffix added by the API,
+  denoting all CloudWatch Log Streams under the CloudWatch Log Group, is removed for greater
+  compatibility with other AWS services that do not accept the suffix»</em>. Pero
+  <code>logs:PutLogEvents</code> actúa sobre un <em>stream</em>, no sobre el grupo: si pones
+  <code>resources = [aws_cloudwatch_log_group.x.arn]</code> a secas, el
+  <code>apply</code> funciona, la Lambda se despliega, responde correctamente… y no escribe
+  ni una línea. <strong>El síntoma no es <code>AccessDenied</code>: es silencio.</strong> Está
+  contado entero en la <a href="../lessons/0005-tu-codigo-en-aws.html">lección 05</a>.</p>
+</div>
+
+<h3>La alarma de DLQ no vacía</h3>
+<p>El patrón que prepara la lección 12: una cola de mensajes muertos que casi siempre está
+vacía, y que cuando deja de estarlo nadie se entera si no hay quien avise.</p>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">alarma de «ausencia» bien configurada</span></div>
+<pre><code>resource "aws_cloudwatch_metric_alarm" "dlq_no_vacia" {
+  alarm_name          = "dlq-con-mensajes"
+  alarm_description   = "Hay al menos un mensaje en la DLQ"
+
+  namespace   = "AWS/SQS"
+  metric_name = "ApproximateNumberOfMessagesVisible"
+  dimensions  = { QueueName = aws_sqs_queue.dlq.name }
+
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+
+  # SQS deja de publicar la métrica cuando la cola lleva rato inactiva.
+  # Sin esto la alarma vive en INSUFFICIENT_DATA y no sirve para nada.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alertas.arn]
+  ok_actions    = [aws_sns_topic.alertas.arn]  # avisa también cuando se vacía
+}</code></pre>
+</div>
+
+<h3>Convertir texto en métrica</h3>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">metric filter + su alarma</span></div>
+<pre><code>resource "aws_cloudwatch_log_metric_filter" "errores" {
+  name           = "errores-create-link"
+  log_group_name = aws_cloudwatch_log_group.create_link.name
+  pattern        = "ERROR"   # "" casa con todo; el JSON usa {$.level = \"error\"}
+
+  metric_transformation {
+    name          = "Errores"
+    namespace     = "Acortador"   # namespace propio: esto SÍ es métrica custom (0,30/mes)
+    value         = "1"
+    default_value = "0"           # sin esto, cero errores = métrica ausente, no cero
+  }
+}</code></pre>
+</div>
+<p>Trampas conocidas, en orden de dolor:</p>
+<ul>
+  <li><strong>Lambda crea el log group sola si tú no lo has creado.</strong> Si invocaste la
+  función antes de declararlo en Terraform, el <code>apply</code> falla con
+  <code>ResourceAlreadyExistsException</code>. Se arregla importándolo
+  (<code>terraform import</code> por el nombre) o borrándolo a mano. Es exactamente el
+  escenario de la <a href="../practice/06-la-autopsia/BRIEF.md">práctica 06</a>.</li>
+  <li><strong><code>retention_in_days</code> no acepta cualquier número.</strong> Solo la
+  lista cerrada de arriba. Y omitirlo significa «nunca», no «lo que AWS considere
+  razonable».</li>
+  <li><strong><code>log_group_class</code> no se puede cambiar después de crear.</strong>
+  Cambiarlo en el HCL fuerza destruir y recrear el grupo — y con él, todos sus logs.
+  Combínalo con <code>skip_destroy = true</code> solo si sabes lo que eso implica (el grupo
+  sale del state pero sigue en AWS, facturando).</li>
+  <li><strong>El <code>default_value</code> del metric filter no es opcional en la
+  práctica.</strong> Sin él, «cero errores» no publica un 0: no publica nada. Y una métrica
+  ausente hace que tu alarma se vaya a <code>INSUFFICIENT_DATA</code> justo cuando todo va
+  bien. (Conflicta con <code>dimensions</code>: no puedes usar los dos.)</li>
+  <li><strong>Un subscription filter con Lambda de destino no lleva
+  <code>role_arn</code></strong>: lleva un <code>aws_lambda_permission</code> aparte con
+  principal <code>logs.amazonaws.com</code>. Con Kinesis o Firehose sí lleva rol. Es la
+  asimetría que más apply-silenciosos causa.</li>
+  <li><strong>Para que otro servicio escriba en un log group</strong> (EventBridge como
+  target, Route 53…) hace falta <code>aws_cloudwatch_log_resource_policy</code> — y solo
+  caben <strong>10 en toda la cuenta y región</strong>. Agrupa varios principals en una sola
+  política antes de crear la undécima.</li>
+  <li><strong>Las alarmas cuestan aunque estén en <code>INSUFFICIENT_DATA</code>.</strong> Un
+  <code>terraform destroy</code> del proyecto las quita; dejarlas «por si acaso» son 0,10 USD
+  al mes cada una, indefinidamente.</li>
+</ul>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · coste</p>
+  <p class="quiz-q">Declaras el log group de tu Lambda en Terraform pero omites
+  <code>retention_in_days</code>. La función escribe unos 200 MB de logs al mes y el proyecto
+  se queda desplegado. ¿Cuál es el riesgo real de factura?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Omitir el argumento equivale a retention 0, que significa «nunca caducar». Cada GB acumulado se sigue facturando a 0,03 USD/GB-mes indefinidamente, además de los 0,50 USD/GB que costó entrar. Es la trampa de factura número uno de CloudWatch, y el motivo por el que la lección 05 declara el grupo con retención explícita.">El almacenamiento crece para siempre y nunca deja de facturarse</button></li>
+    <li><button data-correct="false" data-why="La ingesta se cobra a 0,50 USD/GB de forma plana para logs custom en clase Standard: no hay recargo por tamaño del grupo. Los tramos decrecientes existen, pero solo para vended logs (VPC, WAF, CloudFront), y bajan el precio, no lo suben.">La ingesta se duplica cuando el grupo supera los límites</button></li>
+    <li><button data-correct="false" data-why="Es justo lo contrario: sin retención configurada CloudWatch no borra nada nunca. El riesgo de perder logs aparece cuando pones una retención corta, no cuando la omites — y ese sí es un riesgo que se acepta a cambio de no pagar de por vida.">CloudWatch borra los logs antiguos y pierdes la auditoría completa</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · elegir la pata</p>
+  <p class="quiz-q">Quieres una gráfica del número de errores 5xx por hora durante los
+  últimos seis meses, y encima de ella una alarma. Tu aplicación ya escribe la palabra
+  <code>ERROR</code> en cada fallo. ¿Qué montas?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Una serie temporal larga con alarma encima es exactamente lo que resuelve Metrics: los puntos horarios se conservan 455 días y leerlos no cuesta por consulta. Un metric filter convierte el texto que ya escribes en esa métrica sin tocar el código; EMF hace lo mismo desde dentro de la función.">Una métrica alimentada por metric filter o EMF</button></li>
+    <li><button data-correct="false" data-why="Logs Insights cobra 0,005 USD por GB escaneado en CADA ejecución, y solo puede consultar lo que la retención del grupo aún conserve. Repetir la consulta cada hora durante seis meses paga el mismo escaneo 4.380 veces y no sobrevive a una retención de 7 días.">Una consulta de Logs Insights lanzada cada hora</button></li>
+    <li><button data-correct="false" data-why="Un dashboard no almacena nada: solo dibuja lo que otra pata guarda, y sus widgets de logs muestran líneas recientes, no una serie de seis meses. Además cuesta 3 USD/mes a partir del cuarto y no puede disparar acciones.">Un dashboard con el widget de logs recientes</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · criterio de configuración</p>
+  <p class="quiz-q">Montas una alarma sobre
+  <code>ApproximateNumberOfMessagesVisible</code> de una DLQ que casi siempre está vacía. SQS
+  deja de publicar esa métrica cuando la cola lleva rato sin actividad. ¿Qué
+  <code>treat_missing_data</code> pones?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Con notBreaching los huecos cuentan como «dentro del umbral», así que la alarma descansa en OK mientras la cola está vacía y solo pasa a ALARM cuando llega un mensaje de verdad. Es el caso que la propia documentación pone como ejemplo, con ThrottledRequests de DynamoDB.">notBreaching, porque la ausencia de dato significa cola vacía</button></li>
+    <li><button data-correct="false" data-why="Con breaching la alarma se dispararía cada vez que la cola lleva un rato tranquila, que es justo el estado bueno. Breaching es lo correcto en el caso inverso: un heartbeat cuya desaparición ES el fallo que vigilas.">breaching, porque una métrica ausente indica siempre un fallo</button></li>
+    <li><button data-correct="false" data-why="Missing es efectivamente el valor por defecto, y por eso mismo es la respuesta equivocada: deja la alarma en INSUFFICIENT_DATA de forma permanente, un estado gris que no dispara acciones y que todo el mundo ignora en la consola.">missing, porque es el valor por defecto del recurso</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · coste y cardinalidad</p>
+  <p class="quiz-q">Publicas una métrica custom <code>Latencia</code> y, «para poder filtrar
+  luego», le añades una dimensión <code>requestId</code> distinta en cada petición. Recibes
+  50 000 peticiones al mes. ¿Qué ocurre?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Cada combinación única de dimensiones es una métrica distinta y facturable: 10.000 × 0,30 + 40.000 × 0,10 = 7.000 USD ese mes. La documentación de EMF avisa de este error citando requestId por su nombre. Las dimensiones son para categorías; los identificadores van en el log, no en la métrica.">Creas cincuenta mil métricas y pagas unos siete mil dólares</button></li>
+    <li><button data-correct="false" data-why="Eso sería cierto SIN la dimensión de alta cardinalidad: una sola métrica con 50.000 puntos cuesta 0,30 USD, porque se factura por métrica-mes y no por punto. Añadir requestId es precisamente lo que convierte una métrica barata en cincuenta mil.">Creas una métrica con cincuenta mil valores y pagas céntimos</button></li>
+    <li><button data-correct="false" data-why="No hay ningún rechazo: el límite es de 30 dimensiones POR métrica, no de valores distintos por dimensión. CloudWatch acepta la cardinalidad sin una sola advertencia y te la cobra al final del mes; el aviso está en la documentación, no en la API.">CloudWatch rechaza la dimensión por superar el límite de cardinalidad</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="../lessons/0005-tu-codigo-en-aws.html">Lección 05: tu código en AWS</a>
+    <a href="./aws-lambda.html">Ficha: AWS Lambda</a>
+    <a href="./aws-budgets.html">Ficha: AWS Budgets</a>
+    <a href="./aws-eventbridge.html">Ficha: Amazon EventBridge</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la
+    <a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html">CloudWatch
+    Logs User Guide</a>, la
+    <a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html">página
+    de conceptos de métricas</a> (empieza por <em>Dimensions</em> y <em>Metrics
+    retention</em>), <a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html">cómo
+    tratan las alarmas los datos ausentes</a> —léela entera antes de escribir tu primera
+    alarma de «ausencia»— y la
+    <a href="https://aws.amazon.com/cloudwatch/pricing/">página de precios</a>.
+    <b>Pregúntame</b> por el cálculo concreto de lo que costaría meter EMF en el acortador,
+    o por cómo quedaría la alarma de la DLQ conectada al topic SNS del proyecto 00.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

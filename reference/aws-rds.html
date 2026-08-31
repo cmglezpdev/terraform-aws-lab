@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon RDS</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon RDS</h1>
+  <p class="deck">Una base de datos relacional que sigue siendo <em>tu</em> MySQL o
+  <em>tu</em> PostgreSQL —mismo motor, mismo SQL, mismo driver— pero de la que AWS gestiona
+  el sistema operativo, los parches, las copias y el failover. A cambio, es el primer
+  servicio de este curso que cobra por hora esté o no en uso: mientras exista, la factura
+  corre.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Base de datos relacional gestionada</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (la instancia vive en una AZ; el cluster, en tres)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost hour">por hora</span></dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd><strong>No.</strong> 0,016 USD/h en
+      <code>db.t4g.micro</code> + 0,115 USD/GB-mes de storage, use o no use nadie la base de datos</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_db_instance</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../ROADMAP.md">proyecto 04</a> — y solo ahí, con cronómetro</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2 id="que-es">Qué es</h2>
+<p>Una <strong>instancia gestionada</strong>: AWS te alquila una máquina con un motor de
+base de datos ya instalado y se queda con el trabajo aburrido —instalar, parchear el SO y
+el motor, hacer copias, montar el standby, vigilar el disco, ejecutar el failover—. Lo que
+tú eliges son cuatro cosas: <strong>qué motor</strong> (MySQL, PostgreSQL, MariaDB, Oracle,
+SQL Server, Db2, Aurora), <strong>qué clase de instancia</strong> (cuánta CPU y memoria),
+<strong>cuánto storage y de qué tipo</strong>, y <strong>cuánta alta disponibilidad</strong>
+quieres pagar. Lo que <em>no</em> tienes es acceso al sistema operativo: no hay <code>ssh</code>,
+no hay <code>sudo</code>, y la configuración del motor se toca por un <em>parameter group</em>,
+no editando <code>my.cnf</code>.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Es un piso alquilado con el mantenimiento incluido. Tú pones los muebles (el esquema,
+  los datos, las consultas); el casero arregla la caldera, pinta la fachada y tiene una copia
+  de la llave. Donde se rompe la analogía —y es donde duele— es en <strong>la renta</strong>:
+  un piso vacío se paga igual que uno lleno, y aquí pasa lo mismo. Una instancia RDS a la
+  que nadie se conecta factura exactamente lo mismo que una que sirve mil consultas por
+  segundo. Todo lo que has visto hasta ahora en el curso (Lambda, DynamoDB on-demand, S3,
+  SQS, EventBridge) cuesta cero en reposo. <strong>Esto no.</strong></p>
+</div>
+
+<h2 id="para-que">Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Preguntas que aún no conoces</h3><p>El panel de negocio que hoy
+  cruza pedidos con clientes y mañana quiere el margen por región y trimestre. Un
+  <code>JOIN</code> con <code>GROUP BY</code> se escribe en dos minutos sobre un esquema que
+  ya existe; en DynamoDB habría que rediseñar claves.</p></div>
+  <div class="ref-card"><h3>Integridad que el motor defiende</h3><p>«Una línea de pedido no
+  puede apuntar a un pedido borrado» es una <code>FOREIGN KEY</code>, no un test unitario.
+  Transacciones multi-tabla, <code>UNIQUE</code>, <code>CHECK</code>: reglas que el motor
+  garantiza aunque tu código tenga un bug.</p></div>
+  <div class="ref-card"><h3>Levantar y apagar lo que ya existe</h3><p>Mover a la nube una
+  aplicación que lleva diez años hablando PostgreSQL, sin reescribir la capa de datos. Es el
+  caso de uso número uno de RDS en empresas reales, y por eso el motor es el mismo de verdad,
+  no una imitación.</p></div>
+  <div class="ref-card"><h3>La capa de datos del proyecto 04</h3><p>ALB público → app en
+  subred privada → <strong>base de datos en subred aislada</strong>, sin ruta a internet, con
+  la contraseña en Secrets Manager. La BD es la pieza que justifica que existan tres capas
+  de red.</p></div>
+  <div class="ref-card"><h3>Informes sin tocar el primario</h3><p>Una read replica asíncrona
+  absorbe los <code>SELECT</code> pesados mientras el primario sigue atendiendo escrituras.
+  Y sirve de plan B en otra región si el desastre llega.</p></div>
+</div>
+
+<h2 id="tipos">Los tipos que existen</h2>
+<p>«RDS» no es un producto, son <strong>tres decisiones ortogonales</strong> que la gente
+mezcla constantemente en las entrevistas:</p>
+<ol>
+  <li><strong>Qué motor</strong> —y si el motor lleva licencia comercial encima.</li>
+  <li><strong>RDS clásico o Aurora</strong> —dos arquitecturas de almacenamiento distintas
+  bajo la misma consola.</li>
+  <li><strong>Cuánta alta disponibilidad</strong> —Single-AZ, Multi-AZ instance, Multi-AZ
+  cluster o read replicas. Las cuatro resuelven cosas distintas.</li>
+</ol>
+
+<h3 id="motores">1. Los motores, y la letra pequeña de las licencias</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Motor</th><th>Licencia</th><th>Qué lo distingue</th></tr></thead>
+  <tbody>
+    <tr><td><strong>PostgreSQL</strong></td><td><span class="tag-cost free">incluida</span></td>
+      <td>Open source. El precio de la instancia es el precio, sin más. El motor con más
+      extensiones (PostGIS, pgvector) y el que suele elegir un proyecto nuevo.</td></tr>
+    <tr><td><strong>MySQL</strong></td><td><span class="tag-cost free">incluida</span></td>
+      <td>Open source. El más extendido en aplicaciones heredadas.</td></tr>
+    <tr><td><strong>MariaDB</strong></td><td><span class="tag-cost free">incluida</span></td>
+      <td>Fork de MySQL. Casi idéntico en precio y operación.</td></tr>
+    <tr><td><strong>Aurora MySQL / PostgreSQL</strong></td><td><span class="tag-cost free">incluida</span></td>
+      <td>Motor reescrito por AWS, compatible a nivel de protocolo. Otra arquitectura y
+      <a href="#aurora">otra factura</a>.</td></tr>
+    <tr><td><strong>Oracle</strong></td><td><span class="tag-cost usage">BYOL o incluida</span></td>
+      <td>Dos modelos: traes tu licencia (BYOL) o la pagas dentro del precio-hora
+      (<em>license-included</em>). La cuota por defecto de instancias
+      <em>license-included</em> es <strong>10</strong>, no 40.</td></tr>
+    <tr><td><strong>SQL Server</strong></td><td><span class="tag-cost usage">incluida</span></td>
+      <td>La licencia va en el precio-hora y lo multiplica. Además es el único motor que
+      <strong>no se puede parar en Multi-AZ</strong> y el único sin <em>volume striping</em>
+      en gp3.</td></tr>
+    <tr><td><strong>Db2</strong></td><td><span class="tag-cost usage">BYOL</span></td>
+      <td>Licencia de IBM vía Marketplace. No soporta gp2.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout trap">
+  <span class="callout-title">La deprecación que sí sale en la factura: RDS Extended Support</span>
+  <p>Desde 2024, cuando una versión mayor pasa su <em>end of standard support</em>, AWS
+  <strong>no la apaga: la cobra</strong>. RDS Extended Support te da parches de CVEs críticos
+  y soporte hasta <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/extended-support.html">tres
+  años más</a>, a un precio <strong>por vCPU y hora</strong> que se suma al de la instancia y
+  que <em>no</em> cubren las reserved instances:</p>
+  <div class="scroll-x">
+  <table class="cost-table">
+    <thead><tr><th>Versiones</th><th>Años 1-2</th><th>Año 3</th></tr></thead>
+    <tbody>
+      <tr><td>MySQL 5.7 · PostgreSQL 10, 11, 12</td><td><code>0,10 USD/vCPU-h</code></td><td><code>0,20 USD/vCPU-h</code></td></tr>
+      <tr><td>MySQL 8.0 · PostgreSQL 13, 14, 15</td><td><code>0,085 USD/vCPU-h</code></td><td><code>0,17 USD/vCPU-h</code></td></tr>
+      <tr><td>Aurora MySQL 5.7 · Aurora PostgreSQL 11, 12</td><td><code>0,10 USD/vCPU-h</code></td><td><code>0,20 USD/vCPU-h</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Haz la cuenta con la instancia de este curso. Un <code>db.t4g.micro</code> tiene
+  <strong>2 vCPU</strong> y cuesta <strong>0,016 USD/h</strong>. Si corre MySQL 5.7 —que
+  entró en Extended Support el 1 de marzo de 2024 y está en su <strong>tercer año</strong>
+  desde el 1 de marzo de 2026— el recargo es 0,20 × 2 = <strong>0,40 USD/h</strong>:
+  <strong>veinticinco veces</strong> el precio de la máquina. La versión vieja no es una
+  deuda técnica abstracta; es una línea de factura que multiplica por 26 el coste de la
+  instancia.</p>
+  <p>Y el detalle que lo convierte en trampa de verdad: el enrolamiento es
+  <strong>automático</strong> —«Amazon RDS automatically enrolls your databases in RDS
+  Extended Support»— y el provider de Terraform tiene
+  <code>engine_lifecycle_support = "open-source-rds-extended-support"</code>
+  <strong>como valor por defecto</strong>. Es decir: si no escribes nada, estás apuntado.
+  Verificado el 2026-08-30 contra los <a
+  href="https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/rds/USD/current/rds-mysql-ondemand.json">mapas
+  de precios de RDS</a> (publicación 2026-08-28) y la <a
+  href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/extended-support-charges.html">página
+  de cargos</a>.</p>
+</div>
+<p class="small">Otra deprecación en curso, esta sin coste pero con fecha: el
+<strong>storage magnético</strong> (<code>standard</code>) ya no se puede elegir para
+instancias nuevas, AWS migró los volúmenes existentes a gp3, y <strong>a partir del 1 de
+julio de 2026 no se puede restaurar un snapshot a magnético</strong> (<a
+href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html">guía de
+storage</a>, consultada el 2026-08-30). Los tutoriales que ponen
+<code>storage_type = "standard"</code> son de otra época.</p>
+
+<h3 id="aurora">2. RDS clásico vs Aurora: la división que de verdad importa</h3>
+<p>Aurora comparte consola, API y recursos de Terraform con RDS, y por eso mucha gente cree
+que es «RDS pero más caro». No lo es: es <strong>otra arquitectura de almacenamiento</strong>.
+En RDS clásico, la instancia tiene un volumen EBS colgado, como cualquier servidor. En
+Aurora, el motor está <em>separado</em> del storage: los datos viven en un
+<strong>volumen de cluster distribuido</strong> que AWS replica de forma síncrona a
+<strong>seis nodos de almacenamiento repartidos entre Availability Zones</strong>
+(<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.AuroraHighAvailability.html">Aurora
+High Availability</a>).</p>
+<p>De esa separación salen todas las diferencias prácticas:</p>
+<ul>
+  <li><strong>Las réplicas no copian datos, los comparten.</strong> Añadir un lector a un
+  cluster Aurora es enchufar una instancia al volumen que ya existe: no hay copia, no hay
+  <em>seeding</em>, y por eso se hace en minutos. Hasta <strong>15 Aurora Replicas</strong>.</li>
+  <li><strong>El failover es más rápido</strong> porque no hay que mover datos: con al menos
+  una réplica, «service is typically restored in <strong>less than 60 seconds, and often
+  less than 30 seconds</strong>». Sin ninguna réplica, Aurora recrea el primario y tarda
+  «typically less than 10 minutes» — un cluster Aurora de una sola instancia no es HA.</li>
+  <li><strong>El storage crece y decrece solo.</strong> No declaras <code>allocated_storage</code>:
+  pagas por lo que ocupas, y si borras una tabla, la reserva baja. En RDS clásico el storage
+  <strong>solo sube</strong> (ver <a href="#storage">más abajo</a>).</li>
+  <li><strong>La factura tiene una línea que RDS no tiene: la E/S.</strong> En modo Aurora
+  Standard pagas <strong>0,20 USD por millón de operaciones de I/O</strong> además del
+  storage. Aurora I/O-Optimized elimina esa línea y sube el storage de 0,10 a
+  0,225 USD/GB-mes; AWS recomienda cambiarse «when your I/O spending is 25% or more of your
+  total Aurora database spending».</li>
+</ul>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>RDS clásico</th><th>Aurora provisionado</th><th>Aurora Serverless v2</th></tr></thead>
+  <tbody>
+    <tr><td>Storage</td><td>Volumen EBS de tamaño fijo que declaras tú</td><td colspan="2">Volumen distribuido, 6 copias entre AZs, crece y decrece solo</td></tr>
+    <tr><td>Unidad de cobro del cómputo</td><td>Instancia-hora</td><td>Instancia-hora</td><td><strong>ACU-hora</strong> (0,5 en 0,5, hasta 256)</td></tr>
+    <tr><td>Lo más barato en <code>us-east-1</code></td><td><code>db.t4g.micro</code> · <strong>0,016 USD/h</strong></td><td><code>db.t4g.medium</code> · <strong>0,073 USD/h</strong></td><td>0,5 ACU · <strong>0,06 USD/h</strong> · o <strong>0 si pausa</strong></td></tr>
+    <tr><td>Storage, precio</td><td>0,115 USD/GB-mes (gp3, Single-AZ), <em>provisionado</em></td><td colspan="2">0,10 USD/GB-mes + 0,20 USD/millón de I/O, <em>consumido</em></td></tr>
+    <tr><td>Réplicas de lectura</td><td>Asíncronas, con copia propia de los datos</td><td colspan="2">Comparten volumen. Hasta 15</td></tr>
+    <tr><td>Failover con réplica</td><td>1-2 minutos (Multi-AZ instance)</td><td colspan="2">Habitualmente &lt; 30 s, casi siempre &lt; 60 s</td></tr>
+    <tr><td>Coste en reposo</td><td>Instancia + storage, siempre</td><td>Instancia + storage, siempre</td><td><strong>Solo storage</strong>, si auto-pausa</td></tr>
+    <tr><td>Cuándo</td><td>Motor concreto (Oracle, SQL Server, Db2), presupuesto ajustado, o simplemente «lo mínimo que funciona»</td><td>Producción con lecturas que escalan, RTO de segundos, volumen de datos que cambia</td><td>Dev/test, tráfico a ráfagas, entornos que duermen de noche</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Si es un ejercicio, RDS clásico Single-AZ con <code>db.t4g.micro</code>: es lo
+  más barato que existe en este servicio.</strong> Si es producción con lecturas que escalan
+  o con un RTO medido en segundos, Aurora. Y si el tráfico es a ráfagas y hay horas muertas
+  de verdad, Aurora Serverless v2 con <code>min_capacity = 0</code>, que es el único sabor de
+  base de datos relacional de AWS que llega a coste cero de cómputo sin destruir nada.</p>
+  <p>Ojo con la aritmética antes de saltar a Serverless v2 «porque escala a cero»: media ACU
+  cuesta <strong>0,06 USD/h</strong>, casi cuatro veces un <code>db.t4g.micro</code>. Solo
+  gana si pausa <em>de verdad</em> la mayor parte del tiempo.</p>
+</div>
+
+<h4 id="serverless-v2">Aurora Serverless v2 y la pausa a cero (novedad que casi nadie ha actualizado)</h4>
+<p>Dos cosas cambiaron y la mitad de internet sigue contando la versión vieja:</p>
+<ul>
+  <li><strong>Aurora Serverless v1 está retirada.</strong> AWS fijó el fin de soporte el
+  31 de diciembre de 2024 y luego lo movió al <strong>31 de marzo de 2025</strong>; los
+  clusters que no se migraron se convirtieron solos a v2 (o a provisionado, si la migración
+  falló) durante su ventana de mantenimiento. No hay Extended Support para v1. Todo artículo
+  que compare «v1 vs v2» está describiendo una elección que ya no existe.</li>
+  <li><strong>Serverless v2 ya escala a cero.</strong> Poniendo <code>min_capacity = 0</code>
+  la instancia se <em>auto-pausa</em> tras un intervalo sin conexiones de usuario y
+  <strong>deja de facturar cómputo</strong>: «you aren't charged for instance capacity while
+  an instance is in the paused state». El intervalo es
+  <code>seconds_until_auto_pause</code>: mínimo y valor por defecto <strong>300 s</strong>,
+  máximo <strong>86 400 s</strong> (un día).</li>
+</ul>
+<p>Las condiciones, que son la mitad de la historia:</p>
+<ul>
+  <li>Hace falta <strong>Aurora PostgreSQL 16.3 / 15.7 / 14.12 / 13.15</strong> o superior, o
+  <strong>Aurora MySQL 3.08.0</strong> o superior.</li>
+  <li>Reanudar tarda <strong>unos 15 segundos</strong>; si lleva más de 24 horas pausada,
+  <strong>30 segundos o más</strong>. Sube los <em>timeouts</em> del cliente y pon reintentos.</li>
+  <li><strong>Una conexión abierta impide la pausa</strong>, aunque no ejecute nada. Un
+  cliente de escritorio olvidado abierto te cuesta el mes.</li>
+  <li><strong>RDS Proxy impide la pausa</strong>: el proxy mantiene una conexión abierta a
+  cada instancia. También la impiden la replicación lógica/binlog, ser el cluster primario de
+  una global database y las integraciones zero-ETL con Redshift.</li>
+  <li>Se sigue pagando <strong>storage</strong> y todo lo que no sea la instancia.</li>
+</ul>
+
+<h3 id="ha">3. Alta disponibilidad: las cuatro opciones y qué resuelve cada una</h3>
+<p>Esta es <em>la</em> pregunta de entrevista, y casi siempre se falla igual: creyendo que el
+standby de Multi-AZ sirve lecturas. No las sirve. La documentación es explícita: «<strong>You
+can't use a standby replica to serve read traffic</strong>».</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Opción</th><th>Qué monta</th><th>Replicación</th><th>¿Lecturas?</th><th>RTO</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Single-AZ</strong></td>
+      <td>Una instancia, una AZ</td>
+      <td>—</td>
+      <td>Solo el primario</td>
+      <td><strong>Restaurar de backup</strong>: minutos u horas</td>
+      <td>×1</td></tr>
+    <tr><td><strong>Multi-AZ DB instance</strong><br><code>multi_az = true</code></td>
+      <td>Primario + <strong>1 standby invisible</strong> en otra AZ</td>
+      <td><strong>Síncrona</strong></td>
+      <td><strong>No.</strong> El standby no acepta ni una conexión</td>
+      <td>«typically complete within <strong>one to two minutes</strong>»</td>
+      <td><strong>×2</strong> en instancia <em>y</em> en storage</td></tr>
+    <tr><td><strong>Multi-AZ DB cluster</strong><br><code>aws_rds_cluster</code> con motor RDS</td>
+      <td>Writer + <strong>2 readers legibles</strong> en tres AZs</td>
+      <td><strong>Semisíncrona</strong>: basta el ACK de <em>un</em> reader</td>
+      <td><strong>Sí</strong>, los dos standbys sirven <code>SELECT</code></td>
+      <td>Depende del <em>replica lag</em>: hay que aplicar lo pendiente antes de promover</td>
+      <td><strong>≈×3</strong> — el storage io1 pasa de 0,125 a 0,375 USD/GB-mes</td></tr>
+    <tr><td><strong>Read replica</strong><br><code>replicate_source_db</code></td>
+      <td>Copia independiente, misma región u otra</td>
+      <td><strong>Asíncrona</strong>: puede ir por detrás</td>
+      <td><strong>Sí</strong>, es su razón de existir</td>
+      <td>No hay failover automático: <strong>la promocionas tú</strong></td>
+      <td>+×1 por réplica (hasta 15)</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p><strong>Multi-AZ es disponibilidad; read replica es escalado de lectura.</strong> No se
+  sustituyen, se suman. El standby de Multi-AZ existe para que, cuando la AZ se caiga, el
+  endpoint siga respondiendo sin que cambies una línea de configuración —y para nada más—.
+  La read replica existe para que los informes no ahoguen al primario, y de propina te da un
+  plan de recuperación en otra región. Si te piden las dos cosas, la respuesta correcta es
+  «las dos cosas», y cuesta ×3.</p>
+  <p>El Multi-AZ DB cluster es el híbrido: te da failover <em>y</em> dos lectores. El precio
+  no es solo económico: la promoción tiene que esperar a que el reader aplique las
+  transacciones pendientes, así que <strong>un replica lag alto es un RTO alto</strong>. Por
+  eso existe el <em>flow control</em>, que frena las escrituras del writer para que los
+  readers no se descuelguen (por defecto, umbral de <strong>120 s</strong> en MySQL y
+  <strong>2 minutos</strong> en PostgreSQL).</p>
+</div>
+<div class="callout trap">
+  <span class="callout-title">El Multi-AZ cluster no cabe en el presupuesto de este curso</span>
+  <p>No es una cuestión de gusto: las clases de instancia soportadas son
+  <code>db.c6gd</code>, <code>db.m5d</code>, <code>db.m6gd</code>, <code>db.m6id</code>,
+  <code>db.m6idn</code>, <code>db.m8gd</code>, <code>db.r5d</code>, <code>db.r6gd</code>,
+  <code>db.r6id</code>, <code>db.r6idn</code>, <code>db.r8gd</code> y
+  <code>db.x2iedn</code> — todas con NVMe local, <strong>ninguna <code>t4g</code></strong>.
+  La más pequeña posible es <code>db.c6gd.medium</code>, y su tarifa publicada de
+  «Multi-AZ readable standbys» es <strong>0,2385 USD/h</strong> frente a los 0,016 del
+  <code>db.t4g.micro</code>. Quince veces más caro, antes de tocar el storage.</p>
+</div>
+
+<h2 id="storage">Storage: gp3, io2, y el autoscaling que solo sabe subir</h2>
+<p>El storage de RDS es un volumen EBS que declaras al crear la instancia y que
+<strong>se paga por gigabyte provisionado, no consumido</strong>. Pedir 100 GB y usar 3
+cuesta lo de 100.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Rendimiento base incluido</th><th>Precio (Single-AZ)</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>gp3</strong><br>(el recomendado)</td>
+      <td><strong>3 000 IOPS y 125 MiB/s</strong> hasta 399 GiB.<br>Desde <strong>400 GiB</strong>
+      el volumen se reparte en cuatro (<em>striping</em>) y la base sube a
+      <strong>12 000 IOPS y 500 MiB/s</strong></td>
+      <td><code>0,115 USD/GB-mes</code><br>IOPS extra: 0,02 USD/IOPS-mes<br>Throughput extra: 0,08 USD/MBps-mes</td>
+      <td>Por defecto, siempre. Rendimiento y capacidad se dimensionan por separado</td></tr>
+    <tr><td><strong>io2 Block Express</strong></td>
+      <td>Hasta 256 000 IOPS, latencia sub-milisegundo</td>
+      <td><code>0,125 USD/GB-mes</code> + <strong>0,10 USD/IOPS-mes</strong></td>
+      <td>OLTP crítico con latencia medida. El coste de los IOPS domina la factura</td></tr>
+    <tr><td><strong>io1</strong></td>
+      <td>Generación anterior de io2</td>
+      <td>Igual que io2</td>
+      <td>Nunca en nada nuevo</td></tr>
+    <tr><td><strong>gp2</strong></td>
+      <td>3 IOPS por GiB (mínimo 100), con <em>burst</em> a 3 000</td>
+      <td><code>0,115 USD/GB-mes</code></td>
+      <td>Generación anterior: para tener 3 000 IOPS había que pedir 1 000 GiB. gp3 los da con 20</td></tr>
+    <tr><td><s>magnético</s></td><td>Máx. 1 000 IOPS, 3 TiB</td><td>0,10 USD/GB-mes</td>
+      <td><strong>Deprecado.</strong> Ni instancias nuevas ni, desde el 2026-07-01, restauraciones</td></tr>
+  </tbody>
+</table>
+</div>
+<p>El umbral de 400 GiB de gp3 es la cifra que se te va a olvidar y luego vas a necesitar:
+por debajo, <code>iops</code> y <code>storage_throughput</code>
+<strong>ni siquiera se pueden configurar</strong> (la columna dice <code>N/A</code>); tienes
+3 000 IOPS y punto. Por encima, arrancas ya en 12 000. En Oracle el escalón está en 200 GiB
+y en <strong>SQL Server no hay escalón</strong>, porque no soporta striping.</p>
+<div class="callout trap">
+  <span class="callout-title">El autoscaling de storage es un trinquete</span>
+  <p>Con <code>max_allocated_storage</code> activas el autoscaling: cuando el espacio libre
+  baja del <strong>10%</strong> de lo asignado durante <strong>cinco minutos</strong>, RDS
+  amplía el volumen —el mayor entre <strong>10 GiB</strong>, un <strong>10%</strong> de lo
+  asignado, o lo que prediga que vas a necesitar en <strong>7 horas</strong>—. Como mucho
+  <strong>cuatro modificaciones en 24 h</strong>.</p>
+  <p>Y ahora la parte que nadie lee: <strong>«Autoscaling can't decrease the allocated
+  storage. You can't reduce the amount of storage for a DB instance after storage has been
+  allocated.»</strong> No hay marcha atrás. Una carga masiva que dispare el autoscaling de
+  20 GB a 500 GB te deja pagando 500 GB <em>para siempre</em>, aunque borres los datos al día
+  siguiente. La única salida que documenta AWS es <strong>crear otra base de datos y migrar
+  los datos</strong> —con un blue/green deployment o a mano—. Fija el techo con cabeza: es un
+  límite de gasto, no una aspiración.</p>
+</div>
+
+<h2 id="operacion">Operación: copias, upgrades y parámetros</h2>
+
+<h3 id="backups">Backups automáticos, snapshots y PITR</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Mecanismo</th><th>Qué hace</th><th>Vida</th><th>Coste</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Backups automáticos</strong></td>
+      <td>Snapshot diario en la ventana + logs de transacciones, que juntos permiten
+      <strong>PITR</strong>: restaurar a cualquier instante de la ventana</td>
+      <td>Retención de <strong>0 a 35 días</strong>. Por consola el defecto es
+      <strong>7</strong>; <code>0</code> los desactiva</td>
+      <td><span class="tag-cost free">gratis</span> hasta el tamaño total de tus bases de
+      datos en la región; a partir de ahí <code>0,095 USD/GB-mes</code></td></tr>
+    <tr><td><strong>Snapshots manuales</strong></td>
+      <td>Foto puntual que tomas tú</td>
+      <td><strong>Hasta que los borres.</strong> Sobreviven a la instancia</td>
+      <td>Mismo cubo gratuito, luego 0,095 USD/GB-mes</td></tr>
+    <tr><td><strong>Final snapshot</strong></td>
+      <td>El que RDS toma al destruir la instancia, si no lo saltas</td>
+      <td>Igual que un snapshot manual: <strong>para siempre</strong></td>
+      <td>Igual</td></tr>
+    <tr><td><strong>Export a S3</strong></td>
+      <td>Vuelca un snapshot a Parquet en S3, para Athena/Glue</td>
+      <td>Lo que dure el objeto en S3</td>
+      <td><code>0,01 USD/GB</code> de snapshot</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout cost">
+  <span class="callout-title">El coste huérfano clásico</span>
+  <p>Los backups automáticos se borran con la instancia (salvo que marques
+  <em>retain</em>). <strong>Los snapshots manuales y el final snapshot, no.</strong> Sobreviven
+  al <code>terraform destroy</code>, no aparecen en ningún <code>state</code>, y siguen
+  facturando en cuanto la suma de backups de la región supere el tamaño de las bases de datos
+  que te queden vivas —que, después de un <code>destroy</code>, es <strong>cero</strong>—.
+  El patrón es siempre igual: alguien hace prácticas durante seis meses, cada
+  <code>destroy</code> deja un snapshot final, y un año después hay 40 snapshots pagando
+  0,095 USD/GB-mes que nadie recuerda haber creado. El límite, por si sirve de consuelo, son
+  <strong>100 snapshots manuales por región</strong>.</p>
+</div>
+
+<h3 id="bluegreen">Blue/green deployments: cómo se sube de versión sin apagar</h3>
+<p>Un blue/green crea un <strong>entorno verde</strong> que es una copia de la topología de
+producción —incluidas read replicas, storage, Multi-AZ y monitorización— y lo mantiene
+sincronizado por replicación. Subes de versión mayor <em>ahí</em>, pruebas, y cuando estás
+listo haces el <em>switchover</em>: el verde adopta los nombres y endpoints del azul, y el
+azul se renombra a <code>-old1</code>. «The switchover typically takes <strong>under a
+minute</strong> with no data loss and no need for application changes».</p>
+<ul>
+  <li><strong>Solo para MariaDB, MySQL y PostgreSQL</strong> (RDS clásico) y para Aurora
+  MySQL/PostgreSQL por su lado. Oracle, SQL Server y Db2 se quedan fuera.</li>
+  <li><strong>Exige backups activados</strong> y no funciona sobre instancias con réplicas.</li>
+  <li>El entorno verde <strong>es una infraestructura de verdad</strong>: mientras existe,
+  pagas dos bases de datos. No es gratis, es corto.</li>
+  <li>El provider lo expone como <code>blue_green_update { enabled = true }</code>, y
+  entonces cambios que normalmente reinician la instancia se hacen así. Es <em>opt-in</em>:
+  por defecto Terraform sigue aplicando los cambios <em>in place</em>.</li>
+  <li><strong>Incompatible con <code>manage_master_user_password</code></strong>: la propia
+  documentación de AWS lista Blue/Green Deployments entre las cosas que la integración con
+  Secrets Manager no soporta. Es un conflicto real entre dos cosas que ambas parecen buena
+  idea.</li>
+</ul>
+
+<h3 id="parameter-groups">Parameter groups: dónde vive <code>my.cnf</code> ahora</h3>
+<p>No hay acceso al SO, así que la configuración del motor vive en un <strong>DB parameter
+group</strong>, y hay dos clases de parámetro:</p>
+<ul>
+  <li><strong>Dinámicos</strong>: «Changes to dynamic parameters are applied to the DB
+  instance <strong>immediately without a reboot</strong>».</li>
+  <li><strong>Estáticos</strong>: «Changes to static parameters are applied
+  <strong>only after the DB instance is rebooted</strong>». La consola marca el grupo como
+  <strong><code>pending-reboot</code></strong> y ahí se queda hasta que reinicies tú.</li>
+</ul>
+<div class="callout trap">
+  <span class="callout-title">Dos trampas encadenadas, y las dos son silenciosas</span>
+  <p><strong>La de AWS</strong>: cambiar un parámetro estático no hace nada visible. El
+  <code>apply</code> de Terraform sale verde, el plan converge, y el motor sigue corriendo
+  con el valor viejo indefinidamente. <code>terraform plan</code> <em>no</em> te va a avisar
+  de que hay un reboot pendiente, porque para Terraform el recurso ya está como lo pediste.
+  El único sitio donde aparece es el estado <code>pending-reboot</code> del grupo.</p>
+  <p><strong>La del provider</strong>: <code>aws_db_parameter_group</code> pone
+  <code>apply_method = "immediate"</code> por defecto, pero AWS asigna
+  <code>pending-reboot</code> a muchos parámetros por defecto <em>y no deja cambiar el
+  <code>apply_method</code> sin cambiar también el valor</em>. Resultado documentado por el
+  propio provider: <strong>diff perpetuo</strong> —cada <code>plan</code> propone el mismo
+  cambio, cada <code>apply</code> dice que lo hizo, y el siguiente <code>plan</code> vuelve a
+  proponerlo—. Las salidas son declarar <code>apply_method = "pending-reboot"</code>
+  explícitamente, o cambiar también el valor.</p>
+  <p>Y una regla que sorprende: <strong>los parameter groups <em>default</em> no se pueden
+  modificar.</strong> Para tocar un solo parámetro hay que crear un grupo propio y asociarlo.</p>
+</div>
+
+<h2 id="conectividad">Conectividad y credenciales</h2>
+<p>Una base de datos bien puesta en el proyecto 04 no tiene ni IP pública ni contraseña en el
+código. Las piezas, de fuera hacia dentro:</p>
+
+<h3 id="subnet-group">El <code>db_subnet_group</code>: dónde puede vivir</h3>
+<p>RDS no acepta una lista de subredes: acepta un <strong>DB subnet group</strong>, que es una
+colección con nombre de subredes de tu VPC. Es lo que le dice a AWS en qué AZs puede colocar
+el primario y el standby, y por eso <strong>necesita al menos dos AZs</strong>. En el
+proyecto 04 apunta a las subredes <em>aisladas</em>: sin ruta al Internet Gateway y sin ruta
+al NAT. La base de datos no necesita salir a internet, y no salir es la mitad de su
+seguridad.</p>
+<p>El control de acceso real lo hace el <strong>security group</strong>, y la forma correcta
+no es abrir un rango de IPs sino <strong>referenciar el SG de la aplicación</strong>: «puerto
+5432, origen = el SG de la app». Así, cuando el Auto Scaling reemplaza una instancia con otra
+IP, la regla sigue valiendo — no describes direcciones, describes roles.</p>
+
+<h3 id="secretos">La contraseña: <code>manage_master_user_password</code></h3>
+<p>La integración con <a href="./aws-secretsmanager.html">Secrets Manager</a> resuelve el
+problema de raíz: <strong>RDS genera la contraseña, la guarda en un secret y la rota; tú
+nunca la ves ni la escribes</strong>. Detalles verificados el 2026-08-30:</p>
+<ul>
+  <li>Rotación automática <strong>cada 7 días</strong> por defecto, ajustable. La contraseña
+  generada tiene <strong>28 caracteres</strong> con mayúscula, minúscula, número y signo.</li>
+  <li>El secret lo cifra la clave de Secrets Manager o una KMS tuya —y
+  <strong>la clave no se puede cambiar después</strong>.</li>
+  <li>Si borras la instancia, «the secret and its associated metadata are also deleted».</li>
+  <li>No está soportado con <strong>Blue/Green Deployments</strong>, con RDS Custom, ni al
+  crear una read replica de un origen que ya use Secrets Manager.</li>
+</ul>
+<div class="callout win">
+  <span class="callout-title">Por qué esto importa más de lo que parece en Terraform</span>
+  <p>El provider lo dice sin adornos: <em>«All arguments including the username and password
+  will be stored in the raw state as <strong>plain-text</strong>»</em>. Si escribes
+  <code>password = var.db_password</code>, la contraseña queda <strong>en claro dentro del
+  fichero de state</strong>, que en este curso vive en S3. <code>manage_master_user_password
+  = true</code> hace que la contraseña <em>no exista</em> en tu configuración ni en tu state:
+  el recurso solo expone el ARN del secret. Es la diferencia entre proteger un secreto y no
+  tenerlo.</p>
+  <p>La alternativa moderna si de verdad necesitas poner tú la contraseña es
+  <code>password_wo</code>, un argumento <em>write-only</em> (Terraform 1.11+) que no se
+  persiste en el state. Pero el camino corto y correcto aquí es el gestionado.</p>
+</div>
+
+<h3 id="iam-auth">IAM database authentication: cuándo sí, honestamente</h3>
+<p>Con <code>iam_database_authentication_enabled</code>, un cliente pide un
+<strong>token</strong> firmado con SigV4 y lo usa como contraseña. Funciona en
+<strong>MariaDB, MySQL y PostgreSQL</strong>. Cada token «has a lifetime of
+<strong>15 minutes</strong>» y obliga a TLS.</p>
+<p>Suena a la respuesta obvia —«nada de contraseñas»— pero tiene un coste que la
+documentación reconoce y los tutoriales omiten:</p>
+<ul>
+  <li><strong>Consume memoria del motor</strong>: «You must have between <strong>300 and
+  1000 MiB extra memory</strong> on your database for reliable connectivity». En un
+  <code>db.t4g.micro</code> con <strong>1 GiB total</strong>, eso es entre el 30% y el 100%
+  de la memoria de la máquina. En instancias pequeñas, IAM auth no es gratis: es caro.</li>
+  <li><strong>Ni CloudWatch ni CloudTrail registran la autenticación IAM</strong>, así que la
+  auditoría que crees estar ganando no está donde la buscas.</li>
+  <li>El token pesa <strong>~1 KB o más</strong> y algunos drivers lo truncan como si fuera
+  una contraseña normal.</li>
+  <li>En PostgreSQL, el rol <code>rds_iam</code> tiene precedencia: si se lo das a un usuario,
+  <strong>ese usuario ya no puede entrar con contraseña</strong>. Incluso el master.</li>
+</ul>
+<p><strong>El criterio</strong>: IAM auth brilla cuando el que se conecta es una carga de
+AWS con rol —Lambdas, tareas ECS, instancias EC2— y quieres revocar accesos desde IAM sin
+tocar la base de datos. Para el master de un proyecto de curso en una máquina de 1 GiB, el
+password gestionado en Secrets Manager es más simple y no le quita memoria al motor.</p>
+
+<h3 id="proxy">RDS Proxy: existe porque las conexiones son un recurso escaso</h3>
+<p>El número máximo de conexiones de un motor no es una constante: <strong>sale de una
+fórmula sobre la memoria de la instancia</strong>. En MySQL,
+<code>{DBInstanceClassMemory/12582880}</code>. La propia documentación pone el ejemplo que
+lo explica todo: en un <code>db.t3.micro</code>, «the default maximum number of connections
+for a MySQL DB instance … is <strong>approximately 60</strong>».</p>
+<p>Sesenta. Ahora pon delante una Lambda con concurrencia 100: cada ejecución abre su propia
+conexión, la base de datos rechaza a partir de la sesenta, y el error que ves no dice «te
+faltan conexiones», dice <em>too many connections</em> a las tres de la mañana. Ese es el
+problema que RDS Proxy resuelve: mantiene un <strong>pool</strong>, multiplexa varias
+sesiones de aplicación sobre una conexión de base de datos, y <strong>encola o descarta</strong>
+lo que no cabe en vez de tumbar el motor. De propina, «bypasses DNS caches to
+<strong>reduce failover times by up to 66%</strong>».</p>
+<div class="callout cost">
+  <span class="callout-title">Lo que cuesta, y por qué duele en instancias pequeñas</span>
+  <p>RDS Proxy se factura <strong>por la capacidad de la base de datos, no por su uso</strong>:
+  <code>0,015 USD por vCPU-hora</code> con un <strong>mínimo de 2 vCPU</strong>, y
+  <code>0,015 USD por ACU-hora</code> con un <strong>mínimo de 8 ACU</strong> en Aurora
+  Serverless v2 (verificado el 2026-08-30 en <a
+  href="https://aws.amazon.com/rds/proxy/pricing/">la página de precios</a>).</p>
+  <p>Traducido: el mínimo del proxy son <strong>0,03 USD/h</strong> — casi el doble de lo que
+  cuesta el <code>db.t4g.micro</code> al que protege. Y en Serverless v2 el mínimo es
+  <strong>0,12 USD/h</strong>, que <em>además</em> impide la auto-pausa a cero, porque el
+  proxy mantiene una conexión abierta permanentemente. Poner un proxy delante de una base de
+  datos serverless que querías que durmiera es pagar dos veces por lo contrario de lo que
+  buscabas.</p>
+</div>
+
+<h3 id="data-api">Data API: SQL por HTTPS, solo Aurora</h3>
+<p>La Data API expone el cluster como un <strong>endpoint HTTPS</strong>: mandas SQL en un
+POST autenticado con IAM y recibes JSON. Sin driver, sin pool, sin estar dentro de la VPC.
+Es la pieza que hace razonable llamar a una base de datos relacional desde una Lambda o desde
+un frontend con credenciales temporales — y también reanuda un cluster Serverless v2
+auto-pausado.</p>
+<ul>
+  <li><strong>Solo Aurora</strong> (<code>enable_http_endpoint</code> en
+  <code>aws_rds_cluster</code>). RDS clásico no la tiene, y en el proyecto 04 no aplica.</li>
+  <li><strong>0,35 USD por millón</strong> de peticiones hasta 1 000 millones al mes; después
+  <strong>0,20 USD por millón</strong>.</li>
+  <li>Límites duros: cuerpo de la petición <strong>4 MB</strong>, result set
+  <strong>1 MB</strong>, respuesta JSON <strong>10 MB</strong>. No es para volcar tablas.</li>
+</ul>
+
+<h2 id="coste">Cuánto cuesta</h2>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td><code>db.t4g.micro</code> Single-AZ (MySQL / PostgreSQL)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,016 USD/h</code></td></tr>
+    <tr><td><code>db.t4g.micro</code> Multi-AZ instance</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,032 USD/h</code></td></tr>
+    <tr><td><code>db.t4g.small</code> Single-AZ / Multi-AZ</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,032 / 0,065 USD/h</code></td></tr>
+    <tr><td><code>db.t4g.medium</code> Single-AZ / Multi-AZ (PostgreSQL)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,065 / 0,129 USD/h</code></td></tr>
+    <tr><td><code>db.m5.large</code> Single-AZ / Multi-AZ (PostgreSQL)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,178 / 0,356 USD/h</code></td></tr>
+    <tr><td><code>db.c6gd.medium</code> Multi-AZ cluster (2 standbys legibles)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,2385 USD/h</code></td></tr>
+    <tr><td>Créditos de CPU de T4g/T3 en <em>unlimited</em></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,075 USD/vCPU-h</code></td></tr>
+    <tr><td>Storage gp3, Single-AZ / Multi-AZ</td><td><span class="tag-cost hour">provisionado</span></td><td><code>0,115 / 0,23 USD/GB-mes</code></td></tr>
+    <tr><td>Storage io1 · io2, Single-AZ / Multi-AZ / cluster</td><td><span class="tag-cost hour">provisionado</span></td><td><code>0,125 / 0,25 / 0,375 USD/GB-mes</code></td></tr>
+    <tr><td>IOPS provisionados io1/io2, Single-AZ</td><td><span class="tag-cost hour">provisionado</span></td><td><code>0,10 USD/IOPS-mes</code></td></tr>
+    <tr><td>IOPS y throughput extra de gp3, Single-AZ</td><td><span class="tag-cost hour">provisionado</span></td><td><code>0,02 USD/IOPS-mes · 0,08 USD/MBps-mes</code></td></tr>
+    <tr><td>Backup storage hasta el tamaño de tus bases de datos</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Backup storage a partir de ahí</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,095 USD/GB-mes</code></td></tr>
+    <tr><td>Export de snapshot a S3</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,01 USD/GB</code></td></tr>
+    <tr><td><strong>Extended Support</strong> MySQL 5.7 · PostgreSQL 10-12</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,10 USD/vCPU-h</code> (años 1-2) · <code>0,20</code> (año 3)</td></tr>
+    <tr><td><strong>Extended Support</strong> MySQL 8.0 · PostgreSQL 13-15</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,085 USD/vCPU-h</code> (años 1-2) · <code>0,17</code> (año 3)</td></tr>
+    <tr><td>RDS Proxy</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,015 USD/vCPU-h</code>, mínimo 2 vCPU</td></tr>
+    <tr><td>Aurora <code>db.t4g.medium</code> · <code>db.r7g.large</code></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,073 · 0,276 USD/h</code></td></tr>
+    <tr><td>Aurora Serverless v2 (Standard / I/O-Optimized)</td><td><span class="tag-cost hour">por ACU-hora</span></td><td><code>0,12 / 0,16 USD/ACU-h</code></td></tr>
+    <tr><td>Aurora storage Standard + su E/S</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD/GB-mes + 0,20 USD/millón de I/O</code></td></tr>
+    <tr><td>Aurora storage I/O-Optimized</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,225 USD/GB-mes</code>, sin cargo por E/S</td></tr>
+    <tr><td>Aurora backup storage</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,021 USD/GB-mes</code></td></tr>
+    <tr><td>Aurora Data API</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,35 USD/millón</code>, luego <code>0,20</code></td></tr>
+    <tr><td>Aurora Backtrack</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,012 USD/millón</code> de registros de cambio</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="cost-stamp">Precios de la región <code>us-east-1</code>, <strong>verificados el
+2026-08-30</strong> contra los mapas de precios públicos que alimentan las páginas de AWS —
+<a href="https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/rds/USD/current/rds-postgresql-ondemand.json">PostgreSQL</a>,
+<a href="https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/rds/USD/current/rds-mysql-ondemand.json">MySQL</a>,
+<a href="https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/rds/USD/current/rds-storage.json">storage</a>,
+<a href="https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/rds/USD/current/rds-aurora-ondemand.json">Aurora</a>,
+<a href="https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/rds/USD/current/rds-proxy.json">proxy</a>—,
+publicación del 2026-08-28. Cámbialos si han pasado meses. Nota: las páginas
+<code>aws.amazon.com/rds/*/pricing/</code> son SPAs y no se pueden leer sin ejecutar
+JavaScript; estos ficheros son la fuente que ellas consultan.</p>
+
+<h3 id="cuenta-04">La cuenta del proyecto 04, con cronómetro</h3>
+<p>Una sesión de <strong>dos horas</strong>, <code>db.t4g.micro</code> Single-AZ con
+20 GB de gp3:</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Línea</th><th>Cálculo</th><th>2 h</th></tr></thead>
+  <tbody>
+    <tr><td>Instancia <code>db.t4g.micro</code></td><td>0,016 × 2</td><td><code>0,032 USD</code></td></tr>
+    <tr><td>Storage gp3, 20 GB</td><td>(0,115 × 20 ÷ 730) × 2</td><td><code>0,0063 USD</code></td></tr>
+    <tr><td>Backups (20 GB &lt; tamaño de la BD)</td><td>—</td><td><code>0,00 USD</code></td></tr>
+    <tr><td><strong>Total RDS</strong></td><td></td><td><strong><code>0,038 USD</code></strong></td></tr>
+    <tr><td>Lo mismo con <code>multi_az = true</code></td><td>Instancia ×2 <em>y</em> storage ×2</td><td><code>0,077 USD</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Cuatro céntimos por una sesión: RDS <strong>no es el que te arruina</strong> en el
+proyecto 04 — el NAT Gateway (0,045 USD/h) y el ALB (0,023 USD/h) cuestan más. Lo que hace
+peligroso a RDS es que <strong>es el más fácil de olvidar</strong>: no tiene tráfico que
+delate su existencia, no aparece en ningún log, y si se queda puesta un mes son
+<strong>13,98 USD</strong> (11,68 de instancia + 2,30 de storage), o <strong>27,96</strong>
+en Multi-AZ. Con el presupuesto del proyecto 00 configurado te enteras; sin él, te enteras
+el día 3 del mes siguiente.</p>
+
+<div class="callout cost">
+  <span class="callout-title">«La paro y ya» — no, y hay dos motivos</span>
+  <p><strong>Primero: parada no es gratis.</strong> «While your DB instance is stopped, you
+  are charged for <strong>provisioned storage</strong> (including Provisioned IOPS). You're
+  also charged for <strong>backup storage</strong> … Additionally, if your DB instance is
+  publicly accessible, you will continue to be charged for the <strong>public IPv4
+  address</strong>.» Solo dejas de pagar las horas de instancia.</p>
+  <p><strong>Segundo, y es el que pilla a todo el mundo: se enciende sola.</strong> El
+  máximo son <strong>7 días consecutivos</strong>, y después: «If you don't manually start
+  your DB instance after it is stopped for seven consecutive days, RDS
+  <strong>automatically starts your DB instance for you</strong>». La consola te obliga a
+  marcar una casilla reconociéndolo, y por eso la acción se llama <em>Stop
+  <strong>temporarily</strong></em>. Paras el viernes, te olvidas, y el viernes siguiente la
+  instancia vuelve a facturar 0,016 USD/h sin que nadie la toque.</p>
+  <p><strong>Para este curso la regla es una sola: <code>terraform destroy</code>, nunca
+  <em>stop</em>.</strong> El estado está en el código; la base de datos se vuelve a levantar
+  en minutos. Y si necesitas conservar los datos entre sesiones, un snapshot manual y
+  <code>snapshot_identifier</code> al recrear — pero acuérdate de borrar el snapshot cuando
+  el proyecto termine, porque ese sí sobrevive a todo.</p>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">El free tier cambió el 15 de julio de 2025: compruébalo antes de contar con él</span>
+  <p>Hay <strong>dos free tiers distintos</strong> y cuál te toca depende de cuándo abriste
+  la cuenta:</p>
+  <ul>
+    <li><strong>Cuentas anteriores al 2025-07-15</strong>: sigue el modelo clásico. Las
+    <a href="https://aws.amazon.com/rds/faqs/">FAQs de RDS</a> lo dicen con esa fecha
+    explícita — «If you signed up for AWS Free Tier <strong>prior to July 15, 2025</strong>,
+    you can continue to use RDS for free for up to 12 months on select single-AZ instance
+    databases with up to <strong>750 hours per month</strong>», más <strong>20 GB</strong>
+    de gp2 y <strong>20 GB</strong> de backups.</li>
+    <li><strong>Cuentas nuevas</strong>: no hay 750 horas de nada. Hay
+    <a href="https://aws.amazon.com/about-aws/whats-new/2025/07/aws-free-tier-credits-month-free-plan/">créditos</a>:
+    <strong>100 USD</strong> al registrarte y hasta <strong>100 USD</strong> más completando
+    tareas de onboarding —una de ellas es, literalmente, configurar una base de datos RDS—.
+    El plan gratuito «expires either <strong>6 months</strong> after sign-up or when Free
+    Tier credits are depleted, whichever comes first».</li>
+  </ul>
+  <p>La diferencia práctica es enorme: en el modelo viejo, una <code>db.t3.micro</code>
+  encendida todo el mes costaba cero. En el nuevo <strong>consume crédito</strong>, y cuando
+  el crédito se acaba, la cuenta se cierra o empieza a cobrar. <strong>No asumas que tu
+  <code>db.t4g.micro</code> es gratis: míralo en tu propia consola de facturación antes del
+  primer <code>apply</code> del proyecto 04.</strong> Verificado el 2026-08-30.</p>
+</div>
+
+<h2 id="limites">Límites que vas a chocar</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Instancias de BD por región</td><td><code>40</code> (20 en <code>ap-south-1</code>)</td><td>Sí. Cuenta RDS + Aurora + Neptune + DocumentDB juntos</td></tr>
+    <tr><td>Storage total de todas las instancias</td><td><code>100 000 GB</code></td><td>Sí. No aplica a Aurora</td></tr>
+    <tr><td>Snapshots manuales por región</td><td><code>100</code></td><td>Sí — y son el coste huérfano típico</td></tr>
+    <tr><td>Read replicas por primario</td><td><code>15</code></td><td>Sí, salvo en Aurora</td></tr>
+    <tr><td>DB subnet groups</td><td><code>50</code> (20 en <code>ap-south-1</code>)</td><td>Sí</td></tr>
+    <tr><td>Subredes por subnet group</td><td><code>20</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Parameter groups</td><td><code>50</code></td><td>Sí</td></tr>
+    <tr><td>Proxies por cuenta</td><td><code>20</code></td><td>Sí</td></tr>
+    <tr><td>Secrets por proxy</td><td><code>200</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Retención de backups automáticos</td><td><code>0 – 35 días</code></td><td><strong>No.</strong> Para más, snapshots manuales</td></tr>
+    <tr><td>Storage máximo (MySQL/PostgreSQL/MariaDB)</td><td><code>64 TiB</code>… salvo en <code>db.t4g.micro</code>, donde son <strong>6 TiB</strong></td><td>No</td></tr>
+    <tr><td>Storage mínimo (gp3)</td><td><code>20 GiB</code></td><td>No</td></tr>
+    <tr><td>gp3: umbral para poder provisionar IOPS</td><td><code>400 GiB</code> (200 en Oracle, ninguno en SQL Server)</td><td>No</td></tr>
+    <tr><td>Reducir el storage asignado</td><td><strong>Imposible</strong></td><td><strong>No.</strong> Blue/green o migración manual</td></tr>
+    <tr><td>Conexiones simultáneas</td><td>Fórmula sobre la memoria: <code>~60</code> en un <code>db.t3.micro</code> con MySQL</td><td>Sí, por parameter group — pero quedarse sin memoria deja la instancia en <code>incompatible-parameters</code></td></tr>
+    <tr><td>Vida de un token de IAM auth</td><td><code>15 minutos</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Días parada antes de arrancar sola</td><td><code>7</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Longitud de la contraseña master</td><td>MySQL/MariaDB <code>8-41</code> · PostgreSQL/SQL Server <code>8-128</code></td><td>No. Sin <code>/</code>, <code>'</code>, <code>"</code>, <code>@</code> ni espacios</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Fuente: <a
+href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Limits.html">Quotas and
+constraints for Amazon RDS</a> y la <a
+href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html">guía de
+storage</a>, consultadas el 2026-08-30.</p>
+
+<h2 id="cuando-no">Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Las preguntas cambian más rápido que el esquema: <code>JOIN</code>, agregaciones, consultas ad hoc</li>
+    <li>La integridad la tiene que garantizar el motor, no tu código</li>
+    <li>Estás moviendo una aplicación que ya habla SQL y no quieres reescribirla</li>
+    <li>Alguien va a querer conectar una herramienta de BI mañana</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Puede quedarse encendido sin que nadie lo vigile: cobra por hora, siempre</li>
+    <li>El acceso es siempre «dame el ítem con esta clave» y solo eso</li>
+    <li>El tráfico es cero durante días enteros y no quieres pagar el reposo</li>
+    <li>Es el proyecto 01, 02 o 03 de este curso</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><a href="./aws-dynamodb.html">DynamoDB</a></td>
+      <td>Aquí el motor responde cualquier SQL sobre un esquema; allí solo las consultas que permiten las claves que diseñaste</td>
+      <td>Las preguntas están cerradas y son por clave — y quieres coste cero en reposo</td></tr>
+    <tr><td>Aurora</td>
+      <td>Storage distribuido, réplicas que comparten volumen, failover en segundos</td>
+      <td>Producción con lecturas que escalan o RTO de segundos. No para un ejercicio</td></tr>
+    <tr><td>Aurora DSQL</td>
+      <td>Serverless distribuido, activo-activo multi-región, sin instancias que dimensionar</td>
+      <td>Necesitas SQL con escala y disponibilidad globales — y aceptas sus recortes</td></tr>
+    <tr><td><a href="./aws-s3.html">S3</a> + Athena</td>
+      <td>RDS es OLTP: filas pequeñas, muchas transacciones. Athena es OLAP sobre ficheros</td>
+      <td>El trabajo es analítico y por lotes: escanear meses de histórico, no atender peticiones</td></tr>
+    <tr><td>EC2 con PostgreSQL instalado</td>
+      <td>Ahí gestionas tú SO, parches, backups y failover. Aquí no puedes ni entrar por <code>ssh</code></td>
+      <td>Necesitas una extensión o una configuración que RDS no expone. Casi nunca</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="vs-dynamodb">RDS vs DynamoDB, con criterio y no con tópicos</h3>
+<p>La <a href="./aws-dynamodb.html#cuando-no">ficha de DynamoDB</a> propone una prueba del
+algodón: escribe las cinco preguntas que tu aplicación le hará a los datos; si alguna no
+empieza por «dame el ítem con clave…», DynamoDB la responderá mal, tarde o cara. Esta ficha
+es el otro lado de esa misma frase, y conviene decirlo sin diplomacia porque la elección
+suele hacerse por moda:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Amazon RDS</th><th>Amazon DynamoDB</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Qué se diseña primero</strong></td><td>El <strong>esquema</strong>: entidades y relaciones. Las consultas vienen después, y pueden ser cualquiera</td><td>Las <strong>consultas</strong>. Las claves se derivan de ellas, y solo responde esas</td></tr>
+    <tr><td>Consulta no prevista</td><td>Se escribe un <code>SELECT</code>. Como mucho, un índice</td><td>Un GSI nuevo, o rediseñar claves y migrar</td></tr>
+    <tr><td><em>Joins</em> y agregaciones</td><td>Nativos</td><td>No existen. Se hacen fuera</td></tr>
+    <tr><td>Integridad referencial</td><td>La garantiza el motor</td><td>La garantiza tu código, o nadie</td></tr>
+    <tr><td>Coste en reposo</td><td><strong>0,016 USD/h como mínimo</strong>, siempre</td><td><strong>0,00 USD</strong> en <code>PAY_PER_REQUEST</code></td></tr>
+    <tr><td>Techo de escala</td><td>El de una máquina para escribir (más réplicas para leer)</td><td>Prácticamente ninguno, si la clave reparte</td></tr>
+    <tr><td>Límite que muerde</td><td><strong>Conexiones</strong> (~60 en la instancia más pequeña)</td><td><strong>Particiones calientes</strong> y el ítem de 400 KB</td></tr>
+    <tr><td>Operación</td><td>Ventanas de mantenimiento, upgrades de versión, parameter groups</td><td>Nada de eso existe</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Los dos argumentos que <strong>no</strong> son criterio: «DynamoDB escala más» —cierto e
+irrelevante si tu tráfico cabe en una máquina— y «relacional es lo serio» —también
+irrelevante—. El criterio real son dos preguntas: <strong>¿conoces todas las consultas que
+te van a pedir?</strong> y <strong>¿puedes permitirte pagar por hora?</strong> Si la primera
+es «no», RDS. Si la segunda es «no», DynamoDB. Si ambas apuntan al mismo sitio, no hay
+debate; y si se contradicen —consultas abiertas <em>y</em> presupuesto cero— la respuesta
+honesta es Aurora Serverless v2 con auto-pausa, no forzar una tabla clave-valor a hacer de
+almacén relacional.</p>
+
+<h3 id="dsql">Aurora DSQL: qué es, ya que existe y está GA</h3>
+<p>Es <strong>otra cosa</strong>, no un tamaño de RDS. Aurora DSQL es una base de datos
+relacional <strong>serverless y distribuida</strong>, compatible con el protocolo de
+PostgreSQL 16, activo-activo entre AZs y entre regiones, con
+<strong>disponibilidad del 99,99% en una región y 99,999% multi-región</strong>. No hay
+instancia que dimensionar, no hay failover que configurar, y escala a cero: se factura en
+<strong>DPU</strong> —«the billing unit Aurora DSQL uses to measure the work done»— a
+<strong>8 USD por millón de DPU</strong> y <strong>0,33 USD/GB-mes</strong> de storage, con
+los primeros <strong>100 000 DPU y 1 GB</strong> gratis al mes. <strong>Está en
+disponibilidad general desde mayo de 2025.</strong></p>
+<p>Lo que hay que saber antes de proponerlo, porque es donde se rompe la ilusión de «es
+PostgreSQL»:</p>
+<ul>
+  <li><strong>Sin PL/pgSQL ni triggers.</strong> «Aurora DSQL supports SQL-based functions
+  but not procedural languages like PL/pgSQL». La lógica de los triggers se muda a la
+  aplicación.</li>
+  <li><strong>Sin tablas temporales</strong>, sin <code>TRUNCATE</code> (usa
+  <code>DELETE FROM</code>), sin <code>VACUUM</code> ni tablespaces.</li>
+  <li><strong>Una transacción modifica como mucho 3 000 filas</strong>, admite
+  <strong>una sola sentencia DDL</strong>, y DDL y DML no pueden ir en la misma transacción.</li>
+  <li><strong>Una sola base de datos</strong> (<code>postgres</code>) por cluster, collation
+  <code>C</code>, zona horaria <code>UTC</code>, aislamiento fijo en
+  <code>Repeatable Read</code>, y las conexiones caducan <strong>a la hora</strong>.</li>
+  <li><strong>Control de concurrencia optimista</strong>: no hay bloqueos, hay errores de
+  serialización en el <code>COMMIT</code>. Tu aplicación <em>tiene</em> que reintentar.</li>
+</ul>
+<div class="callout aws">
+  <span class="callout-title">Lo que internet todavía cuenta mal (verificado el 2026-08-30)</span>
+  <ul>
+    <li><strong>«Aurora DSQL no soporta foreign keys».</strong> Era cierto en el lanzamiento;
+    ya no. La guía de migración actual dice lo contrario: «Aurora DSQL <strong>supports
+    foreign keys</strong>, table relationships, and <code>JOIN</code> operations».</li>
+    <li><strong>«Aurora Serverless v2 no baja de 0,5 ACU».</strong> Falso desde finales de
+    2024: con <code>min_capacity = 0</code> se auto-pausa y el cómputo deja de facturar.</li>
+    <li><strong>«Si quieres escalar a cero, usa Serverless v1».</strong> v1 está
+    <strong>retirada</strong> desde el 31 de marzo de 2025.</li>
+    <li><strong>«El standby de Multi-AZ te da lecturas gratis».</strong> Nunca fue cierto, y
+    es el error más repetido en las entrevistas.</li>
+    <li><strong>«Una versión vieja de MySQL solo es deuda técnica».</strong> Desde 2024 es
+    una factura: hasta 0,20 USD por vCPU y hora, cobrados automáticamente.</li>
+    <li><strong>«El free tier te cubre 750 horas de RDS».</strong> Solo si abriste la cuenta
+    antes del 15 de julio de 2025.</li>
+  </ul>
+</div>
+
+<h3 id="curso">Y para este curso, sin rodeos</h3>
+<div class="callout trap">
+  <span class="callout-title">RDS no aparece hasta el proyecto 04, y es a propósito</span>
+  <p>Los proyectos 01, 02 y 03 usan DynamoDB, y no por moda: <strong>porque se pueden dejar
+  desplegados</strong>. Meter RDS en el acortador de enlaces no te enseñaría nada de
+  Terraform que DynamoDB no enseñe, y a cambio convertiría cada sesión en una cuenta atrás.
+  En el 04 la base de datos sí gana su sitio, porque es la pieza que justifica la tercera
+  capa de red —la subred aislada— y el paso por Secrets Manager. Cuando llegue: mira el
+  reloj antes del <code>apply</code>, pon la alarma del móvil, y termina con
+  <code>terraform destroy</code>.</p>
+</div>
+
+<h2 id="terraform">En Terraform</h2>
+<p>El montaje mínimo del proyecto 04 son cuatro recursos: dónde puede vivir (subnet group),
+quién puede hablarle (security group), la instancia, y de dónde sale la contraseña.</p>
+<div class="code">
+  <div class="code-label"><span>la capa de datos del proyecto 04</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># 1. Dónde puede vivir: las subredes AISLADAS, en al menos dos AZs.</b>
+<b class="k">resource</b> <b class="s">"aws_db_subnet_group"</b> <b class="s">"datos"</b> {
+  name       = <b class="s">"three-tier-datos"</b>
+  subnet_ids = [<b class="k">for</b> s <b class="k">in</b> aws_subnet.aislada : s.id]
+}
+
+<b class="c"># 2. Quién puede hablarle: el SG de la app, no un rango de IPs.</b>
+<b class="k">resource</b> <b class="s">"aws_security_group"</b> <b class="s">"bd"</b> {
+  name   = <b class="s">"three-tier-bd"</b>
+  vpc_id = aws_vpc.main.id
+}
+
+<b class="k">resource</b> <b class="s">"aws_vpc_security_group_ingress_rule"</b> <b class="s">"desde_app"</b> {
+  security_group_id            = aws_security_group.bd.id
+  referenced_security_group_id = aws_security_group.app.id   <b class="c"># ← el rol, no la IP</b>
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = <b class="s">"tcp"</b>
+}
+<b class="c"># Sin regla de egress: la base de datos no necesita salir a ningún sitio.</b>
+
+<b class="c"># 3. La instancia.</b>
+<b class="k">resource</b> <b class="s">"aws_db_instance"</b> <b class="s">"principal"</b> {
+  identifier     = <b class="s">"three-tier"</b>
+  engine         = <b class="s">"postgres"</b>
+  engine_version = <b class="s">"16"</b>
+  instance_class = <b class="s">"db.t4g.micro"</b>       <b class="c"># 0,016 USD/h — el suelo del servicio</b>
+
+  allocated_storage = 20                <b class="c"># mínimo de gp3</b>
+  storage_type      = <b class="s">"gp3"</b>              <b class="c"># el default es gp2, o io1 si pones iops</b>
+  storage_encrypted = <b class="k">true</b>               <b class="c"># el default es false. Ponlo siempre.</b>
+
+  db_subnet_group_name   = aws_db_subnet_group.datos.name
+  vpc_security_group_ids = [aws_security_group.bd.id]
+  publicly_accessible    = <b class="k">false</b>          <b class="c"># y sin IPv4 pública que pagar</b>
+
+  <b class="c"># La contraseña la genera y rota RDS. NUNCA aparece en el state.</b>
+  username                    = <b class="s">"appuser"</b>
+  manage_master_user_password = <b class="k">true</b>
+
+  <b class="c"># Extended Support: el default del provider te apunta al cargo de pago.</b>
+  engine_lifecycle_support = <b class="s">"open-source-rds-extended-support-disabled"</b>
+
+  <b class="c"># Un curso se destruye. Sin esto, el destroy exige un final snapshot</b>
+  <b class="c"># que sobreviviría al proyecto y seguiría facturando.</b>
+  skip_final_snapshot = <b class="k">true</b>
+  deletion_protection = <b class="k">false</b>
+
+  backup_retention_period = 1           <b class="c"># 0 desactiva PITR y blue/green</b>
+  auto_minor_version_upgrade = <b class="k">true</b>
+}</code></pre>
+</div>
+<div class="code">
+  <div class="code-label"><span>leer la contraseña que generó RDS</span><span class="tag">hcl</span></div>
+<pre><code><b class="c"># El recurso solo expone el ARN del secret; el valor se lee aparte.</b>
+<b class="k">data</b> <b class="s">"aws_secretsmanager_secret_version"</b> <b class="s">"bd"</b> {
+  secret_id = aws_db_instance.principal.master_user_secret[0].secret_arn
+}
+
+<b class="c"># En la app: mejor que la lea ella en runtime desde Secrets Manager,</b>
+<b class="c"># y no que Terraform la pase por el state para dejarla en una variable.</b>
+output <b class="s">"secret_arn"</b> {
+  value = aws_db_instance.principal.master_user_secret[0].secret_arn
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas, en orden de dolor</span>
+  <ul>
+    <li><strong><code>engine_lifecycle_support</code> apunta a Extended Support por
+    defecto.</strong> El valor por defecto del provider es
+    <code>open-source-rds-extended-support</code>. Si el motor está fuera de soporte estándar,
+    empiezas a pagar de 0,085 a 0,20 USD por vCPU y hora sin haber escrito nada. Puesto a
+    <code>-disabled</code>, una base de datos ya vencida <strong>se actualiza sola a la
+    siguiente versión mayor soportada</strong>: es lo que quieres en un curso, y lo que
+    tienes que decidir a conciencia en producción.</li>
+    <li><strong><code>skip_final_snapshot</code> vale <code>false</code> por
+    defecto</strong>, así que <code>terraform destroy</code> falla si no diste
+    <code>final_snapshot_identifier</code>. Y si lo das, te deja un snapshot que
+    <strong>no está en el state</strong> y que sigue facturando hasta que lo borres a mano.</li>
+    <li><strong>La contraseña acaba en el state en claro.</strong> El propio provider avisa:
+    «All arguments including the username and password will be stored in the raw state as
+    plain-text». Usa <code>manage_master_user_password</code>, o <code>password_wo</code> si
+    de verdad necesitas ponerla tú.</li>
+    <li><strong>El default de <code>storage_type</code> no es gp3</strong>, sino
+    «<code>io1</code> si <code>iops</code> está definido, <code>gp2</code> si no». Y por
+    debajo de 400 GiB en gp3, <code>iops</code> y <code>storage_throughput</code> ni siquiera
+    se pueden fijar.</li>
+    <li><strong>Casi ningún cambio se aplica cuando crees.</strong> Sin
+    <code>apply_immediately = true</code>, las modificaciones esperan a la ventana de
+    mantenimiento, y hasta entonces <code>plan</code> puede seguir mostrando diferencias.
+    Con él, «using <code>apply_immediately</code> can result in a brief downtime as the
+    server reboots».</li>
+    <li><strong>Un upgrade de versión mayor exige
+    <code>allow_major_version_upgrade = true</code></strong>, y el camino sin caídas
+    (<code>blue_green_update</code>) solo existe para MySQL, MariaDB y PostgreSQL, exige
+    backups activos, no funciona con réplicas y <strong>choca con
+    <code>manage_master_user_password</code></strong>.</li>
+    <li><strong>Con <code>max_allocated_storage</code>, Terraform deja de vigilar
+    <code>allocated_storage</code></strong> — «changes to <code>allocated_storage</code> will
+    be automatically ignored»—. Es lo correcto, pero significa que el crecimiento real no
+    aparece en ningún <code>plan</code>: el volumen puede haberse multiplicado por diez y tu
+    código seguirá diciendo 20.</li>
+    <li><strong>En <code>aws_db_parameter_group</code>, el diff perpetuo</strong> del
+    <code>apply_method</code>: ver <a href="#parameter-groups">más arriba</a>.</li>
+    <li><strong>Aurora Serverless v2 no lleva
+    <code>engine_mode = "serverless"</code></strong> — eso era v1, que ya no existe—. Lleva
+    <code>engine_mode = "provisioned"</code> más un bloque
+    <code>serverlessv2_scaling_configuration</code> con <code>min_capacity = 0</code> y
+    <code>seconds_until_auto_pause</code>, y además un
+    <code>aws_rds_cluster_instance</code> con <code>instance_class = "db.serverless"</code>.
+    Todos los ejemplos anteriores a 2023 llevan el modo viejo.</li>
+  </ul>
+</div>
+
+<h2 id="comprueba">Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4 · coste</p>
+  <p class="quiz-q">Terminas la sesión del proyecto 04 y, en vez de destruir la infraestructura,
+  paras la instancia RDS «para ahorrar». Vuelves dos semanas después. ¿Qué te encuentras?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El máximo son 7 días consecutivos: «If you don't manually start your DB instance after it is stopped for seven consecutive days, RDS automatically starts your DB instance for you». Llevas una semana pagando horas de instancia otra vez, y la consola te hizo marcar una casilla reconociéndolo cuando la paraste.">Encendida y facturando: RDS la reinicia a los siete días</button></li>
+    <li><button data-correct="false" data-why="Parar detiene solo las horas de instancia. Sigues pagando el storage provisionado, los backups y, si fuera pública, la IPv4. Y además vuelve a arrancarse sola al séptimo día, así que ni siquiera eso se detiene del todo.">Parada y gratis: parar una instancia detiene toda la factura</button></li>
+    <li><button data-correct="false" data-why="Los primeros siete días sí es exactamente eso, y por eso la respuesta parece razonable. Pero a los siete días RDS la arranca automáticamente para que no se quede sin parches, y a partir de ahí vuelves a pagar horas de instancia.">Parada y cobrando solo el storage, que sigue provisionado indefinidamente</button></li>
+    <li><button data-correct="false" data-why="AWS no borra recursos por inactividad: ese es el supuesto peligroso que hace que la gente deje cosas puestas. Una instancia parada conserva su identificador, su endpoint, sus grupos y sus datos — y se enciende sola al séptimo día.">Borrada por AWS: una instancia parada expira sin previo aviso</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4 · elegir entre variantes</p>
+  <p class="quiz-q">Tu aplicación del proyecto 04 va lenta porque los informes internos hacen
+  consultas pesadas contra el primario. Además, negocio quiere sobrevivir a la caída de una
+  Availability Zone. ¿Multi-AZ o read replica?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Son dos problemas distintos con dos soluciones distintas. El standby de Multi-AZ es síncrono e invisible: «You can't use a standby replica to serve read traffic». La read replica es asíncrona y legible, pero no hace failover sola. Quien pide las dos cosas paga las dos, y ese es exactamente el punto de la pregunta.">Las dos: resuelven problemas distintos y no se sustituyen</button></li>
+    <li><button data-correct="false" data-why="Es el error más repetido de las entrevistas. El standby de Multi-AZ DB instance no acepta ni una conexión: existe solo como destino de failover. Lo que sí tiene standbys legibles es el Multi-AZ DB cluster, que es otro producto y exige clases con NVMe local.">Multi-AZ instance: el standby absorbe las lecturas de informes</button></li>
+    <li><button data-correct="false" data-why="Una read replica no se promociona sola: la promocionas tú, a mano o con automatización propia. Y su replicación es asíncrona, así que al promoverla puedes perder las últimas transacciones. Sirve para lecturas y para DR, no para alta disponibilidad automática.">Read replica: hace failover sola cuando el primario cae</button></li>
+    <li><button data-correct="false" data-why="El Multi-AZ DB cluster sí cubre ambas necesidades, pero de barato no tiene nada: cuesta unas tres veces el Single-AZ, y solo admite clases con NVMe local (c6gd, m5d, m6gd, r6gd…). La más pequeña es db.c6gd.medium a 0,2385 USD/h, quince veces el db.t4g.micro.">Multi-AZ cluster: es la opción barata que cubre ambas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4 · coste</p>
+  <p class="quiz-q">Heredas un módulo que crea una <code>aws_db_instance</code> con
+  <code>engine = "mysql"</code> y <code>engine_version = "5.7"</code>, sin tocar
+  <code>engine_lifecycle_support</code>. Lo aplicas hoy, en 2026. ¿Qué pasa en la factura?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="MySQL 5.7 pasó su fin de soporte estándar el 29 de febrero de 2024 y el enrolamiento en Extended Support es automático. Además, el valor por defecto de engine_lifecycle_support en el provider es open-source-rds-extended-support, así que no hiciste nada para evitarlo. En su tercer año la tarifa es 0,20 USD por vCPU-hora: en un db.t4g.micro de 2 vCPU son 0,40 USD/h, veinticinco veces la instancia.">Se apunta sola a Extended Support: 0,20 USD por vCPU-hora</button></li>
+    <li><button data-correct="false" data-why="Es justo al revés. El valor por defecto del provider es open-source-rds-extended-support, es decir, apuntado. Para no pagarlo hay que escribir explícitamente open-source-rds-extended-support-disabled, y entonces la instancia se actualiza sola a una versión soportada.">Nada: el provider desactiva Extended Support salvo que lo pidas</button></li>
+    <li><button data-correct="false" data-why="AWS no bloquea la creación: te la vende. Ese es precisamente el modelo de Extended Support, que existe para que puedas seguir corriendo la versión vieja hasta tres años más a cambio de un recargo por vCPU y hora. El apply sale verde y el cargo aparece al mes siguiente.">Falla el apply: AWS bloquea versiones fuera de soporte estándar</button></li>
+    <li><button data-correct="false" data-why="Eso es lo que pasaría si desactivaras el enrolamiento: «If you disable the enrollment status of a DB instance that is already past its standard support end date, the instance automatically upgrades to the next supported major version». Con el default puesto, no se actualiza nada: se cobra.">Se actualiza sola a MySQL 8.0 en el próximo mantenimiento</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4 · el criterio</p>
+  <p class="quiz-q">Un panel interno cruza pedidos, clientes y facturas, y el equipo de
+  negocio inventa una pregunta nueva cada semana. El volumen es pequeño y el panel se usa en
+  horario de oficina. ¿RDS o DynamoDB?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El criterio no es la escala ni la moda: es si conoces las consultas de antemano. Aquí no las conoces, cambian cada semana y cruzan tres entidades. Eso es un JOIN con GROUP BY sobre un esquema que ya existe. En DynamoDB, cada pregunta nueva sería un GSI nuevo o un rediseño de claves.">RDS: las preguntas cambian más rápido que el modelo</button></li>
+    <li><button data-correct="false" data-why="Las dos cosas son ciertas y las dos son irrelevantes aquí. Con volumen pequeño no necesitas escalar, y el coste en reposo importa cuando el ahorro compensa rediseñar el acceso a datos — que no es el caso de un panel que hace preguntas impredecibles sobre tres entidades relacionadas.">DynamoDB: escala mejor y no cobra nada en reposo</button></li>
+    <li><button data-correct="false" data-why="Un GSI da otra vista clave → ítem, no consultas arbitrarias: no hace joins ni agregaciones, y la cuota son 20 por tabla. Cada pregunta nueva costaría un índice más, otro coste de escritura, y seguirías sin poder cruzar tres entidades en una sola consulta.">DynamoDB: un índice global secundario resuelve cualquier consulta nueva</button></li>
+    <li><button data-correct="false" data-why="La respuesta es correcta pero el razonamiento no, y en una entrevista eso se nota. «Relacional por defecto» es el mismo error que «NoSQL porque escala»: elegir sin criterio. Aquí RDS gana por una razón concreta y comprobable, que son las consultas impredecibles.">RDS: siempre gana porque relacional es la opción segura</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-dynamodb.html">Ficha: Amazon DynamoDB</a>
+    <a href="./aws-secretsmanager.html">Ficha: AWS Secrets Manager</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./README.md">Todas las referencias</a>
+    <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/">Documentación oficial</a>
+  </div>
+  <div class="ask">
+    <b>Pregúntame.</b> Los huecos deliberados de esta ficha son <strong>Performance
+    Insights y Enhanced Monitoring</strong> —herramientas de diagnóstico que solo tienen
+    sentido con una carga real que diagnosticar—, las <strong>reserved instances</strong>
+    —descuentos a uno o tres años sobre una cifra que aún no conoces— y las
+    <strong>integraciones zero-ETL con Redshift</strong>. Si quieres cualquiera de las tres,
+    o que diseñemos juntos la capa de datos del proyecto 04 antes de escribirla, pídemelo.
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_StopInstance.html">página
+    de <em>stop temporarily</em></a> (donde está lo de los siete días), <a
+    href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html">RDS DB
+    instance storage</a> para gp3 y el umbral de 400 GiB, <a
+    href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/multi-az-db-clusters-concepts.html">Multi-AZ
+    DB cluster deployments</a>, <a
+    href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/extended-support.html">RDS
+    Extended Support</a> y <a
+    href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2-auto-pause.html">Scaling
+    to Zero ACUs</a>. Todas consultadas el 2026-08-30.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

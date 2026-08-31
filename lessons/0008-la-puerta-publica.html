@@ -165,7 +165,10 @@ mantener: TLS, throttling y — cuando toque — autenticación.</p>
     (<code>POST /links</code>), y entrega la petición al backend configurado — empaquetada
     como evento JSON si el backend es una Lambda. No ejecuta tu código: <strong>enruta,
     filtra y traduce</strong>. Síncrono, con un corte que manda más que tu timeout: la
-    integración espera <strong>30 segundos como máximo</strong>, y no es ajustable.</p>
+    integración espera <strong>30 segundos como máximo</strong> — techo duro en una HTTP API
+    como esta. <em>(Corrección del 2026-08-30: en REST API el timeout sí es ampliable vía
+    Service Quotas; el detalle está en la
+    <a href="../reference/aws-apigateway.html#timeout">ficha</a>.)</em></p>
 
     <h3>Los tipos que existen</h3>
     <p>Tres productos bajo un nombre. <strong>HTTP API</strong> (2019): lo esencial — proxy a

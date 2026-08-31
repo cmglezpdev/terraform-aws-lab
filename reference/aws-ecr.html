@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Amazon ECR</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Servicio AWS · referencia imprimible</p>
+  <h1>Amazon ECR</h1>
+  <p class="deck">El registry de imágenes de contenedor de AWS: el sitio donde vive el artefacto
+  que <a href="./aws-ecs.html">ECS</a> se descarga para arrancar un task. Un Docker Hub privado,
+  dentro de tu cuenta, con permisos de IAM en vez de usuario y contraseña.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Categoría</dt><dd>Contenedores / almacenamiento de artefactos</dd></div>
+    <div><dt>Ámbito</dt><dd>Regional (un registry por cuenta y región)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> — almacenamiento por GB-mes</dd></div>
+    <div><dt>¿Se puede dejar puesto?</dt><dd>Sí, pero <strong>no es gratis</strong>: 0,10 USD por GB-mes, y las imágenes viejas se acumulan solas</dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_ecr_repository</code></dd></div>
+    <div><dt>Aparece en</dt><dd><a href="../projects/04-vpc-three-tier">proyecto 04</a> y <a href="../projects/06-eks-platform">proyecto 06</a></dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es</h2>
+<p>Un <strong>registry de imágenes OCI gestionado</strong>. Haces <code>docker push</code>
+contra él y <code>docker pull</code> desde él, exactamente como con Docker Hub — pero el control
+de acceso no son credenciales de un servicio de terceros: son <strong>políticas de IAM</strong>,
+las mismas que ya usas para todo lo demás.</p>
+<p>Lo que resuelve, dicho sin marketing: <strong>un contenedor no se despliega, se
+descarga</strong>. Fargate no tiene tu portátil ni tu <code>Dockerfile</code>; necesita una URL
+desde la que bajarse el artefacto ya construido, en la misma región (para que sea rápido y
+gratis) y con una autorización que puedas conceder a un rol en vez de a una persona.</p>
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>Es el <a href="./aws-s3.html">S3</a> de las imágenes de contenedor: un almacén de blobs
+  direccionables. De hecho, por debajo, <strong>las capas de tus imágenes viven literalmente en
+  buckets de S3 de AWS</strong> — por eso, para hacer un pull desde una subred privada sin NAT,
+  no basta con los endpoints de ECR: también hace falta el de S3.</p>
+  <p><strong>Dónde se rompe la analogía:</strong> S3 te da objetos independientes; ECR te da un
+  grafo. Una imagen es un manifiesto que apunta a capas <em>compartidas</em> entre imágenes. Por
+  eso «borrar la imagen vieja» casi nunca libera lo que crees: si la nueva comparte ocho de sus
+  diez capas, borrar la vieja libera dos.</p>
+</div>
+
+<h2>Para qué se usa de verdad</h2>
+<div class="ref-grid">
+  <div class="ref-card"><h3>Guardar el artefacto que despliegas</h3><p>Tu caso: la CI construye
+  la imagen, la etiqueta con el SHA del commit, la sube a ECR, y la task definition de ECS
+  apunta a esa etiqueta. El registry es la frontera entre «construir» y «desplegar».</p></div>
+  <div class="ref-card"><h3>Dar permiso de pull a un rol, no a una persona</h3><p>El execution
+  role de ECS hace el pull con credenciales temporales. No hay contraseña que rotar, ni un
+  secreto de registry compartido en cuatro pipelines.</p></div>
+  <div class="ref-card"><h3>Esquivar los rate limits de Docker Hub</h3><p>El
+  <em>pull-through cache</em> pone ECR delante de Docker Hub: la primera descarga va al upstream,
+  las siguientes salen de tu registry. Ni límites, ni caídas de un tercero en mitad de un
+  despliegue.</p></div>
+  <div class="ref-card"><h3>Escanear lo que vas a ejecutar</h3><p>Cada push dispara un análisis
+  de vulnerabilidades sobre los paquetes de la imagen. Enterarte de un CVE antes de arrancar el
+  task, no en la auditoría de dentro de seis meses.</p></div>
+  <div class="ref-card"><h3>Replicar la imagen donde la vas a necesitar</h3><p>Una regla de
+  replicación copia cada push a otras regiones o cuentas. El cluster de Fráncfort hace pull en
+  local en vez de cruzar el Atlántico por cada task que arranca.</p></div>
+</div>
+
+<h2>Los tipos que existen</h2>
+<p>Dos productos con el mismo nombre y facturas distintas:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tipo</th><th>Quién puede hacer pull</th><th>Coste</th><th>Cuándo</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Repositorio privado</strong><br><code>aws_ecr_repository</code></td>
+      <td>Solo quien tenga permisos de IAM (o una política de recurso del repositorio, para
+      otras cuentas)</td>
+      <td>0,10 USD/GB-mes; transferencia dentro de la misma región, gratis</td>
+      <td><strong>Todo lo tuyo.</strong> El de los proyectos 04 y 06.</td></tr>
+    <tr><td><strong>Repositorio público</strong><br><code>aws_ecrpublic_repository</code></td>
+      <td>Cualquiera, sin cuenta de AWS. Se listan en el <em>ECR Public Gallery</em>
+      (<code>public.ecr.aws</code>)</td>
+      <td>50 GB/mes de almacenamiento siempre gratis; 500 GB/mes de salida a internet para
+      anónimos y 5 TB/mes para autenticados; ilimitado hacia cómputo de AWS</td>
+      <td>Distribuir una imagen open source. No para tu aplicación.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>Si dudas, <strong>privado</strong>. «Público» aquí no significa «cómodo de usar»: significa
+  que cualquier persona del planeta puede descargar tu imagen y leer su contenido — incluidas
+  las credenciales que te dejaste en una capa intermedia y creíste borrar en la siguiente.</p>
+</div>
+
+<h2>Cómo funciona por dentro</h2>
+
+<h3>Autenticación: un token de 12 horas</h3>
+<p>ECR habla el protocolo estándar del registry de Docker, así que el cliente necesita usuario y
+contraseña. Lo que hace la CLI es <strong>convertir tus credenciales de IAM en una contraseña
+temporal</strong>:</p>
+<div class="code">
+  <div class="code-label"><span>shell</span><span class="tag">el login canónico</span></div>
+<pre><code>aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin \
+      111122223333.dkr.ecr.us-east-1.amazonaws.com</code></pre>
+</div>
+<ul>
+  <li>El usuario es literalmente <code>AWS</code>; la contraseña es el token que devuelve
+  <code>GetAuthorizationToken</code>, y <strong>vale 12 horas</strong>.</li>
+  <li>El token <strong>hereda los permisos del principal que lo pidió</strong>. No es una llave
+  maestra: si tu rol solo puede leer un repositorio, el token solo puede leer ese repositorio.</li>
+  <li>Para no repetir el login, existe el <a
+  href="https://github.com/awslabs/amazon-ecr-credential-helper">Amazon ECR Docker Credential
+  Helper</a>: lo configuras una vez en <code>~/.docker/config.json</code> y Docker pide el token
+  solo cuando lo necesita. Aviso: <strong>no soporta MFA</strong>.</li>
+  <li><strong>Y en ECS nada de esto ocurre.</strong> El pull lo hace el agente con el
+  <a href="./aws-ecs.html">execution role</a>: no hay <code>docker login</code>, no hay token que
+  guardar, no hay secreto en la task definition. Es la misma distinción de siempre — el pull
+  pasa <em>antes</em> de que tu código exista, así que el permiso es del execution role, nunca
+  del task role.</li>
+</ul>
+
+<h3>Tags mutables: el fallo de diseño que heredas de Docker</h3>
+<p>Por defecto un repositorio de ECR es <code>MUTABLE</code>: puedes volver a subir
+<code>mi-app:v2</code> con un contenido distinto y la etiqueta ahora apunta a otra imagen. Eso
+significa que <strong>«desplegar v2» deja de ser una afirmación reproducible</strong>: la v2 de
+hoy no es la v2 de ayer, tu rollback te devuelve a un artefacto que ya no existe, y dos tasks
+del mismo service pueden acabar corriendo binarios distintos si uno arrancó antes del re-push.</p>
+<p>Con <code>IMMUTABLE</code>, el segundo push de la misma etiqueta <strong>falla</strong>. Es
+un fallo que quieres: te obliga a etiquetar por SHA de commit o por versión, y a partir de ahí
+la etiqueta identifica un artefacto, para siempre.</p>
+<p>Desde el <a href="https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-ecr-exceptions-tag-immutability/">23
+de julio de 2025</a> hay cuatro valores, no dos — porque el todo-o-nada dejaba fuera el caso
+razonable de querer un <code>latest</code> móvil:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Valor</th><th>Qué hace</th></tr></thead>
+  <tbody>
+    <tr><td><code>MUTABLE</code></td><td>Cualquier etiqueta se puede sobrescribir. El valor por defecto.</td></tr>
+    <tr><td><code>IMMUTABLE</code></td><td>Ninguna etiqueta se puede sobrescribir. Lo que quieres para las versiones.</td></tr>
+    <tr><td><code>IMMUTABLE_WITH_EXCLUSION</code></td><td>Inmutable <em>salvo</em> las etiquetas que casen los filtros (p. ej. <code>latest*</code>, <code>dev-*</code>). <strong>La opción sensata.</strong></td></tr>
+    <tr><td><code>MUTABLE_WITH_EXCLUSION</code></td><td>Mutable salvo las que casen. Para proteger unas pocas etiquetas concretas.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Los filtros van en <code>image_tag_mutability_exclusion_filter</code>: de 1 a 5, con
+<code>filter_type = "WILDCARD"</code> y hasta dos <code>*</code> por patrón.</p>
+
+<h3 id="lifecycle">Lifecycle policies: el coste que crece en silencio</h3>
+<p>Cada build de tu CI sube una imagen. Ninguna se borra sola. A los seis meses tienes
+seiscientas revisiones de una aplicación que ejecuta una, pagando 0,10 USD por cada GB-mes de
+todas ellas. <strong>Es el coste oculto de ECR y no avisa</strong>: no hay alarma, no hay
+límite, solo una línea de factura que sube despacio.</p>
+<p>La <em>lifecycle policy</em> es la respuesta: un JSON de reglas que ECR evalúa y aplica
+<strong>en las 24 horas siguientes</strong> a que una imagen cumpla el criterio.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Campo</th><th>Valores</th></tr></thead>
+  <tbody>
+    <tr><td><code>tagStatus</code></td><td><code>tagged</code> · <code>untagged</code> · <code>any</code> (la regla con <code>any</code> debe llevar la <code>rulePriority</code> más alta: se evalúa la última)</td></tr>
+    <tr><td><code>countType</code></td><td><code>imageCountMoreThan</code> · <code>sinceImagePushed</code> · <code>sinceImagePulled</code> · <code>sinceImageTransitioned</code></td></tr>
+    <tr><td><code>action.type</code></td><td><code>expire</code> (borra) · <code>transition</code> (mueve a la clase <code>archive</code>)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Las dos reglas que debería tener todo repositorio, en este orden:</p>
+<ol>
+  <li><strong>Borrar las <code>untagged</code> a los pocos días.</strong> Son las que quedan
+  huérfanas cada vez que re-etiquetas: no las referencia nada y nadie las va a echar de menos.</li>
+  <li><strong>Quedarse con las <em>N</em> últimas etiquetadas.</strong>
+  <code>imageCountMoreThan: 20</code> te deja margen de sobra para volver atrás y corta la cola
+  infinita.</li>
+</ol>
+<p><code>expire</code> borra la imagen, y eso no se deshace. Antes de aplicar una política
+nueva, usa la <strong>vista previa</strong> de la consola o de la API para ver exactamente qué
+desaparecería.</p>
+
+<h3>Escaneo: básico o mejorado</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Basic scanning</th><th>Enhanced scanning</th></tr></thead>
+  <tbody>
+    <tr><td>Quién escanea</td><td>Tecnología propia de AWS, con más de 50 fuentes de datos (avisos de vendors, NVD, MITRE)</td><td><strong>Amazon Inspector</strong></td></tr>
+    <tr><td>Qué mira</td><td>Solo paquetes del sistema operativo</td><td>Sistema operativo <strong>y</strong> dependencias del lenguaje (npm, pip, Maven, Go…)</td></tr>
+    <tr><td>Cuándo</td><td>Al hacer push, o a mano</td><td>Al hacer push y <strong>de forma continua</strong>: un CVE publicado mañana reabre el hallazgo sobre la imagen de hoy</td></tr>
+    <tr><td>Coste</td><td><span class="tag-cost free">gratis</span> — 1 escaneo por imagen cada 24 h, hasta 100 000 imágenes por registry y día</td><td>0,09 USD por imagen escaneada la primera vez + 0,01 USD por reescaneo</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Aviso, porque internet cuenta lo viejo:</strong> durante años el escaneo básico de
+ECR se describía como «usa Clair». <a
+href="https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning-basic.html">Ya no</a>:
+hoy es tecnología propia de AWS. Y otro detalle que muerde: al activar el enhanced scanning,
+solo entran las imágenes <strong>subidas en los últimos 14 días</strong>; las más antiguas se
+quedan con estado <code>SCAN_ELIGIBILITY_EXPIRED</code> hasta que las vuelvas a subir.</p>
+<p>La diferencia práctica: el básico responde «¿tiene esta imagen una vulnerabilidad conocida
+<em>hoy</em>?»; el mejorado responde «avísame cuando la tenga». Si el runtime de tu contenedor
+son dependencias de npm — y en este curso lo son —, el básico no las mira siquiera.</p>
+
+<h3>Pull-through cache: el caso de uso real son los rate limits de Docker Hub</h3>
+<p>Docker Hub limita las descargas: <strong>100 pulls cada 6 horas por IP</strong> si eres
+anónimo, <strong>200 cada 6 horas</strong> con cuenta gratuita
+(<a href="https://docs.docker.com/docker-hub/usage/pulls/">docs.docker.com</a>, vigente a
+2026-08-30). Un cluster que escala, una pipeline de CI y una NAT Gateway compartida por todo el
+equipo — que hace que todos salgáis por <em>la misma IP</em> — consumen esa cuota en un rato. El
+síntoma es un despliegue que falla con <code>toomanyrequests</code> en el peor momento posible,
+por una razón que no está en tu cuenta de AWS.</p>
+<p>Una regla de pull-through cache convierte tu registry en un espejo bajo demanda: pides
+<code>&lt;cuenta&gt;.dkr.ecr.&lt;region&gt;.amazonaws.com/docker-hub/library/node:22</code>, ECR
+crea el repositorio la primera vez, se descarga la imagen del upstream y la sirve; las
+siguientes salen de tu registry. Revalida contra el upstream como mucho una vez cada 24 h.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Upstream</th><th>¿Credenciales?</th></tr></thead>
+  <tbody>
+    <tr><td>ECR Public, Kubernetes (<code>registry.k8s.io</code>), Quay</td><td>No</td></tr>
+    <tr><td>Docker Hub, GitHub Container Registry, GitLab (SaaS), Azure Container Registry, Chainguard</td><td>Sí — un secreto de <a href="./aws-secretsmanager.html">Secrets Manager</a> cuyo nombre <strong>debe empezar por <code>ecr-pullthroughcache/</code></strong>, en la misma cuenta y región</td></tr>
+    <tr><td>Otro ECR privado (incluso de otra cuenta)</td><td>Sí, pero por rol de IAM (<code>custom_role_arn</code>), no por secreto</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Tres avisos que ahorran una tarde: las imágenes cacheadas <strong>cuestan almacenamiento
+normal</strong> (son repositorios como cualquier otro, así que ponles su lifecycle policy);
+<strong>Lambda no puede tirar de pull-through cache</strong>; y la <strong>primera</strong>
+descarga necesita salida a internet aunque tengas los VPC endpoints puestos — el endpoint te
+conecta con ECR, no con Docker Hub.</p>
+
+<h3>Replicación</h3>
+<p>Reglas a nivel de <em>registry</em> (no de repositorio) que copian cada push a otras regiones
+u otras cuentas. Cuatro cosas que hay que saber antes de configurarla:</p>
+<ul>
+  <li><strong>Solo replica hacia adelante.</strong> Lo que ya estaba subido antes de crear la
+  regla no se copia; solo lo que se empuje después.</li>
+  <li><strong>Un solo salto.</strong> Lo replicado en el destino no se vuelve a replicar desde
+  allí.</li>
+  <li><strong>El permiso lo pone el destino</strong>, no el origen: la cuenta destino necesita
+  una política de registry que conceda al origen <code>ecr:ReplicateImage</code> y
+  <code>ecr:CreateRepository</code>.</li>
+  <li><strong>Las copias se pagan.</strong> Cada destino es almacenamiento normal a 0,10 USD por
+  GB-mes, más la transferencia entre regiones. Y las lifecycle policies <em>no</em> se replican:
+  si no pones una en el destino, ahí se acumula todo sin límite.</li>
+</ul>
+
+<h3 id="red">Hacer pull desde una subred privada: la trampa de la factura</h3>
+<p>Este es <strong>el</strong> error caro de ECR, y aparece justo en el proyecto 04. Tus tasks
+de ECS viven en subredes privadas. Para bajarse la imagen tienen dos caminos:</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th></th><th>Por NAT Gateway</th><th>Por VPC endpoints</th></tr></thead>
+  <tbody>
+    <tr><td>Cómo llega a ECR</td><td>Sale a internet y vuelve a entrar por el endpoint público</td><td>Se queda dentro de la red de AWS</td></tr>
+    <tr><td>Qué pagas</td><td>La NAT por hora <strong>más cada GB procesado</strong>, en cada arranque de cada task</td><td>Los dos endpoints de interfaz por hora; el de S3 es <em>gateway</em> y <strong>no cuesta nada</strong></td></tr>
+    <tr><td>Qué pasa al escalar</td><td>Veinte tasks arrancando = veinte descargas de la imagen pagadas a precio de NAT</td><td>Igual de rápido, sin coste por GB</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Los endpoints que hacen falta para un pull completo desde una subred sin salida a internet
+(Fargate platform version <code>1.4.0</code> o superior):</p>
+<div class="code">
+  <div class="code-label"><span>VPC endpoints</span><span class="tag">los cuatro, y ni uno menos</span></div>
+<pre><code>com.amazonaws.&lt;region&gt;.ecr.api    (interfaz)  la API de ECR: autorizacion, manifiestos
+com.amazonaws.&lt;region&gt;.ecr.dkr    (interfaz)  el protocolo Docker: push y pull
+com.amazonaws.&lt;region&gt;.s3         (GATEWAY)   las CAPAS viven en S3 — gratis, y obligatorio
+com.amazonaws.&lt;region&gt;.logs       (interfaz)  solo si usas el driver awslogs</code></pre>
+</div>
+<p><strong>El de S3 es el que todo el mundo olvida</strong>, y el síntoma es cruel: el task
+autentica bien, lee el manifiesto bien, y se queda colgado descargando capas hasta que falla con
+<code>CannotPullContainerError</code>. Como es un gateway endpoint, no cuesta nada — no hay
+ninguna razón para no ponerlo. Detalles en <a href="./aws-vpc.html">la ficha de VPC</a>.</p>
+
+<h2>Cuánto cuesta</h2>
+<p class="small">Verificado el <strong>2026-08-30</strong> en la región <code>us-east-1</code>
+contra la <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECR/current/us-east-1/index.json">Price
+List API</a> (oferta <code>AmazonECR</code>), la <a href="https://aws.amazon.com/ecr/pricing/">página
+de precios de ECR</a> y la <a href="https://aws.amazon.com/inspector/pricing/">de Amazon
+Inspector</a>.</p>
+<div class="scroll-x">
+<table class="cost-table">
+  <thead><tr><th>Concepto</th><th>Modelo</th><th>Precio</th></tr></thead>
+  <tbody>
+    <tr><td>Almacenamiento, repositorio privado</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD</code> por GB-mes</td></tr>
+    <tr><td>Free tier del privado</td><td><span class="tag-cost free">gratis</span></td><td><strong>500 MB/mes durante 12 meses</strong> (solo cuentas nuevas)</td></tr>
+    <tr><td>Transferencia de entrada (push)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td><strong>Pull desde ECS / Fargate / Lambda / EC2 en la misma región</strong></td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code> — literal en la página de precios</td></tr>
+    <tr><td>Salida a internet</td><td><span class="tag-cost usage">por uso</span></td><td>Primer GB/mes gratis, después <code>0,09 USD</code> por GB</td></tr>
+    <tr><td>Almacenamiento en clase <code>archive</code></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,10 USD</code>/GB-mes hasta 150 TB, luego <code>0,07 USD</code>; recuperación <code>0,03 USD</code>/GB</td></tr>
+    <tr><td>Firma de imágenes</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,02 USD</code> por firma</td></tr>
+    <tr><td>Basic scanning</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
+    <tr><td>Enhanced scanning (Inspector)</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,09 USD</code> por imagen (primer escaneo) + <code>0,01 USD</code> por reescaneo</td></tr>
+    <tr><td>Repositorio público</td><td><span class="tag-cost free">gratis</span></td><td>50 GB/mes de almacenamiento; 500 GB/mes de salida anónima, 5 TB/mes autenticada; ilimitado hacia cómputo de AWS</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p><strong>No es el almacenamiento: es la NAT.</strong> Una imagen de 500 MB, un service que
+  escala a 20 tasks cuatro veces al día, sin VPC endpoints: son 40 GB diarios cruzando la NAT
+  Gateway y pagándose por GB procesado. El almacenamiento de esa misma imagen cuesta 0,05 USD al
+  mes. <strong>El registry es barato; el camino hasta él, no.</strong> Y la línea de factura
+  aparece bajo «NAT Gateway», no bajo «ECR», así que cuesta atribuirla.</p>
+  <p>El segundo: <strong>la acumulación silenciosa</strong>. Sin lifecycle policy, cada build de
+  cada rama se queda para siempre. Ninguna imagen individual es cara — la suma de mil, sí. Dos
+  reglas de cinco líneas lo resuelven, y hay que ponerlas el día que creas el repositorio, no el
+  día que miras la factura.</p>
+</div>
+
+<h2>Límites que vas a chocar</h2>
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/general/latest/gr/ecr.html">Amazon
+ECR endpoints and quotas</a>, consultada el 2026-08-30.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Límite</th><th>Valor</th><th>¿Ajustable?</th></tr></thead>
+  <tbody>
+    <tr><td>Repositorios por región</td><td>100 000</td><td>Sí</td></tr>
+    <tr><td>Imágenes por repositorio</td><td>100 000</td><td>Sí</td></tr>
+    <tr><td>Tamaño máximo de una capa</td><td>52 000 MiB</td><td><strong>No</strong></td></tr>
+    <tr><td><strong>Reglas por lifecycle policy</strong></td><td><strong>50</strong></td><td><strong>No</strong></td></tr>
+    <tr><td>Longitud de la lifecycle policy</td><td>30 720 caracteres</td><td><strong>No</strong></td></tr>
+    <tr><td>Reglas de pull-through cache por registry</td><td>50</td><td><strong>No</strong></td></tr>
+    <tr><td>Reglas de replicación</td><td>25 reglas, 25 destinos únicos, 100 filtros por regla</td><td><strong>No</strong></td></tr>
+    <tr><td><code>GetAuthorizationToken</code></td><td>500/s</td><td>Sí</td></tr>
+    <tr><td><code>BatchGetImage</code></td><td>2 000/s</td><td>Sí</td></tr>
+    <tr><td><code>GetDownloadUrlForLayer</code></td><td>3 000/s</td><td>Sí</td></tr>
+    <tr><td><code>PutImage</code></td><td>10/s</td><td>Sí — el más bajo con diferencia; una CI que sube muchas etiquetas a la vez lo nota</td></tr>
+    <tr><td>Basic scanning</td><td>100 000 imágenes por registry cada 24 h; 1 escaneo por imagen cada 24 h</td><td><strong>No</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">AWS documenta ritmos sostenidos por segundo, pero <strong>no publica valores de
+burst</strong> para la API de ECR. Si lees una cifra de burst por ahí, no viene de la
+documentación oficial.</p>
+
+<h2>Cuándo NO usarlo</h2>
+<div class="verdict">
+  <div class="yes"><h3>Úsalo si</h3><ul>
+    <li>Tu cómputo está en AWS: el pull en la misma región es gratis y rápido.</li>
+    <li>Quieres autorizar con IAM, sin credenciales de registry que rotar.</li>
+    <li>La imagen es privada y quieres que siga siéndolo.</li>
+    <li>Necesitas escaneo continuo integrado con el resto de tu seguridad.</li>
+  </ul></div>
+  <div class="no"><h3>No lo uses si</h3><ul>
+    <li>Distribuyes una imagen open source al mundo y ya vives en GitHub: GHCR está pegado a tu
+    repositorio y a tus releases.</li>
+    <li>Tu cómputo está en otra nube: pagarías salida a internet en cada pull.</li>
+    <li>Es un experimento local que nunca sale de tu portátil.</li>
+  </ul></div>
+</div>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Se confunde con</th><th>Diferencia real</th><th>Elige el otro cuando</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Docker Hub</strong></td>
+      <td>Rate limits reales (100 pulls/6 h anónimo, 200 autenticado gratis), autenticación con
+      usuario y contraseña, y latencia de internet en cada pull. ECR no limita las descargas,
+      autoriza con IAM y sirve dentro de la región.</td>
+      <td>Publicas una imagen para el mundo y quieres el sitio donde el mundo la busca primero.</td></tr>
+    <tr><td><strong>GitHub Container Registry</strong> (GHCR)</td>
+      <td>Vive junto al código y a las GitHub Actions que lo construyen; los permisos son los del
+      repositorio de GitHub, no los de tu cuenta de AWS. El pull desde AWS sale por internet.</td>
+      <td>El artefacto es parte del proyecto open source y quien lo consume también está en
+      GitHub. Para un despliegue en AWS, ECR gana por latencia y por coste de transferencia.</td></tr>
+    <tr><td><strong>Un bucket de <a href="./aws-s3.html">S3</a> con un <code>.tar</code></strong></td>
+      <td>Guardar la imagen como fichero funciona, pero pierdes todo lo que hace útil a un
+      registry: capas compartidas, resolución de etiquetas, escaneo, y que ECS sepa hacer pull
+      sola.</td>
+      <td>Nunca para imágenes de contenedor. Para el ZIP de una Lambda, sí — es lo que hacéis
+      en el proyecto 01.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>En Terraform</h2>
+<div class="code">
+  <div class="code-label"><span>HCL</span><span class="tag">repositorio + limpieza automática</span></div>
+<pre><code>resource "aws_ecr_repository" "app" {
+  name                 = "app"
+  image_tag_mutability = "IMMUTABLE_WITH_EXCLUSION"
+
+  image_tag_mutability_exclusion_filter {
+    filter      = "latest"     # solo esta etiqueta se puede mover
+    filter_type = "WILDCARD"
+  }
+
+  image_scanning_configuration {
+    scan_on_push = true        # basic scanning, gratis
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Borrar las untagged a los 7 dias"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Quedarse con las 20 ultimas etiquetadas"
+        selection = {
+          tagStatus     = "tagged"
+          tagPatternList = ["*"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 20
+        }
+        action = { type = "expire" }
+      },
+    ]
+  })
+}</code></pre>
+</div>
+<div class="callout trap">
+  <span class="callout-title">Trampas conocidas</span>
+  <ul>
+    <li><strong>El <code>destroy</code> falla si el repositorio tiene imágenes.</strong>
+    Terraform no borra artefactos por su cuenta. O lo vacías a mano, o pones
+    <code>force_delete = true</code> — y entonces sí, el <code>destroy</code> se lleva las
+    imágenes por delante sin preguntar.</li>
+    <li><strong>Solo cabe un <code>aws_ecr_lifecycle_policy</code> por repositorio.</strong>
+    Varias reglas van dentro del mismo JSON, no en varios recursos.</li>
+    <li><strong>Las reglas deben ir ordenadas por <code>rulePriority</code> ascendente</strong>
+    en el código. La API de ECR las reordena, y si tú las escribiste desordenadas el recurso sale
+    marcado para recrear en <em>cada</em> <code>plan</code>: diff perpetuo.</li>
+    <li><strong>Terraform crea el repositorio, no sube la imagen.</strong> El <code>apply</code>
+    termina y el repositorio está vacío: si el service de ECS ya apunta a una etiqueta que nadie
+    ha subido, los tasks mueren en <code>PENDING</code>. El orden es: repositorio →
+    <code>docker push</code> → service.</li>
+    <li><strong>En una regla <code>tagged</code>, <code>tagPatternList</code> y
+    <code>tagPrefixList</code> son excluyentes</strong>: uno u otro, nunca los dos.</li>
+    <li><strong>La inmutabilidad y el pull-through cache se pelean.</strong> Un repositorio
+    cacheado necesita poder refrescar etiquetas para seguir al upstream; márcalo
+    <code>MUTABLE</code>.</li>
+  </ul>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 3 · coste</p>
+  <p class="quiz-q">Tus tasks de Fargate viven en subredes privadas con NAT Gateway, sin VPC
+  endpoints, y bajan una imagen de 500 MB en cada arranque. ¿Dónde aparece de verdad el coste de
+  esos pulls?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El pull desde Fargate a ECR en la misma región es gratis por parte de ECR, pero el tráfico pasa por la NAT Gateway, que cobra por hora y por GB procesado. La línea de factura dice NAT Gateway, no ECR, y por eso cuesta tanto atribuirla.">En tu NAT Gateway, que cobra por cada gigabyte que procesa</button></li>
+    <li><button data-correct="false" data-why="La página de precios de ECR es explícita: la transferencia entre ECR y servicios de AWS de la misma región (EC2, Lambda, App Runner, Fargate) es de 0,00 USD por GB. Los pulls en sí no generan línea de factura.">En la transferencia de ECR, que cobra por cada gigabyte servido</button></li>
+    <li><button data-correct="false" data-why="El almacenamiento se paga una vez por GB-mes por tener la imagen guardada, no cada vez que alguien la descarga. Bajar la misma imagen mil veces no multiplica el coste de almacenamiento.">En el almacenamiento de ECR, que cobra por cada descarga completa</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 3 · elegir variante</p>
+  <p class="quiz-q">Tu CI sube <code>app:&lt;sha&gt;</code> en cada commit y además mueve
+  <code>app:latest</code> para que el entorno de desarrollo siempre tenga lo último. ¿Qué
+  <code>image_tag_mutability</code> pones?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Es exactamente el caso para el que AWS añadió las exclusiones en julio de 2025: las etiquetas de versión quedan congeladas y reproducibles, y latest sigue pudiendo moverse. Antes había que elegir entre las dos cosas.">IMMUTABLE_WITH_EXCLUSION con un filtro que deje mover solo latest</button></li>
+    <li><button data-correct="false" data-why="Funcionaría para latest y rompería lo importante: con todo mutable, alguien puede volver a subir un SHA con contenido distinto y tu rollback te devuelve a un artefacto que ya no es el que desplegaste. Pierdes la reproducibilidad entera.">MUTABLE sin filtros, que deja mover cualquier etiqueta libremente</button></li>
+    <li><button data-correct="false" data-why="Congela también latest, así que el segundo push de esa etiqueta falla y la pipeline se rompe todos los días. Es la opción correcta solo si ninguna etiqueta necesita moverse nunca.">IMMUTABLE sin filtros, que impide mover cualquier etiqueta existente</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 3 · el diagnóstico</p>
+  <p class="quiz-q">Pusiste los endpoints <code>ecr.api</code> y <code>ecr.dkr</code> en tu VPC
+  privada sin NAT. El task autentica, lee el manifiesto, y luego falla con
+  <code>CannotPullContainerError</code>. ¿Qué falta?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="ECR guarda las capas de las imágenes en S3, así que descargarlas necesita alcanzar S3. El gateway endpoint de S3 no cuesta nada, lo que hace que olvidarlo sea aún más frustrante: no había ninguna razón para no ponerlo.">El gateway endpoint de S3, donde ECR guarda las propias capas</button></li>
+    <li><button data-correct="false" data-why="Una NAT Gateway resolvería el síntoma sacando el tráfico a internet, pero es justo lo que los endpoints existen para evitar: pagarías por hora y por GB para llegar a un servicio que ya tenías dentro de la red de AWS.">Una NAT Gateway extra, con la que ECR alcanza las capas</button></li>
+    <li><button data-correct="false" data-why="El execution role sí es el que hace el pull, pero un permiso ausente falla antes: no habrías conseguido autenticar ni leer el manifiesto. Que esas dos fases pasen y la descarga no señala un problema de ruta, no de permisos.">Un permiso del execution role, con el que descargar las capas</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./aws-ecs.html">Ficha: Amazon ECS</a>
+    <a href="./aws-vpc.html">Ficha: Amazon VPC</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./README.md">Todas las referencias</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la <a
+    href="https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html">Amazon ECR
+    User Guide</a>, las <a
+    href="https://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html">lifecycle
+    policies</a> (léelas el día que crees tu primer repositorio, no seis meses después) y los <a
+    href="https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html">VPC
+    endpoints de ECR</a>, que es donde está escrito lo del bucket de capas. Cualquier duda,
+    pregúntame en la sesión.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

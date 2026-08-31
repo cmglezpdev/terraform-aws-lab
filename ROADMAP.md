@@ -36,9 +36,10 @@ del que más vas a hablar en una entrevista.
 
 Antes de cualquier `apply` en `04` y `06`: mira el reloj, y pon una alarma en el móvil.
 Los recursos que cobran por hora estén o no en uso son: **NAT Gateway** (~0,045 USD/h),
-**ALB** (~0,023 USD/h), **RDS** (~0,017 USD/h en `db.t4g.micro`), **EKS control plane**
-(0,10 USD/h), **IPv4 pública** (0,005 USD/h por IP). Todo lo demás en este roadmap es
-pago por uso y con tu volumen es prácticamente cero.
+**ALB** (~0,023 USD/h + sus 2 IPv4), **RDS** (~0,016 USD/h en `db.t4g.micro`), **EKS control
+plane** (0,10 USD/h), **IPv4 pública** (0,005 USD/h por IP). Todo lo demás en este roadmap es
+pago por uso y con tu volumen es prácticamente cero. _(Cifras reverificadas el 2026-08-30
+contra la Price List API; el detalle vive en las fichas de `reference/`.)_
 
 
 ## Lecciones publicadas

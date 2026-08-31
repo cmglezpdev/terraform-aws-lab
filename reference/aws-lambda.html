@@ -20,7 +20,7 @@
     <div><dt>Ámbito</dt><dd>Regional</dd></div>
     <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span></dd></div>
     <div><dt>¿Se puede dejar puesto?</dt><dd><strong>Sí.</strong> Cero peticiones = cero factura. La excepción es la <em>concurrencia aprovisionada</em>, que sí cobra por hora.</dd></div>
-    <div><dt>Recurso Terraform</dt><dd><code>aws_lambda_function</code></dd></div>
+    <div><dt>Recurso Terraform</dt><dd><code>aws_lambda_function</code> · <code>aws_lambda_function_url</code></dd></div>
     <div><dt>Aparece en</dt><dd>proyectos 01, 02, 03</dd></div>
   </dl>
 </header>
@@ -123,7 +123,12 @@ latencia o lo que puedes desplegar. Confundirlos es de donde salen la mayoría d
 </table>
 </div>
 
-<h3>3. Cómo la invocan</h3>
+<h3 id="modelo-invocacion">3. Cómo la invocan</h3>
+
+<p>Este eje es el que más consecuencias tiene y el que menos se explica. No es «cómo se llama a
+la función»: es <strong>quién es responsable de que el evento no se pierda</strong>, y por tanto
+dónde tiene que vivir la cola de fracasos.</p>
+
 <div class="scroll-x">
 <table>
   <thead><tr><th>Modelo</th><th>Qué lo distingue</th><th>Quién lo usa</th><th>Qué pasa si falla</th></tr></thead>
@@ -131,24 +136,85 @@ latencia o lo que puedes desplegar. Confundirlos es de donde salen la mayoría d
     <tr>
       <td><strong>Síncrono</strong><br><code>RequestResponse</code></td>
       <td>Quien llama espera la respuesta.</td>
-      <td>API Gateway, Function URL, <code>aws lambda invoke</code>.</td>
+      <td>API Gateway, Function URL, ALB, <code>aws lambda invoke</code>.</td>
       <td><strong>Nada.</strong> El error viaja al que llamó; Lambda no reintenta.</td>
     </tr>
     <tr>
       <td><strong>Asíncrono</strong><br><code>Event</code></td>
-      <td>Lambda encola el evento y responde <code>202</code> al instante.</td>
+      <td>Lambda encola el evento en <em>su</em> cola interna y responde <code>202</code> al instante.</td>
       <td>S3, SNS, EventBridge.</td>
-      <td>Lambda <strong>reintenta dos veces</strong>. Si se agotan, el evento se pierde salvo que haya destino de fallo o DLQ.</td>
+      <td>Lambda <strong>reintenta dos veces</strong>. Si se agotan, el evento se pierde salvo que haya destino de fallo o DLQ <em>de función</em>.</td>
     </tr>
     <tr>
       <td><strong>Event source mapping</strong></td>
       <td>Lambda <em>hace polling</em> del origen y te entrega lotes.</td>
-      <td>SQS, Kinesis, DynamoDB Streams.</td>
-      <td>Lo decide el origen: visibility timeout y redrive policy de la cola.</td>
+      <td>SQS, Kinesis, DynamoDB Streams, MSK, Kafka, MQ, DocumentDB.</td>
+      <td>Lo decide el origen: visibility timeout y redrive policy <em>de la cola</em>.</td>
     </tr>
   </tbody>
 </table>
 </div>
+
+<p><strong>Síncrono: el error es del que llama.</strong> Lambda ejecuta y devuelve. Si la función lanza, la respuesta lleva el error y
+<strong>Lambda no reintenta nunca</strong>: quien decide qué hacer es el invocador. API Gateway
+te devuelve el error tal cual; el SDK de AWS sí reintenta por su cuenta, con su propia política,
+que no es de Lambda. Límite: <code>6 MB</code> de petición y <code>6 MB</code> de respuesta
+—salvo en streaming, ver <a href="#response-streaming">más abajo</a>.</p>
+
+<p><strong>Asíncrono: hay una cola que no ves.</strong> El invocador entrega el evento y recibe <code>202</code>. A partir de ahí el dueño del evento
+es Lambda, que lo guarda en una cola interna gestionada por ella. Los números exactos:</p>
+<ul>
+  <li><strong>Errores de la función</strong> (excepción, timeout): <strong>dos reintentos</strong>,
+  con <strong>1 minuto</strong> de espera antes del segundo intento y <strong>2 minutos</strong>
+  antes del tercero.</li>
+  <li><strong>Throttling (429) y errores del sistema (5xx)</strong>: <em>no</em> gastan reintentos.
+  Lambda devuelve el evento a la cola y lo sigue intentando <strong>hasta 6 horas</strong>, con
+  backoff exponencial de 1 s a 5 min.</li>
+  <li>Configurable con <code>aws_lambda_function_event_invoke_config</code>:
+  <code>maximum_retry_attempts</code> entre <strong>0 y 2</strong> (por defecto 2) y
+  <code>maximum_event_age_in_seconds</code> entre <strong>60 y 21 600</strong> s (6 h).</li>
+  <li>La cola es <em>eventually consistent</em>: <strong>tu función puede recibir el mismo evento
+  dos veces aunque no falle</strong>. Idempotencia no es opcional.</li>
+  <li>Payload máximo: <code>1 MB</code>, no <code>6 MB</code>.</li>
+</ul>
+
+<p><strong>Event source mapping: Lambda es el consumidor, no el destino.</strong> Aquí <strong>nadie invoca la función</strong>. Lambda crea un recurso propio —el <em>event
+source mapping</em>, con sus <em>event pollers</em>— que lee del origen y llama a tu handler con
+un <strong>lote</strong> de registros. Lo que decide cuándo se dispara el lote son tres
+condiciones, la primera que se cumpla: se llena el <code>batch_size</code>, expira la ventana
+<code>maximum_batching_window_in_seconds</code> (0–300 s; por defecto 0 para SQS, Kinesis y
+DynamoDB) o el payload llega a <code>6 MB</code>. Los reintentos y la retención los gobierna el
+<em>origen</em>, no Lambda: para SQS, el <code>visibility_timeout_seconds</code> y el
+<code>maxReceiveCount</code> de la <code>redrive_policy</code>; para streams, se reprocesa el
+lote entero y un error repetido <strong>bloquea la shard</strong> hasta que se resuelve o los
+registros expiran.</p>
+
+<div class="callout trap">
+  <span class="callout-title">La consecuencia que decide la lección 12: dónde va la DLQ</span>
+  <p>Hay <strong>dos DLQ posibles</strong> y elegir la equivocada produce una cola que nunca
+  recibe nada:</p>
+  <ul>
+    <li><strong>DLQ de la función</strong> (<code>dead_letter_config</code>) o destino
+    <code>on_failure</code>: solo funcionan para invocación <strong>asíncrona</strong>. Recogen
+    lo que la cola interna de Lambda descarta.</li>
+    <li><strong>DLQ de la cola</strong> (la <code>redrive_policy</code> de SQS): es la que
+    aplica cuando el origen es <strong>SQS con event source mapping</strong>. La documentación
+    es explícita: <em>«si usas Amazon SQS como event source, configura la dead-letter queue en
+    la propia cola de SQS y no en la función de Lambda»</em>.</li>
+  </ul>
+  <p>Poner <code>dead_letter_config</code> en una Lambda que consume de SQS es el error clásico:
+  Terraform aplica sin quejarse, la cola se crea, y no llega ni un mensaje nunca. Detalle en la
+  <a href="./aws-sqs.html">ficha de SQS</a>.</p>
+</div>
+
+<p>Y la otra diferencia práctica entre las dos formas de guardar el fracaso: un
+<strong>destino <code>on_failure</code></strong> escribe un JSON con contexto —
+<code>requestPayload</code>, <code>responseContext</code>, <code>condition</code>
+(<code>RetriesExhausted</code>), número de intentos— y admite SQS, SNS, S3, EventBridge y otra
+Lambda. La <strong>DLQ de función</strong> manda el evento <em>a pelo</em>, solo con atributos
+(<code>RequestID</code>, <code>ErrorCode</code>, el primer KB del mensaje de error), y solo
+admite SQS o SNS estándar. Para diagnosticar, el destino gana; la DLQ de función es la forma
+antigua y sigue ahí por compatibilidad.</p>
 
 <h3>4. Cuánta concurrencia le reservas</h3>
 <div class="scroll-x">
@@ -171,10 +237,52 @@ latencia o lo que puedes desplegar. Confundirlos es de donde salen la mayoría d
       <td><strong>Aprovisionada</strong></td>
       <td>Mantiene entornos ya inicializados. Mata el cold start.</td>
       <td>APIs con requisitos duros de latencia p99.</td>
-      <td><span class="tag-cost hour">por hora</span> ≈ <code>0,0019 USD/h</code> a 128 MB</td>
+      <td><span class="tag-cost hour">por hora</span> ≈ <code>0,0019 USD/h</code> a 128 MB en x86</td>
     </tr>
   </tbody>
 </table>
+</div>
+
+<p>Los números que hay detrás, y que casi nadie conoce hasta que choca con ellos:</p>
+<ul>
+  <li><strong>El pozo de la cuenta son 1.000 ejecuciones concurrentes</strong> por región, se
+  amplía a decenas de miles pidiéndolo. Lo que <em>no</em> se amplía es el reparto: Lambda
+  <strong>siempre deja 100 unidades sin reservar</strong>, así que en una cuenta por defecto
+  solo puedes repartir <strong>900</strong> entre todas tus funciones con concurrencia reservada.
+  Compruébalo con <code>aws lambda get-account-settings</code>: el campo se llama
+  <code>UnreservedConcurrentExecutions</code>.</li>
+  <li><strong>Existe un segundo techo, en peticiones por segundo, que es 10 × la
+  concurrencia.</strong> Con el límite por defecto son <strong>10.000 req/s</strong> en la cuenta.
+  Y muerde antes que la concurrencia cuando la función es rápida: una función de 50 ms a 20.000
+  req/s solo necesita concurrencia 1.000 —cabría— pero se ahoga igual, porque el tope de
+  peticiones son 10.000. Subir la concurrencia es lo que sube las dos cosas.</li>
+  <li><strong>Velocidad de escalado: 1.000 entornos nuevos cada 10 segundos <em>por
+  función</em></strong>, en cualquier región. Es un límite por función, no por cuenta, así que
+  tus funciones escalan sin quitarse velocidad entre ellas.</li>
+  <li><strong>Al chocar, es <code>429 TooManyRequestsException</code></strong>, con el detalle de
+  que quien lo sufre depende del modelo de invocación: en síncrono el <code>429</code> viaja al
+  cliente; en asíncrono Lambda lo reintenta en silencio hasta 6 h; en event source mapping el
+  mensaje simplemente se queda en la cola.</li>
+  <li><strong>La concurrencia reservada a <code>0</code> es el interruptor de apagado.</strong>
+  Es la forma documentada de cortar el tráfico de una Function URL en caliente o de parar una
+  función que se ha vuelto loca.</li>
+  <li><strong>La aprovisionada no aparece al instante</strong>: Lambda tarda un par de minutos en
+  empezar y aprovisiona hasta 6.000 entornos por minuto, y hasta que termina de asignarlos
+  <em>todos</em> no puedes usar ninguno.</li>
+</ul>
+
+<div class="callout cost">
+  <span class="callout-title">La trampa de precio de la concurrencia aprovisionada</span>
+  <p>Se cuenta siempre como «cuesta un extra por hora», y es verdad —<code>0,0000041667 USD</code>
+  por GB-segundo en x86, <code>0,0000033334</code> en arm64, factures o no factures
+  invocaciones—. Lo que casi nunca se cuenta es la otra mitad: mientras está activa, la
+  <strong>duración de las invocaciones se cobra más barata</strong>,
+  <code>0,0000097222 USD/GB-s</code> en x86 frente a <code>0,0000166667</code> del modo normal.
+  O sea, un <strong>42% menos</strong>. A tráfico muy alto y sostenido la cuenta puede salir a
+  favor; a tráfico bajo, jamás — pagas el alquiler y apenas usas el descuento.</p>
+  <p>Y la trampa dentro de la trampa: no puedes asignar más concurrencia aprovisionada que
+  reservada, y si igualas las dos, <strong>estrangulas <code>$LATEST</code></strong> — la versión
+  sin publicar deja de poder ejecutarse.</p>
 </div>
 
 <div class="callout aws">
@@ -207,7 +315,47 @@ tarda menos de la mitad, el GB-segundo total baja. No es intuitivo y hay que med
 
 <p><strong>4. El disco es mentira.</strong> Tienes <code>/tmp</code>, entre 512 MB y 10.240 MB,
 y desaparece con el entorno. Todo lo que tenga que durar más que una invocación vive en otro
-sitio: S3, DynamoDB, RDS.</p>
+sitio: S3, DynamoDB, RDS. Ojo: el <code>/tmp</code> por encima de 512 MB
+<strong>se factura aparte</strong> — <code>0,0000000309 USD</code> por GB-segundo.</p>
+
+<p id="init-facturado"><strong>5. El cold start ya no es gratis.</strong> Hasta 2025, la fase
+<em>Init</em> de una función zip con runtime gestionado y concurrencia bajo demanda no se
+facturaba: veías el <code>Init Duration</code> en los logs, aparte de la
+<code>Billed Duration</code>. <strong>Desde el 1 de agosto de 2025 la Init entra en la duración
+facturada</strong> en todas las configuraciones. El impacto real es pequeño —la Init ocurre en
+una fracción diminuta de las invocaciones— pero cambia el consejo: el código que declaras
+<em>fuera</em> del handler ya no es tiempo regalado, y cualquier tutorial anterior a esa fecha
+que diga «la inicialización no se cobra» está desactualizado. Fuente:
+<a href="https://aws.amazon.com/blogs/compute/aws-lambda-standardizes-billing-for-init-phase/">AWS
+Lambda standardizes billing for INIT Phase</a>.</p>
+
+<h3 id="bucles-recursivos">El freno de emergencia: recursive loop detection</h3>
+
+<p>El susto clásico de serverless: una Lambda que se dispara con un objeto de S3 y escribe su
+resultado <em>en el mismo bucket</em>. O que consume de una cola y publica en esa cola. El bucle
+no tiene fin, escala hasta comerse los 1.000 de la cuenta, y la factura llega el día 1.</p>
+
+<p>Lambda lo detecta y lo corta <strong>de serie, sin configurar nada y sin coste</strong>. Cómo:
+los servicios compatibles anotan el evento con cabeceras de traza tipo X-Ray (no hace falta
+activar X-Ray) que llevan la cuenta de cuántas veces ese mismo evento ha invocado la función.
+Al llegar a <strong>~16 invocaciones en la misma cadena de peticiones</strong>, Lambda
+<strong>deja de invocar</strong>, emite la métrica <code>RecursiveInvocationsDropped</code> y te
+avisa por Health Dashboard y por correo (una vez cada 24 h por función; puede tardar hasta
+3,5 h en llegar).</p>
+
+<div class="callout trap">
+  <span class="callout-title">Hasta dónde llega el freno — y hasta dónde no</span>
+  <p>Solo detecta bucles que pasen por <strong>SQS, SNS, S3 y Lambda</strong>. Un bucle que
+  pase por DynamoDB, EventBridge o cualquier otro servicio <strong>no se detecta</strong>: sigue
+  girando hasta que lo veas tú. Ese es el argumento real para tener alarmas de facturación y de
+  concurrencia — el detector es una red de seguridad parcial, no un cinturón.</p>
+  <p>Además necesita que tu función use una versión mínima del SDK de AWS
+  (<code>3.105.0</code> o superior para el SDK v3 de Node). Si empaquetas el SDK con un bundler
+  —como hace este curso— comprueba la versión; el runtime trae una, pero la que manda es la que
+  esté en tu bundle.</p>
+  <p>Se desactiva a propósito con <code>put-function-recursion-config --recursive-loop Allow</code>.
+  No lo hagas.</p>
+</div>
 
 <div class="callout trap">
   <span class="callout-title">Los logs no son «de Lambda»</span>
@@ -219,6 +367,321 @@ sitio: S3, DynamoDB, RDS.</p>
   <p>Ese grupo lo crea Lambda solo la primera vez, y entonces <strong>no pertenece a
   Terraform</strong>: sobrevive a tu <code>destroy</code> y sigue acumulando coste de
   almacenamiento. Decláralo tú.</p>
+</div>
+
+<h3 id="lambda-en-vpc">Lambda dentro de una VPC: el mito que internet sigue repitiendo</h3>
+
+<p>Por defecto <strong>tu Lambda no está en ninguna VPC tuya</strong> — corre en una VPC que
+gestiona AWS, invisible para ti, y tiene salida a internet. Solo la «metes en tu VPC» cuando
+necesita hablar con algo que solo vive ahí: una RDS privada, un ElastiCache, un servicio interno.
+Y ahí cambian tres cosas de golpe.</p>
+
+<div class="callout trap">
+  <span class="callout-title">1. «Poner una Lambda en VPC añade segundos de cold start» — falso desde 2019</span>
+  <p>Es la afirmación más repetida y más obsoleta de todo el ecosistema serverless, y sigue viva
+  en blogs, cursos y respuestas de foros. Era <strong>cierta hasta 2019</strong>: cada entorno de
+  ejecución creaba su propia ENI en el momento de arrancar, y eso costaba entre 10 y 20 segundos.
+  Con la llegada de las <strong>Hyperplane ENI</strong> el trabajo se movió: la interfaz se crea
+  <strong>al crear o actualizar la función</strong>, no al invocarla, y se
+  <strong>comparte</strong> entre todas las funciones de tu cuenta que usen la misma combinación
+  de <em>subred + security group</em>. Cada Hyperplane ENI aguanta hasta 65.000 conexiones y
+  Lambda añade más según hagan falta. <strong>El cold start de una función en VPC hoy es
+  prácticamente el mismo que fuera de ella.</strong></p>
+  <p>Lo que sí paga el precio es el <em>despliegue</em>: al crear la función por primera vez con
+  esa combinación de subred y SG, la función queda en estado <code>Pending</code> y
+  <strong>no se puede invocar</strong> hasta que la ENI está lista, lo que puede tardar varios
+  minutos. Y al quitar la configuración de VPC, Lambda tarda <strong>hasta 20 minutos</strong> en
+  borrar la ENI. Eso se nota en <code>terraform apply</code>, no en producción.</p>
+</div>
+
+<p><strong>2. Al entrar en tu VPC, se acabó internet.</strong> Esto sí es una regla dura y es
+donde se atasca todo el mundo: <em>«by default, Lambda functions have access to the public
+internet. When you attach your function to a VPC, it can only access resources available within
+that VPC»</em>. Una Lambda en subred privada <strong>no puede llamar a la API de S3, ni a la de
+DynamoDB, ni a Bedrock, ni a un endpoint externo</strong>. Y meterla en una subred
+<em>pública</em> tampoco arregla nada: no recibe IP pública. Las dos salidas reales son un
+<strong>NAT Gateway</strong> (que cuesta por hora y por GB, y es de los recursos que hay que
+destruir al terminar la sesión) o <strong>VPC endpoints</strong> hacia los servicios concretos
+que necesites. El criterio, en una frase: <strong>si tu Lambda no necesita hablar con nada
+privado, no la metas en una VPC</strong>. La ficha de VPC —
+<code>reference/aws-vpc.html</code>, pendiente— desarrolla esa decisión.</p>
+
+<p><strong>3. Hace falta permiso extra en el rol.</strong> Para crear y borrar las ENI, el rol de
+ejecución necesita <code>ec2:CreateNetworkInterface</code>,
+<code>ec2:DescribeNetworkInterfaces</code>, <code>ec2:DeleteNetworkInterface</code> y compañía —
+la política gestionada se llama <code>AWSLambdaVPCAccessExecutionRole</code>. Con un matiz de
+seguridad que la doc admite abiertamente: esos permisos <strong>también se los estás dando a tu
+código</strong>, que a partir de ahí puede llamar a esas APIs de EC2. Si te importa,
+la propia doc recomienda un <code>Deny</code> con la condición
+<code>lambda:SourceFunctionArn</code>, que solo aplica a las llamadas que hace <em>tu código</em>
+y no a las que hace el servicio Lambda por ti.</p>
+
+<p class="small">Otro detalle que sorprende: si una función en VPC pasa <strong>14 días sin
+invocarse</strong>, Lambda recupera la ENI y la deja en estado <code>Inactive</code>. La
+siguiente invocación <strong>falla</strong> y la función vuelve a <code>Pending</code> hasta
+tener ENI. Fuente:
+<a href="https://docs.aws.amazon.com/lambda/latest/dg/foundation-networking.html">Giving Lambda
+functions access to resources in an Amazon VPC</a>, consultada el 2026-08-30.</p>
+
+<h2 id="function-urls">Function URLs: HTTPS sin API Gateway</h2>
+
+<p>Una <strong>Function URL</strong> es un endpoint HTTPS dedicado y permanente que Lambda te
+genera para una función, con la forma
+<code>https://&lt;url-id&gt;.lambda-url.&lt;región&gt;.on.aws</code>. Nada más. No hay recurso de
+API, ni stages, ni rutas, ni integraciones: la URL entra directa a tu handler, y el evento que
+recibes usa el <strong>mismo esquema que el payload format 2.0 de API Gateway HTTP API</strong>,
+así que el código es portable entre las dos.</p>
+
+<p>Se cuelga del <code>$LATEST</code> o de un <strong>alias</strong> —no de una versión numerada—
+y una vez creada <strong>su dirección no cambia nunca</strong>. Si la borras y creas otra, es
+otra dirección.</p>
+
+<div class="callout win">
+  <span class="callout-title">Lo que cuesta: nada</span>
+  <p>«There are no additional charges for the URL endpoint itself.» Pagas las invocaciones y la
+  duración de la Lambda, exactamente igual que si la llamaras con el SDK. Comparado con API
+  Gateway HTTP API (1,00 USD por millón de peticiones tras la capa gratuita) o con un ALB (que
+  cobra <strong>por hora esté o no en uso</strong>), es la única de las tres puertas HTTP que
+  respeta la promesa de «cero en reposo».</p>
+</div>
+
+<h3>Las dos autenticaciones, y por qué una da miedo</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th><code>authorization_type</code></th><th>Qué exige a quien llama</th><th>Cuándo tiene sentido</th><th>El riesgo</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>AWS_IAM</code></td>
+      <td>Firmar cada petición con <strong>SigV4</strong>. Lambda recalcula la firma y solo ejecuta si coincide.</td>
+      <td>Llamadas máquina a máquina, otro servicio tuyo, otra cuenta. El identificador del que llama te llega en <code>requestContext.authorizer.iam</code>.</td>
+      <td>Un navegador no sabe firmar SigV4. Si el cliente es un frontend público, esto no te vale.</td>
+    </tr>
+    <tr>
+      <td><code>NONE</code></td>
+      <td><strong>Nada.</strong> Cualquiera en internet con la URL ejecuta tu función.</td>
+      <td>Un webhook público, una demo. Y solo si la función se autentica ella misma (cabecera secreta, firma del emisor).</td>
+      <td>La URL <em>es</em> la credencial. Y las URLs se filtran: en logs, en el historial de git, en una captura de pantalla.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Tres cosas que <code>NONE</code> hace a tus espaldas</span>
+  <p><strong>1. No hay rate limiting.</strong> Ninguno. Una Function URL escala hasta la
+  concurrencia de tu función y cada petición se factura. Con una URL pública y una Lambda que
+  llama a un modelo de IA, un bucle ajeno te vacía el presupuesto en minutos. El único freno que
+  existe es <code>reserved_concurrent_executions</code>: el techo de peticiones por segundo es
+  <strong>10 × la concurrencia reservada</strong>, y al pasarse el cliente recibe
+  <code>429</code>. Ponerla a <code>0</code> apaga la URL entera.</p>
+  <p><strong>2. Terraform crea una política de recurso que luego no borra.</strong> Al poner
+  <code>authorization_type = "NONE"</code>, AWS añade sola una política con
+  <code>lambda:InvokeFunctionUrl</code> y <code>lambda:InvokeFunction</code> para
+  <code>Principal: "*"</code>. La documentación del provider avisa en mayúsculas de que esas
+  políticas <strong>NO se eliminan de AWS al destruir el recurso</strong>. Un
+  <code>terraform destroy</code> te deja el permiso puesto en la cuenta.</p>
+  <p><strong>3. No hay WAF, ni dominio propio, ni PrivateLink.</strong> Una Function URL solo se
+  alcanza por internet público; no acepta AWS WAF delante ni un <code>api.tudominio.com</code>.
+  Si necesitas cualquiera de las tres, la respuesta es API Gateway o CloudFront delante.</p>
+</div>
+
+<h3>CORS: configúralo en la URL, no en tu código</h3>
+
+<p>La Function URL trae CORS propio (<code>allow_origins</code>, <code>allow_methods</code>,
+<code>allow_headers</code>, <code>expose_headers</code>, <code>allow_credentials</code>,
+<code>max_age</code> hasta 86 400 s) y Lambda inyecta las cabeceras en todas las respuestas.
+La trampa: <strong>si además las escribes tú en la respuesta, se duplican</strong>. En las
+peticiones normales (GET, POST) Lambda devuelve <em>las dos</em>, y el navegador falla con
+<code>The 'Access-Control-Allow-Origin' header contains multiple values '*, *'</code>. En las
+<code>OPTIONS</code> de preflight gana la configuración de la URL. Regla: CORS en la
+configuración, nunca en el handler.</p>
+
+<h3>Function URL, API Gateway HTTP API o ALB</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Criterio</th><th>Function URL</th><th>API Gateway HTTP API</th><th>ALB</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Coste en reposo</strong></td>
+      <td><span class="tag-cost free">0,00 USD</span> — no cobra el endpoint</td>
+      <td><span class="tag-cost free">0,00 USD</span> — solo por petición</td>
+      <td><span class="tag-cost hour">por hora</span> — el ALB factura exista o no tráfico</td></tr>
+    <tr><td><strong>Coste por uso</strong></td>
+      <td>Solo la Lambda</td>
+      <td>1,00 USD/millón (primeros 300 M) + la Lambda</td>
+      <td>~0,023 USD/h + LCU + la Lambda</td></tr>
+    <tr><td><strong>Auth</strong></td>
+      <td><code>AWS_IAM</code> o <code>NONE</code>. Nada más.</td>
+      <td>IAM, JWT/OIDC, Cognito, Lambda authorizers</td>
+      <td>OIDC / Cognito en el listener</td></tr>
+    <tr><td><strong>Rate limiting</strong></td>
+      <td><strong>No hay.</strong> Solo el tope indirecto de concurrencia reservada</td>
+      <td>Sí: throttling por stage y por ruta, usage plans con API keys</td>
+      <td>No para Lambda; el ALB no encola peticiones a la función</td></tr>
+    <tr><td><strong>Dominio propio</strong></td>
+      <td><strong>No</strong> (solo <code>*.on.aws</code>; se arregla con CloudFront delante)</td>
+      <td>Sí, con certificado de ACM</td>
+      <td>Sí</td></tr>
+    <tr><td><strong>WAF</strong></td><td>No</td><td>Sí</td><td>Sí</td></tr>
+    <tr><td><strong>Tamaño de respuesta</strong></td>
+      <td>6 MB, o <strong>200 MB en streaming</strong></td>
+      <td>6 MB (lo limita Lambda; la puerta admite 10 MB), o 200 MB con streaming en REST API</td>
+      <td><strong>1 MB</strong> de petición y 1 MB de respuesta</td></tr>
+    <tr><td><strong>Response streaming</strong></td><td><strong>Sí</strong></td><td>Sí, en REST API con <code>responseTransferMode = STREAM</code></td><td><strong>No</strong> — el ALB no hace chunked transfer encoding</td></tr>
+    <tr><td><strong>Elígelo cuando</strong></td>
+      <td>Un endpoint, un consumidor, prototipo o webhook, o necesitas streaming barato</td>
+      <td>API de verdad: varias rutas, auth de usuarios, límites de ritmo, dominio</td>
+      <td>Ya tienes un ALB con EC2/ECS detrás y quieres colgar una ruta en una Lambda</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio, sin rodeos</span>
+  <p>La pregunta no es «cuál es mejor», es <strong>¿necesito rate limiting, dominio propio o auth
+  de usuarios?</strong> Si la respuesta es no a las tres, la Function URL es una pieza menos que
+  mantener y una línea menos en la factura. Si es sí a cualquiera, API Gateway — y montarlo
+  después significa cambiar la URL que ya has repartido, que es el coste real de haber empezado
+  por la Function URL.</p>
+  <p>Para el <strong>proyecto 03</strong>, el gateway de IA, la Function URL gana por dos
+  motivos concretos: es la vía nativa de <a href="#response-streaming">response streaming</a>, y
+  no añade un céntimo sobre el coste de los tokens. El rate limiting, que es justo lo que la
+  Function URL <em>no</em> tiene, lo pone el propio proyecto con DynamoDB y TTL — que es
+  precisamente el ejercicio.</p>
+</div>
+
+<div class="code">
+  <div class="code-label"><span>la URL, con streaming y CORS</span><span class="tag">hcl</span></div>
+<pre><code>resource "aws_lambda_function_url" "app" {
+  function_name      = aws_lambda_function.app.function_name
+  authorization_type = "AWS_IAM"   <b class="c"># NONE deja la función abierta a internet</b>
+  invoke_mode        = "RESPONSE_STREAM"
+
+  cors {
+    allow_origins = ["https://mi-frontend.example"]
+    allow_methods = ["POST"]
+    allow_headers = ["content-type"]
+    max_age       = 300
+  }
+}
+
+<b class="c"># El único freno de ritmo que existe: 10 req/s por unidad reservada.</b>
+<b class="c"># A 0, la URL devuelve 429 a todo el mundo (el interruptor de emergencia).</b>
+resource "aws_lambda_function" "app" {
+  <b class="c"># ...</b>
+  reserved_concurrent_executions = 5
+}
+
+output "url" {
+  value = aws_lambda_function_url.app.function_url
+}</code></pre>
+</div>
+
+<h2 id="response-streaming">Response streaming</h2>
+
+<p>Por defecto Lambda <strong>bufferiza</strong>: acumula la respuesta entera en memoria, y
+cuando tu handler devuelve, la manda de una pieza. Con <em>response streaming</em> los bytes
+salen hacia el cliente <strong>a medida que los generas</strong>. Dos cosas cambian, y las dos
+importan: el <strong>time to first byte</strong> deja de depender de lo que tarde la respuesta
+completa, y el techo de tamaño pasa de <code>6 MB</code> a <code>200 MB</code>.</p>
+
+<p>Es un caso de uso, no una optimización general: sirve cuando la respuesta se produce poco a
+poco. Un modelo de lenguaje que escribe token a token es el ejemplo perfecto — de ahí el
+<strong>proyecto 03</strong>. Con buffering, el usuario mira una pantalla en blanco los quince
+segundos que tarde Claude en terminar el párrafo; con streaming, ve la primera palabra en cuanto
+Bedrock la emite. El mismo coste de cómputo, otra experiencia.</p>
+
+<h3>Cómo se escribe, en TypeScript</h3>
+
+<p>El handler cambia de forma: se envuelve con <code>awslambda.streamifyResponse()</code> y
+recibe un tercer parámetro, <code>responseStream</code>, que es un
+<code>Writable</code> de Node. El objeto global <code>awslambda</code> lo pone el runtime — no se
+importa de ningún paquete, y por eso TypeScript no lo conoce y hay que declararlo.</p>
+
+<div class="code">
+  <div class="code-label"><span>handler con streaming</span><span class="tag">typescript</span></div>
+<pre><code><b class="c">// El runtime inyecta `awslambda`. No hay @types oficiales: se declara.</b>
+import type { Writable } from "node:stream";
+
+declare global {
+  namespace awslambda {
+    function streamifyResponse&lt;E&gt;(
+      handler: (event: E, responseStream: Writable, context: unknown) =&gt; Promise&lt;void&gt;
+    ): unknown;
+  }
+}
+
+export const handler = awslambda.streamifyResponse(async (event, responseStream) =&gt; {
+  const stream = await bedrock.send(new ConverseStreamCommand({ <b class="c">/* ... */</b> }));
+
+  for await (const chunk of stream.stream ?? []) {
+    const text = chunk.contentBlockDelta?.delta?.text;
+    if (text) responseStream.write(text);
+  }
+
+  responseStream.end();   <b class="c">// obligatorio si no usas pipeline()</b>
+});</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">Cuatro cosas que se rompen aquí</span>
+  <p><strong>1. Si no cierras el stream, la invocación se queda colgada</strong> hasta el timeout
+  — y pagas hasta ahí. <code>responseStream.end()</code> siempre, o
+  <code>pipeline()</code> de <code>node:stream/promises</code>, que lo cierra por ti. AWS
+  recomienda <code>pipeline()</code> justo porque además aplica contrapresión: con
+  <code>write()</code> a pelo, un origen rápido puede ahogar al stream.</p>
+  <p><strong>2. Desde Node.js 24 el runtime ya no espera</strong> a las promesas sin resolver
+  cuando tu handler retorna o el stream se cierra. Cualquier <code>fetch</code> o temporizador
+  pendiente hay que <code>await</code>-earlo dentro del handler o se pierde. El curso usa
+  <code>nodejs24.x</code>, así que esto te aplica.</p>
+  <p><strong>3. Si el cliente cuelga, tú sigues pagando.</strong> Literal en la documentación:
+  <em>«streamed responses are not interrupted or stopped when the invoking client connection is
+  broken. Customers are billed for the full function duration»</em>. Con timeouts largos y una
+  URL pública, es una forma silenciosa de quemar dinero. Pon el timeout corto.</p>
+  <p><strong>4. En la consola de Lambda siempre lo verás bufferizado.</strong> El botón de Test
+  no hace streaming. Para probarlo de verdad, <code>curl</code> contra la Function URL.</p>
+</div>
+
+<h3>Qué lo soporta en 2026, y qué no</h3>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Vía</th><th>¿Streaming?</th><th>Detalle</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Function URL</strong></td><td><strong>Sí</strong></td>
+      <td>La vía nativa. <code>invoke_mode = "RESPONSE_STREAM"</code> y ya. <strong>Excepto dentro de una VPC</strong>: ahí las Function URLs no soportan streaming.</td></tr>
+    <tr><td><strong><code>InvokeWithResponseStream</code></strong></td><td><strong>Sí</strong></td>
+      <td>Desde el SDK. Es la vía si el consumidor está dentro de una VPC, vía interface endpoint de Lambda.</td></tr>
+    <tr><td><strong>API Gateway REST API</strong></td><td><strong>Sí</strong></td>
+      <td>Integración proxy con <code>responseTransferMode = STREAM</code>. Tu función debe emitir el formato de API Gateway: metadatos JSON + <strong>8 bytes nulos</strong> de delimitador dentro de los primeros 16 KB, y luego el payload.</td></tr>
+    <tr><td><strong>ALB</strong></td><td><strong>No</strong></td>
+      <td>El ALB no soporta <em>chunked transfer encoding</em>, así que no puede entregar una respuesta progresiva. Y su tope es 1 MB.</td></tr>
+    <tr><td><strong>Runtimes</strong></td><td>Solo Node.js</td>
+      <td>De los runtimes gestionados, <strong>solo los de Node.js</strong>. Para Python y compañía, custom runtime o Lambda Web Adapter.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="small">Dato de calendario que conviene saber si lees documentación vieja: el streaming
+existe desde 2023, pero hasta <strong>abril de 2026</strong> no estuvo disponible en todas las
+regiones comerciales, y el tope de 200 MB llegó en <strong>julio de 2025</strong> (antes eran
+20 MB). Cualquier texto que diga «20 MB» o «no disponible en tu región» es anterior a eso.
+Fuentes: <a href="https://aws.amazon.com/about-aws/whats-new/2026/04/aws-lambda-response-streaming/">expansión
+a todas las regiones</a> y <a href="https://aws.amazon.com/about-aws/whats-new/2025/07/aws-lambda-response-streaming-200-mb-payloads/">200
+MB de payload</a>.</p>
+
+<div class="callout cost">
+  <span class="callout-title">El streaming sí tiene línea propia en la factura</span>
+  <p>Es el único modo de invocación que cobra por <strong>bytes</strong>, y por eso se pasa por
+  alto: <code>0,008 USD por GiB</code> transferido, con dos exenciones acumulables —
+  <strong>los primeros 6 MB de cada respuesta son gratis</strong> y hay una capa gratuita de
+  <strong>100 GB al mes</strong>. Traducido: una API conversacional cuyas respuestas ronden los
+  kilobytes <strong>no paga nunca nada</strong> por streaming; solo entras en la línea si mueves
+  respuestas grandes de verdad.</p>
+  <p>Y el detalle de rendimiento que va con ello: los primeros <strong>6 MB salen sin límite de
+  ancho de banda</strong>; a partir de ahí Lambda te limita a <strong>2 MB/s</strong>. Si tu
+  respuesta nunca pasa de 6 MB, ese límite no existe para ti.</p>
 </div>
 
 <h2>Cuánto cuesta</h2>
@@ -237,6 +700,13 @@ por milisegundos ejecutados— y se redondea al milisegundo.</p>
     <tr><td>Duración <code>x86_64</code>, primeros 6.000 M GB-s/mes</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0000166667 USD</code> / GB-s</td></tr>
     <tr><td>Capa gratuita mensual</td><td><span class="tag-cost free">gratis</span></td><td>1 M peticiones + 400.000 GB-s</td></tr>
     <tr><td>Concurrencia aprovisionada <code>arm64</code></td><td><span class="tag-cost hour">por hora</span></td><td><code>0,0000033334 USD</code> / GB-s aunque no se invoque</td></tr>
+    <tr><td>Duración <em>mientras</em> hay concurrencia aprovisionada, <code>x86_64</code></td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0000097222 USD</code> / GB-s — un 42% menos</td></tr>
+    <tr><td>Response streaming: bytes transferidos</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,008 USD</code> / GiB</td></tr>
+    <tr><td>Response streaming: exenciones</td><td><span class="tag-cost free">gratis</span></td><td>primeros 6 MB por respuesta + 100 GB/mes</td></tr>
+    <tr><td><code>/tmp</code> por encima de 512 MB</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0000000309 USD</code> / GB-s</td></tr>
+    <tr><td>SnapStart: caché del snapshot (mín. 3 h)</td><td><span class="tag-cost hour">por hora</span></td><td><code>0,0000015046 USD</code> / GB-s — <strong>gratis en Java</strong></td></tr>
+    <tr><td>SnapStart: restauración</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,0001397998 USD</code> / GB restaurado</td></tr>
+    <tr><td>Function URL (el endpoint en sí)</td><td><span class="tag-cost free">gratis</span></td><td><code>0,00 USD</code></td></tr>
     <tr><td>Logs: ingesta en CloudWatch, clase Standard</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,50 USD</code> / GB</td></tr>
     <tr><td>Logs: almacenamiento</td><td><span class="tag-cost usage">por uso</span></td><td><code>0,03 USD</code> / GB-mes</td></tr>
     <tr><td>Logs: capa gratuita mensual</td><td><span class="tag-cost free">gratis</span></td><td>5 GB entre ingesta, archivo y consultas</td></tr>
@@ -244,7 +714,7 @@ por milisegundos ejecutados— y se redondea al milisegundo.</p>
 </table>
 </div>
 
-<p class="cost-stamp">Precios de <strong>us-east-1</strong>, verificados el <strong>2026-08-24</strong>
+<p class="cost-stamp">Precios de <strong>us-east-1</strong>, verificados el <strong>2026-08-30</strong>
 contra la Price List API pública —
 <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/us-east-1/index.json"><code>AWSLambda</code></a>
 y <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/current/us-east-1/index.json"><code>AmazonCloudWatch</code></a>—
@@ -261,9 +731,18 @@ gratuita. Cámbialos si han pasado meses.</p>
   <p><strong>El timeout es tu único freno.</strong> Si una función se cuelga esperando a algo
   que nunca responde, pagas hasta los 900 segundos. Con un bucle de reintentos detrás, eso se
   multiplica. Pon el timeout en lo que <em>debería</em> tardar más un margen, no en el máximo.</p>
-  <p><strong>La concurrencia aprovisionada se olvida encendida.</strong> Es el único parámetro
+  <p><strong>La concurrencia aprovisionada se olvida encendida.</strong> Es el parámetro clásico
   de Lambda que factura sin tráfico: a 128 MB son unos <code>0,0019 USD/h</code>, ~1,37 USD al
-  mes por función. Ridículo con una; no tanto con cuarenta y un entorno de <code>dev</code>.</p>
+  mes por función. Ridículo con una; no tanto con cuarenta y un entorno de <code>dev</code>.
+  Con SnapStart pasa lo mismo en pequeño: <strong>cada versión publicada paga su caché</strong>,
+  con un mínimo de 3 horas, hasta que borras la versión.</p>
+  <p><strong>Una Function URL con <code>NONE</code> es una tarjeta de crédito con la URL por
+  PIN.</strong> No tiene rate limiting propio (ver <a href="#function-urls">Function URLs</a>):
+  el único freno es <code>reserved_concurrent_executions</code>. Si la Lambda de detrás llama a
+  un modelo de IA, el coste por petición no es de Lambda — son tokens, y esos no tienen capa
+  gratuita.</p>
+  <p><strong>Y desde agosto de 2025, el cold start se cobra.</strong> Detalle en
+  <a href="#init-facturado">«el cold start ya no es gratis»</a>.</p>
 </div>
 
 <h2>Límites que vas a chocar</h2>
@@ -276,16 +755,37 @@ gratuita. Cámbialos si han pasado meses.</p>
     <tr><td>Memoria</td><td><code>128 MB</code> – <code>10.240 MB</code>, de 1 en 1 MB</td><td>No (1.769 MB = 1 vCPU)</td></tr>
     <tr><td>Paquete <code>.zip</code> subido por la API</td><td><code>50 MB</code> comprimido</td><td>No — usa S3 para más</td></tr>
     <tr><td>Paquete descomprimido, con capas incluidas</td><td><code>250 MB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Imagen de contenedor</td><td><code>10 GB</code> sin comprimir</td><td><strong>No</strong></td></tr>
     <tr><td>Payload síncrono, petición y respuesta</td><td><code>6 MB</code> cada uno</td><td><strong>No</strong></td></tr>
+    <tr><td>Respuesta en <a href="#response-streaming">streaming</a></td><td><code>200 MB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Ancho de banda del streaming</td><td>sin tope los primeros <code>6 MB</code>; luego <code>2 MB/s</code></td><td><strong>No</strong></td></tr>
     <tr><td>Payload asíncrono</td><td><code>1 MB</code></td><td><strong>No</strong></td></tr>
     <tr><td>Variables de entorno, todas juntas</td><td><code>4 KB</code></td><td><strong>No</strong></td></tr>
+    <tr><td>Política de recurso de la función</td><td><code>20 KB</code></td><td><strong>No</strong></td></tr>
     <tr><td>Capas por función</td><td><code>5</code></td><td><strong>No</strong></td></tr>
     <tr><td><code>/tmp</code></td><td><code>512 MB</code> – <code>10.240 MB</code></td><td>Se configura por función</td></tr>
     <tr><td>Ejecuciones concurrentes por cuenta y región</td><td><code>1.000</code></td><td>Sí, hasta decenas de miles</td></tr>
+    <tr><td>Concurrencia <em>reservable</em> entre todas tus funciones</td><td><code>900</code></td><td>Sube con la de cuenta — Lambda <strong>siempre</strong> deja 100 sin reservar</td></tr>
+    <tr><td>Peticiones por segundo</td><td><code>10 ×</code> la concurrencia — <code>10.000/s</code> por defecto</td><td>Solo subiendo la concurrencia</td></tr>
     <tr><td>Velocidad de escalado por función</td><td><code>1.000</code> entornos cada 10 s</td><td>No</td></tr>
+    <tr><td>Ancho de banda de red por entorno</td><td><code>625 Mbps</code></td><td>Sí, si la función <strong>no</strong> está en VPC</td></tr>
+    <tr><td>ENIs por VPC (Lambda + EFS + …)</td><td><code>500</code></td><td>Sí, hasta miles</td></tr>
     <tr><td>Almacenamiento total de paquetes <code>.zip</code></td><td><code>300 GB</code> descomprimido</td><td>No — usa código autogestionado en S3</td></tr>
   </tbody>
 </table>
+</div>
+
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html">Lambda
+quotas</a>, consultada el <strong>2026-08-30</strong>.</p>
+
+<div class="callout trap">
+  <span class="callout-title">El límite de escalado que internet cuenta mal</span>
+  <p>Durante años el límite fue una <strong>ráfaga por región</strong> —500, 1.000 o 3.000
+  entornos según la región, y luego 500 más por minuto para toda la cuenta—. Ese número aparece
+  en cientos de artículos y en material de certificación. <strong>Ya no existe.</strong> Desde
+  finales de 2023 el límite es <strong>por función</strong>: 1.000 entornos nuevos cada 10
+  segundos, en cualquier región, y cada función escala sin robarle velocidad a las demás. Si
+  encuentras «burst concurrency por región», estás leyendo algo viejo.</p>
 </div>
 
 <div class="callout trap">
@@ -314,8 +814,43 @@ gratuita. Cámbialos si han pasado meses.</p>
 <strong>LTS activo</strong>, y avisa por correo con al menos 180 días de antelación antes de
 deprecar uno. Fuente:
 <a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html">Lambda runtimes</a>,
-consultado el 2026-08-24. <strong>SnapStart no está disponible para Node.js</strong> — solo
-Java 11+, Python 3.12+ y .NET 8+.</p>
+consultado el 2026-08-30. Node.js 26 sigue en <em>public preview</em> — sin SLA ni soporte
+técnico, con GA prevista para noviembre de 2026.</p>
+
+<h3 id="snapstart">SnapStart, y por qué no te sirve</h3>
+
+<p>SnapStart mata el cold start por otra vía que la concurrencia aprovisionada: al publicar una
+versión, Lambda ejecuta tu inicialización, toma un <strong>snapshot cifrado de la microVM
+Firecracker</strong> ya inicializada, y a partir de ahí los entornos nuevos <em>reanudan</em>
+desde ese snapshot en vez de inicializarse. Baja el arranque a menos de un segundo en el mejor
+caso.</p>
+
+<p><strong>Y no aplica a este curso, ni a ninguna Lambda de Node.</strong> La lista de runtimes
+soportados es cerrada: <strong>Java 11+, Python 3.12+ y .NET 8+</strong>. La documentación nombra
+explícitamente <code>nodejs24.x</code> entre los <em>no</em> soportados, junto con los runtimes
+OS-only y las imágenes de contenedor. No es un «todavía no»: es que el problema que resuelve
+—frameworks que tardan segundos en levantar— es un problema de la JVM y de Python, no de Node.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Y no siempre es gratis, aunque todo el mundo lo diga</span>
+  <p>La frase que circula es «SnapStart es gratis, a diferencia de la concurrencia
+  aprovisionada». Es verdad <strong>solo para los runtimes gestionados de Java</strong>. Para
+  Python y .NET se factura en dos conceptos: <strong>caché</strong> del snapshot
+  (<code>0,0000015046 USD/GB-s</code>, con un mínimo de 3 horas y mientras la versión siga
+  activa) y <strong>restauración</strong> (<code>0,0001397998 USD por GB</code> restaurado). Como
+  se cobra <em>por versión publicada</em>, un pipeline que publica versiones y no las borra
+  acumula caché en silencio.</p>
+  <p>Otras dos restricciones que sorprenden: <strong>no se puede combinar con concurrencia
+  aprovisionada</strong>, y no admite <code>/tmp</code> mayor de 512 MB. Además solo funciona
+  sobre <strong>versiones publicadas o alias</strong>, nunca sobre <code>$LATEST</code>.</p>
+  <p>Y el aviso que de verdad rompe código: el snapshot se reutiliza en muchos entornos, así que
+  <strong>todo lo que tu init genere como «único» deja de serlo</strong> — IDs, semillas de
+  aleatoriedad, secretos. Hay que generarlos <em>después</em> de la inicialización.</p>
+</div>
+
+<p class="small">Fuente: <a href="https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html">Improving
+startup performance with Lambda SnapStart</a> y <a href="https://aws.amazon.com/lambda/pricing/">AWS
+Lambda Pricing</a>, consultadas el 2026-08-30 (<code>us-east-1</code>).</p>
 
 <h2>Cuándo NO usarlo</h2>
 
@@ -337,7 +872,8 @@ Java 11+, Python 3.12+ y .NET 8+.</p>
       <li>El tráfico es alto y constante — ahí EC2 o Fargate salen más baratos.</li>
       <li>Necesitas latencia p99 predecible sin pagar concurrencia aprovisionada.</li>
       <li>Mantienes conexiones largas: WebSockets, pools contra una base de datos.</li>
-      <li>Arrastras binarios o modelos que no caben en 250 MB.</li>
+      <li>Arrastras binarios o modelos que no caben en 250 MB — salvo con imagen de contenedor, que llega a 10 GB.</li>
+      <li>Vive en una VPC privada <em>y</em> necesita salir a internet: eso obliga a un NAT Gateway, que factura por hora y rompe el «cero en reposo» — salvo que «internet» sea en realidad solo S3 o DynamoDB: un <a href="./aws-vpc.html">gateway endpoint</a> lo resuelve gratis y sin NAT.</li>
     </ul>
   </div>
 </div>
@@ -365,6 +901,11 @@ Java 11+, Python 3.12+ y .NET 8+.</p>
       <td><strong>Amazon SQS</strong></td>
       <td>SQS <em>guarda</em> mensajes; Lambda los <em>procesa</em>. No compiten, se combinan.</td>
       <td>Nunca es «uno u otro»: SQS delante de Lambda es el patrón del proyecto 02.</td>
+    </tr>
+    <tr>
+      <td><strong>API Gateway</strong> y <strong>ALB</strong></td>
+      <td>No compiten con Lambda: son <em>puertas</em> hacia ella. La comparación real es contra la <a href="#function-urls">Function URL</a>, que es la puerta que trae Lambda de serie.</td>
+      <td>Necesitas rate limiting, dominio propio, WAF o auth de usuarios. Si no, la Function URL es una pieza menos y no cobra el endpoint.</td>
     </tr>
     <tr>
       <td><strong>Lambda@Edge / CloudFront Functions</strong></td>
@@ -769,7 +1310,7 @@ quotas</a>, consultadas el 2026-08-25.</p>
 <h2>Comprueba</h2>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-kicker">Pregunta 1 de 6</p>
   <p class="quiz-q">Tu función tarda 400 ms con 512 MB. Subes la memoria a 1.024 MB y ahora
   tarda 180 ms. ¿Qué le ha pasado al coste de duración por invocación?</p>
   <ul class="quiz-opts">
@@ -782,24 +1323,24 @@ quotas</a>, consultadas el 2026-08-25.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-kicker">Pregunta 2 de 6</p>
   <p class="quiz-q">Un servicio interno recibe 2.000 peticiones por segundo, todo el día, todos
   los días, y cada una tarda 50 ms. ¿Lambda o Fargate?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true"  data-why="Con carga constante y alta, el pago por uso deja de ser una ventaja: nunca hay ratos a cero que compensen. Contenedores siempre encendidos con la capacidad justa salen bastante más baratos, y además no hay cold starts.">Fargate: la carga es constante</button></li>
     <li><button data-correct="false" data-why="Lambda gana cuando hay valles. Aquí no los hay: pagarías 5.184 millones de invocaciones al mes sin ningún periodo a cero que justifique el sobreprecio del modelo por uso.">Lambda: el trabajo es corto</button></li>
     <li><button data-correct="false" data-why="Sí hay criterio, y es el perfil de tráfico, no el gusto. Constante y alto favorece a los contenedores; irregular o con valles favorece a Lambda.">Da igual: cuestan lo mismo</button></li>
-    <li><button data-correct="false" data-why="La concurrencia aprovisionada arregla el cold start pero empeora el problema económico: añade un coste por hora encima del coste por uso que ya estabas pagando.">Lambda con concurrencia aprovisionada</button></li>
+    <li><button data-correct="false" data-why="La concurrencia aprovisionada arregla el cold start pero empeora el problema económico: añade un coste por hora encima del coste por uso que ya estabas pagando.">Lambda: la aprovisionada lo arregla</button></li>
   </ul>
   <div class="quiz-feedback"></div>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-kicker">Pregunta 3 de 6</p>
   <p class="quiz-q">Despliegas una Lambda, la invocas, y devuelve <code>200</code> con la
   respuesta correcta. Pero en CloudWatch no hay ningún grupo de logs suyo. ¿Qué pasa?</p>
   <ul class="quiz-opts">
-    <li><button data-correct="true"  data-why="Escribir logs es una acción de la función contra la API de CloudWatch Logs, y como cualquier otra necesita permiso en el rol de ejecución. Sin él, la función corre perfectamente y no deja rastro. Es el fallo más común y el más desconcertante.">Al rol le falta permiso de logs</button></li>
+    <li><button data-correct="true"  data-why="Escribir logs es una acción de la función contra la API de CloudWatch Logs, y como cualquier otra necesita permiso en el rol de ejecución. Sin él, la función corre perfectamente y no deja rastro. Es el fallo más común y el más desconcertante.">Al rol le falta el permiso</button></li>
     <li><button data-correct="false" data-why="Los logs pueden tardar entre 5 y 10 minutos en aparecer, pero eso retrasa los eventos dentro del grupo. El grupo en sí se crearía igual en la primera invocación si hubiera permiso.">Los logs tardan, hay que esperar</button></li>
     <li><button data-correct="false" data-why="El runtime de Node manda console.log a stdout y el runtime de Lambda lo recoge siempre. El problema no está en tu código sino en lo que el rol tiene permitido hacer.">El código no escribe ningún log</button></li>
     <li><button data-correct="false" data-why="Una función que devuelve la respuesta correcta se está ejecutando, así que ni el handler ni el runtime están mal configurados. El fallo está después de ejecutar, al intentar escribir.">El handler apunta a otro fichero</button></li>
@@ -808,14 +1349,40 @@ quotas</a>, consultadas el 2026-08-25.</p>
 </div>
 
 <div class="quiz">
-  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-kicker">Pregunta 4 de 6</p>
   <p class="quiz-q">Subes un objeto a S3 y eso invoca tu Lambda, que lanza una excepción. Sin
   DLQ ni destino de fallo configurado, ¿qué le pasa a ese evento?</p>
   <ul class="quiz-opts">
     <li><button data-correct="true"  data-why="S3 invoca de forma asíncrona: Lambda encola el evento y reintenta la función dos veces. Agotados los reintentos, sin DLQ ni destino de fallo, el evento se descarta y no queda constancia salvo en las métricas de error.">Se reintenta dos veces y desaparece</button></li>
-    <li><button data-correct="false" data-why="Eso es el comportamiento síncrono. En asíncrono quien invoca ya recibió su 202 hace rato y no hay nadie a quien devolverle el error: por eso Lambda reintenta por su cuenta.">Se devuelve el error a quien invocó</button></li>
-    <li><button data-correct="false" data-why="Lambda no vuelve a poner nada en S3 ni reprocesa el objeto por su cuenta. El objeto sigue ahí sin procesar, y tú no te enteras si no miras las métricas.">Se vuelve a subir el objeto solo</button></li>
-    <li><button data-correct="false" data-why="Los reintentos asíncronos existen precisamente para los errores de la función. Sin ellos, cualquier fallo transitorio de red perdería eventos, que es justo lo que Lambda intenta evitar.">Se descarta sin ningún reintento</button></li>
+    <li><button data-correct="false" data-why="Eso es el comportamiento síncrono. En asíncrono quien invoca ya recibió su 202 hace rato y no hay nadie a quien devolverle el error: por eso Lambda reintenta por su cuenta.">Se devuelve el error al invocador</button></li>
+    <li><button data-correct="false" data-why="Lambda no vuelve a poner nada en S3 ni reprocesa el objeto por su cuenta. El objeto sigue ahí sin procesar, y tú no te enteras si no miras las métricas.">Se vuelve a procesar el objeto</button></li>
+    <li><button data-correct="false" data-why="Los reintentos asíncronos existen precisamente para los errores de la función. Sin ellos, cualquier fallo transitorio de red perdería eventos, que es justo lo que Lambda intenta evitar.">Se descarta sin ningún reintento previo</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 5 de 6 · elegir la puerta</p>
+  <p class="quiz-q">Proyecto 03: un endpoint que llama a Claude en Bedrock y devuelve la
+  respuesta token a token al navegador. El límite de peticiones por usuario lo vas a implementar
+  tú, con DynamoDB y TTL. ¿Function URL o API Gateway?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Los dos motivos por los que necesitarías API Gateway aquí no aplican: el rate limiting lo pones tú en la aplicación, y el streaming es nativo de la Function URL con invoke_mode = RESPONSE_STREAM. Queda que la Function URL no cobra por el endpoint mientras API Gateway HTTP son 1,00 USD por millón. Una pieza menos y una línea menos en la factura.">Function URL: hay streaming y no cobra endpoint</button></li>
+    <li><button data-correct="false" data-why="El throttling de API Gateway es real y bueno, pero aquí lo estás construyendo tú con DynamoDB porque necesitas límites por usuario, no por ruta. Pagar 1,00 USD por millón por una capacidad que has decidido no usar es comprar la pieza equivocada.">API Gateway HTTP: aporta throttling propio por ruta</button></li>
+    <li><button data-correct="false" data-why="El ALB no soporta chunked transfer encoding, así que no puede entregar respuestas progresivas, y además tope su payload en 1 MB. Encima factura por hora exista o no tráfico, que es justo lo contrario de lo que este roadmap busca.">ALB: también entrega streaming y cuesta por uso</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 6 de 6 · el modelo de invocación</p>
+  <p class="quiz-q">Tu Lambda consume mensajes de una cola SQS mediante un event source mapping.
+  Quieres que los mensajes que fallen una y otra vez acaben en una cola de descartes. ¿Dónde
+  configuras esa DLQ?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true"  data-why="Con event source mapping, nadie invoca la función de forma asíncrona: es Lambda quien lee de la cola. Los reintentos los gobierna SQS con su visibility timeout, y el descarte lo decide su maxReceiveCount. Por eso la documentación dice literalmente que la DLQ va en la cola origen y no en la función.">En la cola origen, con su redrive policy</button></li>
+    <li><button data-correct="false" data-why="El dead_letter_config de la función solo recoge lo que descarta la cola interna de las invocaciones asíncronas, la que usan S3, SNS o EventBridge. Con SQS de origen esa cola nunca entra en juego: Terraform aplica sin quejarse y no llega ni un mensaje.">En la función, con su dead letter queue</button></li>
+    <li><button data-correct="false" data-why="Configurar las dos no da cobertura doble: la de la función quedaría muerta, porque este origen no produce invocaciones asíncronas. Lo único que consigues es una cola vacía que alguien tendrá que explicar dentro de seis meses.">En ambas a la vez, por pura prudencia</button></li>
   </ul>
   <div class="quiz-feedback"></div>
 </div>
@@ -825,6 +1392,8 @@ quotas</a>, consultadas el 2026-08-25.</p>
     <a href="./README.md">Todas las referencias</a>
     <a href="../lessons/0005-tu-codigo-en-aws.html">Lección 05</a>
     <a href="./aws-iam.html">Referencia: IAM</a>
+    <a href="./aws-apigateway.html">Referencia: API Gateway</a>
+    <a href="./aws-sqs.html">Referencia: SQS</a>
     <a href="./terraform-cli.html">Chuleta: CLI y HCL</a>
     <a href="../GLOSSARY.md">Glosario</a>
     <a href="https://docs.aws.amazon.com/lambda/latest/dg/welcome.html">Documentación oficial</a>

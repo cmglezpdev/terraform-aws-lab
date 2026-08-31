@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Referencia · Fundamentos de AWS</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body class="reference">
+
+<header>
+  <p class="eyebrow">Plataforma · referencia imprimible</p>
+  <h1>Fundamentos de AWS como plataforma</h1>
+  <p class="deck">Esta no es la ficha de un servicio: es la del <strong>sustrato</strong>. AWS
+  no es «un proveedor de nube», es un catálogo de APIs HTTP regionales con IAM delante y un
+  contador detrás. Todo lo demás —las regiones, los ARN, el modelo de precios, el hecho mismo
+  de que Terraform pueda existir— se deduce de esa frase. Léela antes que cualquier ficha de
+  servicio.</p>
+
+  <dl class="svc-meta">
+    <div><dt>Ámbito</dt><dd>Todo el curso. Es el prerrequisito de las demás fichas</dd></div>
+    <div><dt>Región del curso</dt><dd><code>us-east-1</code> — fijada en <code>versions.tf</code> y en <code>backend.tf</code></dd></div>
+    <div><dt>Cuenta de ejemplo</dt><dd><code>999999999999</code> (marcador de posición del repositorio)</dd></div>
+    <div><dt>Modelo de coste</dt><dd><span class="tag-cost usage">por uso</span> con excepciones que cuestan por hora</dd></div>
+    <div><dt>Fuente de precios</dt><dd><a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/index.json">Price List Bulk API</a> — pública, sin credenciales</dd></div>
+    <div><dt>Verificado el</dt><dd>2026-08-30</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<h2>Qué es AWS de verdad</h2>
+
+<p>Un servicio de AWS es <strong>un endpoint HTTPS con una API</strong>. Nada más. Cuando
+creas una cola, un bucket o una función, lo que ocurre físicamente es una petición HTTP
+firmada contra una URL con esta forma
+(<a href="https://docs.aws.amazon.com/general/latest/gr/rande.html">AWS service
+endpoints</a>):</p>
+
+<div class="code">
+  <div class="code-label"><span>la forma de todo endpoint regional</span><span class="tag">http</span></div>
+<pre><code><b class="at">protocolo</b>://<b class="s">servicio</b>.<b class="n">región</b>.amazonaws.com
+
+<b class="c"># ejemplos reales</b>
+https://<b class="s">dynamodb</b>.<b class="n">us-east-1</b>.amazonaws.com
+https://<b class="s">lambda</b>.<b class="n">us-east-1</b>.amazonaws.com
+https://<b class="s">s3</b>.<b class="n">us-east-1</b>.amazonaws.com</code></pre>
+</div>
+
+<p>De ahí salen las tres consecuencias que ordenan el resto del documento:</p>
+
+<ol class="steps">
+  <li><strong>La consola, la CLI, los SDK y Terraform son cuatro clientes de las mismas
+  APIs.</strong> Ninguno tiene poderes que los demás no tengan. Si algo se puede hacer en la
+  consola y no en Terraform, es que el provider no lo ha implementado todavía — no que AWS lo
+  prohíba. Y al revés: cuando el <code>plan</code> dice que va a crear un recurso, lo que va a
+  hacer es <em>una llamada concreta</em> que puedes buscar por su nombre.</li>
+  <li><strong>Cada petición se firma y se autoriza.</strong> El protocolo es
+  <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html">SigV4</a>, e
+  IAM decide antes de ejecutarla. No hay canal privilegiado.</li>
+  <li><strong>La región va en la URL.</strong> No es una etiqueta: es <em>otra instalación del
+  servicio</em>. Una cola en Irlanda y una cola en Virginia no se conocen.</li>
+</ol>
+
+<div class="callout why">
+  <span class="callout-title">La analogía que sí sirve</span>
+  <p>AWS es <strong>un catálogo de APIs con un contador y un portero</strong>, no un centro de
+  datos que alquilas. Cuando compras «una Lambda» no compras una máquina: compras el derecho a
+  llamar a <code>lambda:InvokeFunction</code> y que alguien te cobre por milisegundo.</p>
+  <p><strong>Dónde se rompe la analogía:</strong> algunas de esas APIs sí te reservan hardware
+  y te cobran por tenerlo reservado aunque no lo llames — una instancia EC2, un NAT Gateway,
+  un RDS encendido. Esa es exactamente la línea que separa lo que puedes dejar desplegado
+  mientras estudias de lo que hay que destruir cada noche.</p>
+</div>
+
+<h2>La infraestructura global</h2>
+
+<h3>Los números, hoy</h3>
+
+<table>
+  <thead><tr><th>Pieza</th><th>Cuántas</th><th>Qué es</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Regiones geográficas</strong></td>
+      <td><code>39</code></td>
+      <td>Un clúster de datacenters en una zona del mundo, con <strong>mínimo 3 AZ</strong>. Aisladas e independientes entre sí.</td>
+    </tr>
+    <tr>
+      <td><strong>Availability Zones</strong></td>
+      <td><code>124</code></td>
+      <td>«Uno o más datacenters discretos con energía, red y conectividad redundantes» dentro de una región.</td>
+    </tr>
+    <tr>
+      <td>Anunciadas sin lanzar</td>
+      <td><code>2</code> regiones, <code>7</code> AZ</td>
+      <td>Arabia Saudí y Chile.</td>
+    </tr>
+    <tr>
+      <td><strong>Points of Presence de CloudFront</strong></td>
+      <td><code>750+</code></td>
+      <td>«Los lugares esos que hay por todo el mundo»: cachés de borde, no computación. Ahí termina la petición del usuario final.</td>
+    </tr>
+    <tr>
+      <td>Regional edge caches</td>
+      <td><code>15</code></td>
+      <td>Segundo nivel de caché entre los PoP y tu origen.</td>
+    </tr>
+    <tr>
+      <td>Local Zones</td>
+      <td><code>46</code></td>
+      <td>Extensión de una región dentro de una ciudad concreta, para latencias de un dígito de ms.</td>
+    </tr>
+    <tr>
+      <td>Wavelength Zones</td>
+      <td><code>33</code></td>
+      <td>Cómputo dentro de la red 5G de un operador.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="cost-stamp">Verificado el 2026-08-30 en
+<a href="https://aws.amazon.com/about-aws/global-infrastructure/">AWS Global
+Infrastructure</a>. <strong>Estos números caducan.</strong> Cambian dos o tres veces al año y
+no hay ninguna razón para memorizarlos: lo que se memoriza es la <em>jerarquía</em>. Si vas a
+citarlos en una entrevista, ábrelos esa mañana.</p>
+
+<h3>Qué es exactamente una AZ</h3>
+
+<p>La definición oficial es deliberadamente elástica: <em>«one or more discrete data centers
+with redundant power, networking, and connectivity in an AWS Region»</em>
+(<a href="https://aws.amazon.com/about-aws/global-infrastructure/regions_az/">Regions and
+Availability Zones</a>). Una AZ <strong>no es un edificio</strong>: puede ser tres. Lo que
+garantiza AWS es el <em>aislamiento del fallo</em> — un incendio, un corte eléctrico o una
+inundación no pueden tumbar dos AZ a la vez.</p>
+
+<p>Los dos números de la misma fuente que hacen que el diseño multi-AZ funcione:</p>
+
+<ul>
+  <li>Las AZ están <em>«physically separated by a meaningful distance, many kilometers, from
+  any other AZ»</em> — lo bastante lejos para no compartir desastre.</li>
+  <li>Y a la vez <em>«all are within 100 km (60 miles) of each other»</em> — lo bastante cerca
+  para que la red entre ellas sea de alto ancho de banda y baja latencia, y por tanto para que
+  una base de datos pueda replicar <strong>síncronamente</strong> entre AZ sin que se note.
+  Ese es todo el truco del multi-AZ: la geografía se eligió para que la replicación síncrona
+  fuese viable.</li>
+</ul>
+
+<div class="callout trap">
+  <span class="callout-title">Tu <code>us-east-1a</code> no es su <code>us-east-1a</code></span>
+  <p>AWS mapea las AZ físicas a los nombres <em>aleatoriamente y por cuenta</em>, para que
+  todo el mundo no se amontone en la «a». La doc lo dice literal: <em>«the Availability Zone
+  <code>us-east-1a</code> for your AWS account might not represent the same physical location
+  as <code>us-east-1a</code> for a different AWS account»</em>.</p>
+  <p>El identificador estable es el <strong>AZ ID</strong> — <code>use1-az1</code>,
+  <code>usw2-az3</code> — que sí es el mismo sitio físico en todas las cuentas. Lo ves con
+  <code>aws ec2 describe-availability-zones</code>, campo <code>ZoneId</code>. Importa en
+  cuanto compartes una subred entre cuentas
+  (<a href="https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html">AZ IDs
+  for your AWS resources</a>).</p>
+</div>
+
+<h3>Zonal, regional, global: el ámbito de cada recurso</h3>
+
+<p>Antes de crear cualquier cosa, la pregunta es <em>¿dónde vive esto?</em>. Solo hay tres
+respuestas, y determinan qué pasa cuando algo se cae.</p>
+
+<table>
+  <thead><tr><th>Ámbito</th><th>Vive en</th><th>Ejemplos</th><th>Si se cae su ámbito</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Zonal</strong></td>
+      <td>Una sola AZ</td>
+      <td>Una subred VPC, una instancia EC2, un volumen EBS, una instancia RDS sin Multi-AZ</td>
+      <td>Se cae el recurso. Tú tienes que haber puesto otro en otra AZ.</td>
+    </tr>
+    <tr>
+      <td><strong>Regional</strong></td>
+      <td>Una región, replicado entre sus AZ <em>por AWS</em></td>
+      <td>Un bucket S3, una tabla DynamoDB, una función Lambda, una cola SQS, un bus EventBridge</td>
+      <td>Nada, ante la caída de una AZ. Ante la de la región entera, todo.</td>
+    </tr>
+    <tr>
+      <td><strong>Global</strong></td>
+      <td>La cuenta entera, un único endpoint</td>
+      <td>IAM, Organizations, Route 53, CloudFront, Global Accelerator, Shield Advanced, Cloud WAN</td>
+      <td>Es el caso raro. Y casi siempre el endpoint vive físicamente en <code>us-east-1</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="small">La lista de servicios con endpoint global es corta y cerrada; está en
+<a href="https://docs.aws.amazon.com/general/latest/gr/rande.html#global-endpoints">Global
+endpoints</a>, leída el 2026-08-30. <strong>Casi todo lo demás es regional.</strong> Cuando
+dudes, asume regional.</p>
+
+<div class="callout aws">
+  <span class="callout-title">El criterio de decisión</span>
+  <p>La pregunta operativa no es «¿es esto de alta disponibilidad?» sino <strong>«¿este
+  recurso es zonal o regional?»</strong>. Si es regional y gestionado, AWS ya lo replica entre
+  AZ y no tienes que hacer nada. Si es zonal, la alta disponibilidad <strong>es trabajo
+  tuyo</strong>: hay que crear más de uno, en AZ distintas, y poner algo delante que
+  reparta.</p>
+  <p>Todo este curso es serverless, y por eso el tema del multi-AZ no ha aparecido nunca:
+  Lambda, S3, DynamoDB y API Gateway ya son regionales. El día que aparezca una VPC con
+  subredes, aparecerá el problema.</p>
+</div>
+
+<h3>Por qué <code>us-east-1</code> es especial</h3>
+
+<p>Es la región donde todo se estrena y donde todo se cae. Cinco hechos verificables, no
+folclore:</p>
+
+<ul>
+  <li><strong>Es la región por defecto de las APIs.</strong> Los <em>general endpoints</em> sin
+  región —<code>ec2.amazonaws.com</code>, <code>autoscaling.amazonaws.com</code>,
+  <code>elasticmapreduce.amazonaws.com</code>— enrutan a <code>us-east-1</code>, <em>«which is
+  the default Region for API calls»</em>.</li>
+  <li><strong>Es donde vive IAM.</strong> El endpoint global <code>iam.amazonaws.com</code>
+  está ahí. Una caída de <code>us-east-1</code> te impide <em>modificar</em> permisos aunque
+  tu infraestructura esté en Irlanda. Detalle completo en la
+  <a href="./aws-iam.html">ficha de IAM</a>.</li>
+  <li><strong>Es donde se factura.</strong> Billing, Budgets y Cost Explorer viven ahí. Por eso
+  el presupuesto de la <a href="../lessons/0001-el-primer-apply.html">lección 01</a> se creó
+  en <code>us-east-1</code> y no en otro sitio.</li>
+  <li><strong>Es la única región cuyos certificados acepta CloudFront.</strong> Un certificado
+  de ACM para una distribución <em>tiene</em> que estar en <code>us-east-1</code>, esté donde
+  esté el origen
+  (<a href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cnames-and-https-requirements.html">Requirements
+  for using SSL/TLS certificates with CloudFront</a>). Es el motivo por el que casi todo
+  proyecto con dominio propio acaba teniendo un <code>provider</code> aliasado a
+  <code>us-east-1</code>.</li>
+  <li><strong>Es la más antigua y la más grande</strong>, y por tanto donde primero salen los
+  servicios nuevos y donde más incidentes históricos hay. No es que sea peor: es que hay más
+  cosas dentro.</li>
+</ul>
+
+<h3>Particiones y regiones opt-in</h3>
+
+<p>Por encima de la región hay una frontera que casi nadie menciona y que aparece en el primer
+campo de todos los ARN: la <strong>partición</strong>. La documentación de cuentas es
+tajante: <em>«Partitions have independent instances of AWS Identity and Access Management
+(IAM) and provide a hard boundary between Regions in different partitions»</em>
+(<a href="https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-regions.html">Enable
+or disable AWS Regions</a>). Tu cuenta pertenece a <em>una</em> partición y no puede salir de
+ella.</p>
+
+<p>Y dentro de la partición comercial, no todas las regiones están encendidas:</p>
+
+<ul>
+  <li><strong>Regiones por defecto</strong> — las lanzadas <em>antes</em> del 20 de marzo de
+  2019. Son <code>17</code>, incluida <code>us-east-1</code>, y <strong>no se pueden
+  deshabilitar</strong>.</li>
+  <li><strong>Regiones opt-in</strong> — las lanzadas <em>después</em>. Son <code>17</code>
+  más (Milán, Zúrich, Ciudad del Cabo, Yakarta, Calgary, España, Tel Aviv, México…) y vienen
+  <strong>apagadas</strong>: no aparecen en la barra de la consola y no puedes crear nada en
+  ellas hasta activarlas. Activarlas es gratis, tarda <em>«a few minutes to several hours»</em>
+  y consiste en que AWS propague tus datos de IAM allí.</li>
+</ul>
+
+<div class="callout trap">
+  <span class="callout-title">Deshabilitar una región no borra nada</span>
+  <p>Literal de la doc: <em>«Disabling a Region disables IAM access to resources in the Region.
+  This does not delete the resources in question, which continue to incur charges.»</em>
+  Apagar la región para «limpiar» es la peor forma de limpiar: pierdes el acceso y sigues
+  pagando. Primero destruye, después apaga.</p>
+</div>
+
+<h2>Control plane vs data plane</h2>
+
+<p>La distinción que decide <strong>qué gestiona Terraform y qué no</strong>, y que AWS define
+así en su whitepaper de aislamiento de fallos
+(<a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/control-planes-and-data-planes.html">Control
+planes and data planes</a>):</p>
+
+<table>
+  <thead><tr><th></th><th>Control plane</th><th>Data plane</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Qué hace</strong></td>
+      <td><em>«the administrative APIs used to create, read/describe, update, delete, and list (CRUDL) resources»</em></td>
+      <td><em>«what provides the primary function of the service»</em></td>
+    </tr>
+    <tr>
+      <td><strong>Ejemplos</strong></td>
+      <td>Crear la cola SQS. Crear el bucket. Lanzar la instancia EC2. Publicar la función.</td>
+      <td>Mandar el mensaje a la cola. Leer el objeto. La instancia ejecutando. Invocar la función.</td>
+    </tr>
+    <tr>
+      <td><strong>Quién lo llama</strong></td>
+      <td><strong>Terraform</strong>, la consola, tu CI/CD. Una vez cada despliegue.</td>
+      <td><strong>Tu aplicación</strong>. Millones de veces al día.</td>
+    </tr>
+    <tr>
+      <td><strong>Fiabilidad</strong></td>
+      <td>Menor. Es orquestación compleja: buscar hardware, asignar red, generar credenciales.</td>
+      <td>Mayor. Menos piezas móviles: <em>«failure events statistically less likely»</em>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout win">
+  <span class="callout-title">La frontera natural de Terraform</span>
+  <p><strong>Terraform es una herramienta de control plane.</strong> Ahí acaba su trabajo y
+  empieza el de tu código. Es la razón de que no exista un recurso
+  <code>aws_sqs_message</code> ni un <code>aws_s3_object_content</code> que quieras usar de
+  verdad: mandar un mensaje no es infraestructura, no es idempotente y no tiene sentido en un
+  <code>plan</code>.</p>
+  <p>Corolario menos obvio: <strong>un incidente que impide crear recursos no siempre impide
+  que tu aplicación funcione.</strong> Puedes estar viendo <code>terraform apply</code> fallar
+  con la producción sirviendo tráfico perfectamente. Saber decir esto en una entrevista de
+  System Design vale más que la lista de regiones.</p>
+</div>
+
+<h2>La cuenta como frontera</h2>
+
+<p>La unidad de aislamiento de AWS es <strong>la cuenta</strong>. No hay contenedor lógico por
+debajo: no existe un «resource group» nativo que agrupe cosas y se borre entero. Lo que hay
+es esto:</p>
+
+<table>
+  <thead><tr><th>Nivel</th><th>Qué agrupa</th><th>Qué frontera pone</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Partición</strong></td>
+      <td>Grupos de regiones (<code>aws</code>, <code>aws-cn</code>, <code>aws-us-gov</code>)</td>
+      <td>Frontera dura. IAM independiente en cada una.</td>
+    </tr>
+    <tr>
+      <td><strong>Organization</strong> + OU</td>
+      <td>Cuentas</td>
+      <td>Facturación consolidada y <strong>SCP</strong>: techos que ni el administrador de la cuenta puede saltarse.</td>
+    </tr>
+    <tr>
+      <td><strong>Cuenta</strong></td>
+      <td>Todos los recursos</td>
+      <td><strong>La de verdad.</strong> Cuotas propias, factura propia, IAM propio. Un fallo en una cuenta no salpica a otra.</td>
+    </tr>
+    <tr>
+      <td><strong>Región</strong></td>
+      <td>Los recursos regionales de esa cuenta</td>
+      <td>Aislamiento de fallo y de datos. Endpoints independientes.</td>
+    </tr>
+    <tr>
+      <td><strong>Tags</strong></td>
+      <td>Lo que tú decidas</td>
+      <td><strong>Ninguna.</strong> Son metadatos: sirven para filtrar costes y para ABAC, no para aislar ni para borrar en bloque.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Todo pasa por IAM</h3>
+
+<p>Cada una de esas llamadas HTTP lleva una firma SigV4 en la cabecera
+<code>Authorization</code>, y el servicio la recalcula antes de hacer nada. La firma prueba
+tres cosas
+(<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html">AWS Signature
+Version 4</a>):</p>
+
+<ul>
+  <li><strong>Quién eres</strong> — se calcula con tus claves; la secreta nunca viaja.</li>
+  <li><strong>Que nadie ha tocado la petición</strong> — el hash cubre el cuerpo y las
+  cabeceras firmadas.</li>
+  <li><strong>Que no es un <em>replay</em></strong> — <em>«a request must reach AWS within
+  five minutes of the time stamp in the request»</em>. Si el reloj de tu máquina se desvía más
+  de cinco minutos, <em>todo</em> deja de funcionar a la vez y el error no menciona la hora.
+  Apúntatelo: es un clásico de depuración.</li>
+</ul>
+
+<p>Y hay un detalle que explica por qué la firma no es reutilizable entre regiones: la clave
+de firma está <em>scoped</em> <em>«to a single AWS service, in a single AWS region, on a
+particular day»</em>. La región no es decoración ni siquiera en la criptografía.</p>
+
+<div class="callout aws">
+  <span class="callout-title">Dónde sigue esta historia</span>
+  <p>Aquí acaba el papel de IAM como sustrato. El evaluador de políticas, los seis pasos de la
+  evaluación, los tipos de identidad y el catálogo de acciones están en la
+  <a href="./aws-iam.html">ficha de IAM</a>, y el camino para dejar de usar root en la
+  <a href="../lessons/0004-deja-de-ser-root.html">lección 04</a> — incluidos los
+  <strong>cuatro niveles del arranque privilegiado</strong>, que son el vocabulario con el que
+  este curso habla de quién crea al primer usuario.</p>
+</div>
+
+<section class="anatomy">
+  <header>
+    <span class="kicker">Anatomía</span>
+    <h2>El ARN, campo a campo</h2>
+  </header>
+  <div class="anatomy-body">
+
+<p>El <strong>Amazon Resource Name</strong> es el identificador único de un recurso en todo
+AWS. Aparece en cada política, en cada <code>output</code> de Terraform y en cada mensaje de
+error que vas a tener que leer. No es secreto: la doc lo dice explícitamente,
+<em>«they are not considered secret, sensitive, or confidential information»</em>.</p>
+
+<p>Hay tres formatos generales, y la diferencia entre ellos es solo el separador del
+final:</p>
+
+<div class="code">
+  <div class="code-label"><span>los tres formatos</span><span class="tag">arn</span></div>
+<pre><code>arn:<b class="s">partition</b>:<b class="s">service</b>:<b class="s">region</b>:<b class="s">account-id</b>:<b class="at">resource-id</b>
+arn:<b class="s">partition</b>:<b class="s">service</b>:<b class="s">region</b>:<b class="s">account-id</b>:<b class="at">resource-type</b>/<b class="at">resource-id</b>
+arn:<b class="s">partition</b>:<b class="s">service</b>:<b class="s">region</b>:<b class="s">account-id</b>:<b class="at">resource-type</b>:<b class="at">resource-id</b></code></pre>
+</div>
+
+<table>
+  <thead><tr><th>Campo</th><th>Qué es</th><th>Cuándo va vacío</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>arn</code></td>
+      <td>Literal. Siempre.</td>
+      <td>Nunca.</td>
+    </tr>
+    <tr>
+      <td><code>partition</code></td>
+      <td><code>aws</code> (regiones comerciales), <code>aws-cn</code> (China), <code>aws-us-gov</code> (GovCloud).</td>
+      <td>Nunca. Y <strong>no admite comodín</strong>.</td>
+    </tr>
+    <tr>
+      <td><code>service</code></td>
+      <td>El <em>namespace</em> del servicio: <code>s3</code>, <code>lambda</code>, <code>logs</code>, <code>dynamodb</code>. El mismo prefijo que usas en <code>Action</code>.</td>
+      <td>Nunca.</td>
+    </tr>
+    <tr>
+      <td><code>region</code></td>
+      <td>El código de región: <code>us-east-1</code>.</td>
+      <td>En servicios <strong>globales</strong> (IAM) y en los que tienen espacio de nombres global (S3 bucket).</td>
+    </tr>
+    <tr>
+      <td><code>account-id</code></td>
+      <td>Los 12 dígitos, <strong>sin guiones</strong>.</td>
+      <td>Cuando el nombre del recurso ya es único sin él — otra vez S3.</td>
+    </tr>
+    <tr>
+      <td><code>resource-type</code></td>
+      <td>Opcional según el servicio: <code>function</code>, <code>table</code>, <code>log-group</code>, <code>role</code>.</td>
+      <td>Cuando el servicio solo tiene un tipo de recurso nombrable (SNS, SQS).</td>
+    </tr>
+    <tr>
+      <td><code>resource-id</code></td>
+      <td>El nombre o el ID. Puede llevar <strong>path</strong> con barras, y puede llevar un <strong>qualifier</strong> detrás de dos puntos (una versión, un alias).</td>
+      <td>Nunca.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Cinco ARN del curso, desmontados</h3>
+
+<div class="code">
+  <div class="code-label"><span>ARN reales de este repositorio</span><span class="tag">arn</span></div>
+<pre><code><b class="c"># 1. Bucket de S3 — SIN región y SIN cuenta. Dos huecos seguidos.</b>
+<b class="c">#    Motivo: el nombre ya es único en toda la partición.</b>
+arn:aws:s3:::tf-state-learning-course-terraform
+    │   │  ││└─ resource-id (el nombre del bucket)
+    │   │  │└── account-id  VACÍO
+    │   │  └─── region      VACÍA
+    │   └────── service
+    └────────── partition
+
+<b class="c"># 2. Los OBJETOS de ese bucket. Otro espacio de nombres. La barra separa</b>
+<b class="c">#    el contenedor del contenido: sin ella, PutObject da AccessDenied.</b>
+arn:aws:s3:::tf-state-learning-course-terraform/*
+
+<b class="c"># 3. Usuario IAM — SIN región (IAM es global), CON cuenta.</b>
+<b class="c">#    Separador: BARRA. El "terraform" puede llevar path: /equipo/terraform</b>
+arn:aws:iam::999999999999:user/terraform
+
+<b class="c"># 4. Función Lambda — separador DOS PUNTOS, y un qualifier opcional detrás.</b>
+arn:aws:lambda:us-east-1:999999999999:function:create-link       <b class="c"># sin cualificar</b>
+arn:aws:lambda:us-east-1:999999999999:function:create-link:2     <b class="c"># versión 2</b>
+arn:aws:lambda:us-east-1:999999999999:function:create-link:PROD  <b class="c"># alias</b>
+
+<b class="c"># 5. Log group — el resource-id lleva barras DENTRO, y el :* del final</b>
+<b class="c">#    significa "todos los streams". Ver la trampa de abajo.</b>
+arn:aws:logs:us-east-1:999999999999:log-group:/aws/lambda/create-link:*
+
+<b class="c"># 6. Topic SNS — sin resource-type ninguno. El servicio solo tiene topics.</b>
+arn:aws:sns:us-east-1:999999999999:budget-alerts
+
+<b class="c"># 7. Tabla DynamoDB — resource-type con barra.</b>
+arn:aws:dynamodb:us-east-1:999999999999:table/links</code></pre>
+</div>
+
+<div class="callout trap">
+  <span class="callout-title">La trampa que ya te mordió: el <code>:*</code> del log group</span>
+  <p>La API de AWS devuelve el ARN de un grupo de logs terminado en <code>:*</code>, pero
+  <strong>el provider de Terraform se lo quita a propósito</strong>. Como
+  <code>logs:PutLogEvents</code> actúa sobre un <em>stream</em> y no sobre el grupo, escribir
+  <code>resources = [aws_cloudwatch_log_group.x.arn]</code> a secas produce una política que
+  aplica, se despliega y no escribe ni una línea — sin error. Es la misma forma del error del
+  bucket contra sus objetos, con síntoma de silencio en vez de <code>AccessDenied</code>.
+  Historia completa en la <a href="../lessons/0005-tu-codigo-en-aws.html">lección 05</a> y en
+  la <a href="./aws-lambda.html">ficha de Lambda</a>.</p>
+  <p><strong>La regla general:</strong> el ARN del contenedor nunca cubre el contenido. Bucket
+  ≠ objetos. Log group ≠ streams. Función ≠ versiones. Cuando una política «no hace nada»,
+  mira el último separador.</p>
+</div>
+
+<h3>Comodines</h3>
+
+<ul>
+  <li><code>*</code> vale por cualquier cantidad de caracteres, <code>?</code> por uno solo:
+  <code>arn:aws:s3:::mi-bucket/????-test</code>.</li>
+  <li>Se pueden usar <strong>en cualquier campo delimitado por dos puntos</strong>:
+  <code>arn:aws:ec2:*:999999999999:vpc/*</code> son todas las VPC de la cuenta, en todas las
+  regiones.</li>
+  <li><strong>No</strong> se pueden usar en la partición ni <em>dentro</em> del
+  <code>resource-type</code>: <code>arn:aws:lambda:…:functi*:mi-funcion</code> no es
+  válido.</li>
+  <li>Un ARN <strong>incompleto</strong> (con menos de seis campos) se autocompleta con
+  comodines en una política de identidad: <code>arn:aws:sqs</code> equivale a
+  <code>arn:aws:sqs:*:*:*</code>, o sea <em>todas las colas de todas las cuentas</em>. En una
+  <em>session policy</em> no se autocompleta: da
+  <code>MalformedPolicyDocumentException</code>.</li>
+</ul>
+
+<p class="small">Fuente de toda esta sección:
+<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html">Identify AWS
+resources with Amazon Resource Names (ARNs)</a>, leída el 2026-08-30. El formato exacto de
+cada recurso se busca en la
+<a href="https://docs.aws.amazon.com/service-authorization/latest/reference/">Service
+Authorization Reference</a>, tabla <em>Resource types</em> del servicio.</p>
+
+  </div>
+</section>
+
+<h2>El modelo de precios</h2>
+
+<p>Pago por uso, sin contrato ni compromiso, con factura mensual y sin mínimo. Eso es lo que
+dice el marketing y es cierto. Lo que hay que saber además es <strong>en qué unidad</strong>
+te cobra cada servicio, porque de ahí sale la única distinción que gobierna este curso:</p>
+
+<table>
+  <thead><tr><th>Modelo</th><th>Cobra por</th><th>¿Se puede dejar puesto?</th><th>Ejemplos del curso</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td>Petición, GB·mes, GB·segundo, evento</td>
+      <td><strong>Sí.</strong> En reposo cuesta <code>0,00 USD</code></td>
+      <td>Lambda, S3, DynamoDB on-demand, SQS, SNS, API Gateway HTTP, EventBridge</td>
+    </tr>
+    <tr>
+      <td><span class="tag-cost hour">por hora</span></td>
+      <td>Hora de existencia, la uses o no</td>
+      <td><strong>No.</strong> Destrúyelo al terminar</td>
+      <td>NAT Gateway, ALB/NLB, RDS, EC2, ElastiCache, VPC endpoints de interfaz, cada IPv4 pública (0,005 USD/h)</td>
+    </tr>
+    <tr>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td>Nada, nunca</td>
+      <td>Sí</td>
+      <td>IAM, STS, Identity Center, VPC (la red en sí), Organizations, security groups</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout aws">
+  <span class="callout-title">La pregunta que hay que hacerle a cada servicio nuevo</span>
+  <p><strong>«¿Cuánto me cuesta esto si no lo toco durante un mes?»</strong> Si la respuesta es
+  cero, puedes dejarlo desplegado y estudiar tranquilo. Si es distinta de cero, la línea
+  <code>destroy</code> pasa a ser obligatoria. Todas las fichas de este directorio responden
+  esa pregunta en la cabecera, en el campo <em>¿Se puede dejar puesto?</em>.</p>
+</div>
+
+<h3>La trampa universal: data transfer</h3>
+
+<p>Es el coste que no aparece en la página de precios del servicio que estás mirando, porque
+no es de ese servicio: es de la red. La regla mental corta es <strong>entrar es gratis, salir
+se paga, y moverse de sitio también</strong>.</p>
+
+<table class="cost-table">
+  <thead><tr><th>Movimiento</th><th>Modelo</th><th>Precio en <code>us-east-1</code></th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Entrada</strong> desde internet</td>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td><code>0,00 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td><strong>Salida a internet</strong> — primeros 10 TB/mes</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,09 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td>Salida a internet — siguientes 40 TB</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,085 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td>Salida a internet — siguientes 100 TB</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,07 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td>Salida a internet — más de 150 TB</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,05 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td><strong>Dentro de la región</strong> — «in/out/between EC2 AZs», IP elásticas, ELB</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,01 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td><strong>Entre regiones</strong> — a <code>eu-west-1</code>, <code>ap-northeast-1</code>, <code>sa-east-1</code>…</td>
+      <td><span class="tag-cost usage">por uso</span></td>
+      <td><code>0,02 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td>Hacia <strong>CloudFront</strong> (origin fetch)</td>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td><code>0,00 USD/GB</code></td>
+    </tr>
+    <tr>
+      <td><strong>Free tier permanente de salida</strong>, agregado en todos los servicios y regiones</td>
+      <td><span class="tag-cost free">gratis</span></td>
+      <td><code>100 GB/mes</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="cost-stamp">Verificado el 2026-08-30 con la
+<a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/index.json">Price
+List Bulk API</a>, oferta <code>AWSDataTransfer</code>, versión <code>20260720184645</code>
+publicada el 2026-07-20 — SKU <code>HQEH3ZWJVT46JHRG</code> (salida a internet),
+<code>PNUBVW4CPC8XA46W</code> (regional) y <code>NW4B786HNAH6HZ7R</code>
+(<code>us-east-1</code>→<code>eu-west-1</code>). Los 100 GB gratis, de la
+<a href="https://aws.amazon.com/ec2/pricing/on-demand/">página de precios de EC2</a>:
+<em>«AWS customers receive 100 GB of free data transfer out to the internet free each month,
+aggregated across all AWS Services and Regions (except China and GovCloud)»</em>.</p>
+
+<div class="callout cost">
+  <span class="callout-title">Lo que sorprende en la factura</span>
+  <p><strong>El 0,01 de cruzar una AZ parece nada y no lo es.</strong> Ese precio se aplica a
+  tráfico interno que nadie contabiliza: un microservicio hablando con otro, una réplica de
+  base de datos, un balanceador repartiendo a instancias de tres AZ. Una arquitectura
+  chismosa con 10 TB/mes de charla entre AZ son unos 100 USD que ninguna página de producto te
+  anunció. Es el motivo real de que se hable de <em>AZ affinity</em>.</p>
+  <p><strong>Y el 0,09 de salir a internet es lo que cuesta irse de AWS.</strong> Migrar 50 TB
+  fuera son unos 4.400 USD solo en peaje. Cuando alguien dice «vendor lock-in» en una
+  entrevista, esta es la cifra concreta detrás de la frase.</p>
+</div>
+
+<h3>El free tier, como está hoy</h3>
+
+<p>El modelo cambió el 15 de julio de 2025 y la mayoría del material de internet sigue
+describiendo el anterior. Para cuentas nuevas:</p>
+
+<ul>
+  <li><strong><code>100 USD</code> en créditos al abrir la cuenta</strong>, más hasta
+  <code>100 USD</code> adicionales por completar tareas de exploración: lanzar y terminar una
+  EC2, configurar RDS, desplegar una Lambda, probar un prompt en Bedrock y crear un
+  presupuesto en Budgets — <code>20 USD</code> cada una.</li>
+  <li><strong>Seis meses de plan gratuito.</strong> Literal del anuncio: <em>«The free account
+  plan expires either 6 months after sign-up or when Free Tier credits are depleted, whichever
+  comes first»</em>. Y luego lo que casi nadie lee: <em>«The account closes on its own 6 months
+  after you open it or when your credits run out, whichever comes first»</em> — se cierra
+  sola, con los recursos apagados, salvo que pases al plan de pago.</li>
+  <li><strong>Más de 30 servicios «always free»</strong>, con límites mensuales, en los dos
+  planes. Ese es el tramo que de verdad sostiene un curso serverless.</li>
+  <li>Las cuentas anteriores al 15 de julio de 2025 <strong>siguen en el modelo de 12
+  meses</strong>.</li>
+</ul>
+
+<p class="cost-stamp">Verificado el 2026-08-30 en
+<a href="https://aws.amazon.com/about-aws/whats-new/2025/07/aws-free-tier-credits-month-free-plan/">AWS
+Free Tier now offers $200 in credits and 6-month free plan</a> (publicado el 2025-07-16) y en
+<a href="https://aws.amazon.com/free/">aws.amazon.com/free</a>.</p>
+
+<div class="callout trap">
+  <span class="callout-title">El free tier no es una red de seguridad</span>
+  <p>Los créditos se consumen sin avisar y no distinguen entre lo que querías gastar y lo que
+  se te olvidó destruir. La única red de seguridad real es un presupuesto con alarma — que es
+  exactamente el motivo de que la <a href="../lessons/0001-el-primer-apply.html">lección 01</a>
+  de este curso sea Budgets y no «hola mundo».</p>
+</div>
+
+<h3>Cómo verificar un precio sin creerte a nadie</h3>
+
+<p>AWS publica su tarifario entero en dos APIs públicas, y son la fuente que este curso usa en
+lugar de las páginas de marketing:</p>
+
+<div class="code">
+  <div class="code-label"><span>Price List Bulk API — sin credenciales</span><span class="tag">sh</span></div>
+<pre><code><b class="c"># El índice de todas las ofertas</b>
+curl -s https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/index.json
+
+<b class="c"># Una oferta concreta: transferencia de datos, precios de todas las regiones</b>
+curl -s https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/index.json
+
+<b class="c"># Un servicio en una sola región (los ficheros completos pesan cientos de MB)</b>
+curl -s https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/us-east-1/index.json</code></pre>
+</div>
+
+<p>Cada fichero trae un campo <code>publicationDate</code>: eso es la fecha real de tus cifras,
+no la de la página web. La alternativa consultable es la <strong>Price List Query API</strong>
+(<code>api.pricing.&lt;region&gt;.amazonaws.com</code>, operaciones
+<a href="https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_pricing_DescribeServices.html"><code>DescribeServices</code></a>
+y <code>GetProducts</code>), que sí exige firma SigV4 y se llama con
+<code>aws pricing get-products</code>.</p>
+
+<h2>Los modelos que AWS promueve</h2>
+
+<h3>Shared responsibility model</h3>
+
+<p>La frase de una línea: <strong>AWS es responsable de la seguridad <em>del</em> cloud; tú, de
+la seguridad <em>en</em> el cloud.</strong> AWS responde del <em>«hardware, software,
+networking, and facilities that run AWS Cloud services»</em>; tú, de tus datos, tu
+configuración, tus permisos y tu código.</p>
+
+<p>Lo que casi nunca se dice: <strong>la línea se mueve según el servicio</strong>. Con EC2 te
+quedas el sistema operativo, los parches y el firewall. Con Lambda o S3 no hay sistema
+operativo que parchear y tu mitad se reduce casi entera a <em>«¿quién puede leer esto?»</em>.
+Por eso en un curso serverless el 90% de la responsabilidad del alumno es IAM y
+cifrado — no hay superficie de sistema donde equivocarse.</p>
+
+<p class="small">Fuente:
+<a href="https://aws.amazon.com/compliance/shared-responsibility-model/">Shared Responsibility
+Model</a>, leída el 2026-08-30.</p>
+
+<h3>Design for failure: multi-AZ sí, multi-región según el negocio</h3>
+
+<p>AWS no promete que nada se caiga: promete que los fallos estén <em>acotados</em>, y te vende
+el aislamiento. La forma de leerlo son los SLA, que son la promesa contractual y no el
+folleto. En EC2:</p>
+
+<table>
+  <thead><tr><th>Despliegue</th><th>Monthly Uptime comprometido</th><th>Qué significa</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Instancias en <strong>≥ 2 AZ</strong> de la región</td>
+      <td><code>99,99 %</code></td>
+      <td>≈ 4,4 minutos de caída al mes</td>
+    </tr>
+    <tr>
+      <td><strong>Una sola instancia</strong></td>
+      <td><code>99,5 %</code></td>
+      <td>≈ 3,6 <strong>horas</strong> al mes</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="cost-stamp">Verificado el 2026-08-30 en el
+<a href="https://aws.amazon.com/compute/sla/">Amazon Compute Service Level Agreement</a>. El
+99,99 % está condicionado a <em>«all running instances deployed concurrently across two or
+more AZs in the same region»</em>: <strong>el SLA bueno no te lo dan por usar AWS, te lo dan
+por repartir</strong>.</p>
+
+<div class="callout aws">
+  <span class="callout-title">Multi-AZ vs multi-región: el criterio</span>
+  <p><strong>Multi-AZ es el estándar y casi siempre es gratis de diseñar.</strong> En lo
+  gestionado y regional (S3, DynamoDB, Lambda, SQS) ya viene puesto; en lo zonal (EC2, RDS,
+  subredes) cuesta duplicar recursos, y el peaje escondido es el <code>0,01 USD/GB</code> de
+  tráfico entre AZ. Si no hay una razón concreta para no hacerlo, se hace.</p>
+  <p><strong>Multi-región es una decisión de negocio, no de ingeniería.</strong> Duplica el
+  coste de cómputo, añade replicación entre regiones a <code>0,02 USD/GB</code>, obliga a
+  resolver la consistencia de los datos y a mantener dos despliegues vivos. Solo se justifica
+  con uno de estos tres motivos: un requisito regulatorio de residencia de datos, un RTO/RPO
+  que el negocio ha puesto por escrito, o latencia inaceptable para usuarios de otro
+  continente. <em>«Por si acaso»</em> no es uno de ellos, y decir eso en una entrevista suma
+  más que proponer la arquitectura global.</p>
+</div>
+
+<h3>Well-Architected, sin vender humo</h3>
+
+<p>Es el vocabulario común de las entrevistas de arquitectura en AWS. Son
+<strong>seis pilares</strong>
+(<a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/the-pillars-of-the-framework.html">The
+pillars of the framework</a>): <em>operational excellence, security, reliability, performance
+efficiency, cost optimization</em> y <em>sustainability</em>.</p>
+
+<p>Útil como checklist, inútil como conversación si no lo aterrizas. Los tres que este curso
+toca de verdad, y con qué:</p>
+
+<table>
+  <thead><tr><th>Pilar</th><th>Dónde aparece en este curso</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Security</strong></td><td>Dejar de usar root, least privilege por ARN exacto, roles en vez de claves, credenciales temporales.</td></tr>
+    <tr><td><strong>Cost optimization</strong></td><td>Budgets antes que nada, «por uso vs por hora» en cada ficha, data transfer, verificar precios contra la Price List API.</td></tr>
+    <tr><td><strong>Operational excellence</strong></td><td>Que la infraestructura sea código revisable, con state remoto y bloqueo, y que el <code>plan</code> sea la unidad de revisión.</td></tr>
+  </tbody>
+</table>
+
+<h2>En qué se diferencia de Azure</h2>
+
+<p>La comparación importa porque revela qué decisiones de AWS son <em>decisiones</em> y no
+leyes de la física. La fuente aquí es Microsoft, no AWS — su guía
+<a href="https://learn.microsoft.com/en-us/azure/architecture/aws-professional/">Azure for AWS
+professionals</a>, leída el 2026-08-30.</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Concepto</th><th>AWS</th><th>Azure</th><th>La diferencia que importa</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Unidad de aislamiento</strong></td>
+      <td>La <strong>cuenta</strong>. IAM propio, factura propia, cuotas propias.</td>
+      <td>La <strong>subscription</strong>, colgada de un <strong>tenant</strong> de Entra ID.</td>
+      <td>En AWS la identidad vive <em>dentro</em> de cada cuenta. En Azure la identidad es del tenant y atraviesa todas las subscriptions.</td>
+    </tr>
+    <tr>
+      <td><strong>Agrupación lógica</strong></td>
+      <td><strong>No existe</strong> equivalente nativo. Agrupas con cuentas, regiones y <em>tags</em>.</td>
+      <td><strong>Resource group obligatorio.</strong> «You must create a resource group before you create a resource. A resource must be part of a single resource group.»</td>
+      <td>La diferencia más práctica del día a día: en Azure borras el resource group y desaparece todo lo de dentro. En AWS <em>eso no existe</em>, y por eso Terraform importa el doble.</td>
+    </tr>
+    <tr>
+      <td><strong>Borrado en bloque</strong></td>
+      <td>Recurso a recurso. <code>terraform destroy</code> es tu resource group.</td>
+      <td>Borrar el grupo borra los recursos. Literal de Microsoft: «Deleting an AWS resource group doesn't affect the resources. Deleting an Azure resource group deletes all the resources in it.»</td>
+      <td>En AWS, un recurso huérfano sigue vivo y facturando para siempre. Nadie lo va a barrer por ti.</td>
+    </tr>
+    <tr>
+      <td><strong>Nombre del recurso</strong></td>
+      <td><strong>ARN</strong> plano de seis campos: <code>arn:aws:s3:::mi-bucket</code>.</td>
+      <td><strong>Resource ID</strong> jerárquico, una ruta: <code>/subscriptions/{id}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{nombre}</code>.</td>
+      <td>El ID de Azure <em>contiene</em> la jerarquía; el ARN no contiene ninguna, porque no hay ninguna. El ARN codifica <em>partición, servicio, región y cuenta</em>: exactamente las cuatro fronteras de AWS.</td>
+    </tr>
+    <tr>
+      <td><strong>Jerarquía de gobierno</strong></td>
+      <td>Organization → OU → cuenta. Techos con <strong>SCP</strong>.</td>
+      <td>Tenant → management group → subscription → resource group. Techos con <strong>Azure Policy</strong> + RBAC.</td>
+      <td>Azure tiene un nivel más y permisos asignables a cuatro alcances. AWS solo dos: la organización y la cuenta.</td>
+    </tr>
+    <tr>
+      <td><strong>Permisos</strong></td>
+      <td><strong>IAM</strong>: políticas JSON con <code>Action</code>/<code>Resource</code>/<code>Condition</code>, políticas de identidad <em>y</em> de recurso.</td>
+      <td><strong>Entra ID + Azure RBAC</strong>: asignar roles (Owner, Contributor, Reader) a un <em>scope</em>.</td>
+      <td>RBAC es más simple de leer y menos expresivo. IAM permite escribir permisos que no se pueden expresar como «rol sobre un ámbito» — y a cambio permite escribir agujeros que en RBAC no se pueden escribir.</td>
+    </tr>
+    <tr>
+      <td><strong>Tags</strong></td>
+      <td>Sensibles a mayúsculas. Sin herencia nativa.</td>
+      <td>Insensibles a mayúsculas para operaciones. Herencia vía políticas.</td>
+      <td>Detalle pequeño que rompe informes de costes reales: <code>Env</code> y <code>env</code> son dos tags distintos en AWS.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout why">
+  <span class="callout-title">La conclusión honesta</span>
+  <p>Azure te obliga a organizar (resource group obligatorio) y te da un botón de borrar todo.
+  AWS no te obliga a nada y no te da ese botón: <strong>en AWS la disciplina de organización
+  es responsabilidad del equipo</strong>, y la herramienta que la impone es Terraform. Eso no
+  hace a AWS peor; hace que un repositorio de IaC sea <em>estructuralmente</em> más necesario
+  en AWS que en Azure.</p>
+  <p>Y la simetría en el otro sentido: la identidad centralizada de Entra ID hace trivial en
+  Azure algo que en AWS exige Identity Center y una organización montada. Cada plataforma pone
+  el trabajo en un sitio distinto.</p>
+</div>
+
+<h2>Contradicciones abiertas en la propia documentación</h2>
+
+<div class="callout trap">
+  <span class="callout-title">¿Cuántas particiones hay, tres o cuatro?</span>
+  <p>La <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html">referencia
+  de ARN</a> lista <strong>tres</strong>: <code>aws</code>, <code>aws-cn</code>,
+  <code>aws-us-gov</code>. Las <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html">reglas
+  de nombres de bucket de S3</a> dicen, el mismo día, <em>«AWS currently has four partitions:
+  <code>aws</code>, <code>aws-cn</code>, <code>aws-us-gov</code>, and <code>aws-eusc</code>
+  (European Sovereign Cloud)»</em>. Y la Price List API ya factura tráfico hacia la región
+  <code>eusc-de-east-1</code>.</p>
+  <p>La lectura razonable: la partición <code>aws-eusc</code> existe y la referencia de ARN
+  todavía no se ha actualizado. Cuando dos páginas de AWS se contradicen, gana la más
+  específica del servicio — y aquí, además, gana la que coincide con lo que devuelve la API.
+  Comprueba esto antes de citarlo en una entrevista; puede haberse resuelto ya.</p>
+</div>
+
+<h2>Comprueba</h2>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 1 de 4</p>
+  <p class="quiz-q">Comparas <code>arn:aws:s3:::mi-bucket</code> con
+  <code>arn:aws:lambda:us-east-1:999999999999:function:crear</code>. ¿Por qué el primero deja
+  dos campos vacíos?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="El nombre de un bucket es único en toda la partición, así que la región y la cuenta no aportan nada para identificarlo. Por eso los dos campos van vacíos y el ARN sigue siendo inequívoco.">Ese nombre ya es único</button></li>
+    <li><button data-correct="false" data-why="S3 sí es un servicio regional: el bucket vive en una región concreta que eliges al crearlo y que después no se puede cambiar. Lo global es el espacio de nombres, no el bucket.">S3 no tiene región propia</button></li>
+    <li><button data-correct="false" data-why="Todo bucket pertenece a una cuenta, que es quien paga y quien controla su política. Que la cuenta no aparezca en el ARN no significa que no exista.">Ese bucket no tiene dueño</button></li>
+    <li><button data-correct="false" data-why="El formato del ARN no admite abreviaturas por comodidad: los campos vacíos son parte de la especificación y su ausencia tiene un significado concreto.">AWS lo abrevia por costumbre</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 2 de 4</p>
+  <p class="quiz-q">Tu servicio en <code>us-east-1</code> sirve 1 TB al mes a internet. Sin
+  descuentos ni CloudFront, ¿cuánto pagas solo de transferencia de datos?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="1024 GB menos los 100 GB gratis mensuales son 924 GB, y el primer tramo son 0,09 USD/GB: unos 83 USD. Es el coste que ninguna página de producto te menciona.">Unos 83 USD al mes</button></li>
+    <li><button data-correct="false" data-why="Ese es el resultado de olvidar los 100 GB de salida gratis al mes, que AWS aplica agregados a todos los servicios y regiones. La diferencia son 9 USD que sí existen.">Unos 92 USD al mes</button></li>
+    <li><button data-correct="false" data-why="0,01 USD/GB es la tarifa de tráfico dentro de la región, entre zonas de disponibilidad. Salir a internet cuesta nueve veces más que eso.">Unos 10 USD al mes</button></li>
+    <li><button data-correct="false" data-why="Eso serían 0,90 USD por GB, diez veces la tarifa real del primer tramo. La salida es cara, pero no tanto como para eso.">Unos 920 USD al mes</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 3 de 4</p>
+  <p class="quiz-q">Tu API serverless (Lambda, DynamoDB, API Gateway) debe sobrevivir a la
+  caída de un datacenter. El negocio no financia un segundo despliegue. ¿Qué haces?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Los tres son servicios regionales gestionados: AWS ya replica entre las AZ de la región sin que tú hagas nada ni pagues extra. Multi-AZ es el estado por defecto de lo serverless.">Nada: los servicios gestionados ya replican</button></li>
+    <li><button data-correct="false" data-why="Multi-región resuelve la caída de una región entera, no la de un datacenter, y es exactamente el segundo despliegue que el negocio no financia. Es sobre-ingeniería para el riesgo planteado.">Duplicas la pila en otra región</button></li>
+    <li><button data-correct="false" data-why="Las subredes son un concepto de VPC y aquí no hay ninguna: Lambda sin VPC, DynamoDB y API Gateway no viven en subredes tuyas. No hay nada que repartir a mano.">Creas subredes en tres zonas distintas</button></li>
+    <li><button data-correct="false" data-why="Las tablas globales replican entre REGIONES, no entre AZ, y cobran escrituras replicadas en cada réplica. Resuelven otro problema y cuestan dinero que aquí no hay.">Activas la replicación global de DynamoDB</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="quiz">
+  <p class="quiz-kicker">Pregunta 4 de 4</p>
+  <p class="quiz-q">De estas cuatro operaciones, ¿cuál <em>no</em> debería estar en tu código
+  Terraform?</p>
+  <ul class="quiz-opts">
+    <li><button data-correct="true" data-why="Publicar un mensaje es data plane: es lo que hace tu aplicación en ejecución, no es idempotente y no tiene sentido en un plan. Terraform gestiona el control plane y ahí acaba su frontera.">Publicar un mensaje en la cola</button></li>
+    <li><button data-correct="false" data-why="Crear la cola y su política es control plane puro: es una operación CRUDL sobre un recurso, idempotente y con estado. Es exactamente el trabajo de Terraform.">Crear la cola con su política</button></li>
+    <li><button data-correct="false" data-why="Conceder un permiso es control plane: crea o modifica un recurso de IAM que después vive en el state. Es de lo primero que se declara en cualquier módulo.">Dar permiso de lectura al rol</button></li>
+    <li><button data-correct="false" data-why="Una regla de EventBridge es un recurso persistente con configuración y targets, o sea control plane. Lo que no gestiona Terraform son los eventos que circulan por el bus.">Definir la regla del bus EventBridge</button></li>
+  </ul>
+  <div class="quiz-feedback"></div>
+</div>
+
+<div class="next">
+  <h3>Seguir</h3>
+  <div class="nav-links">
+    <a href="./README.md">Todas las referencias</a>
+    <a href="./aws-iam.html">Ficha: AWS IAM</a>
+    <a href="./aws-s3.html">Ficha: Amazon S3</a>
+    <a href="../lessons/0004-deja-de-ser-root.html">Lección 04: deja de ser root</a>
+    <a href="../GLOSSARY.md">Glosario</a>
+  </div>
+  <div class="ask">
+    <b>Fuentes primarias</b>: la
+    <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html">referencia
+    de ARN</a>, los <a href="https://docs.aws.amazon.com/general/latest/gr/rande.html">service
+    endpoints</a> del General Reference, el whitepaper de
+    <a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/abstract-and-introduction.html">AWS
+    Fault Isolation Boundaries</a> (el mejor documento gratuito sobre AZ, regiones,
+    particiones y planos de control), la
+    <a href="https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/index.json">Price List
+    Bulk API</a> y, para la comparación, la guía de Microsoft
+    <a href="https://learn.microsoft.com/en-us/azure/architecture/aws-professional/">Azure for
+    AWS professionals</a>.
+    <br><br>
+    <b>Pregúntame.</b> Si te encuentras un ARN que no sabes leer, pégamelo entero: lo
+    desmontamos campo a campo y verás que el error casi siempre está en el último separador.
+    Y cuando lleguemos a la VPC, pídeme la versión larga de zonal contra regional — es donde
+    esta ficha se vuelve dinero.
+  </div>
+</div>
+
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>
